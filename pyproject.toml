@@ -1,0 +1,47 @@
+[project]
+name = "crema"
+authors = [
+    { name = "martin@its.mu", email = "martin@its.mu"}
+]
+description = "LLM interface and security layer for Frappe apps"
+requires-python = ">=3.14,<3.15"
+readme = "README.md"
+license = { text = "MIT" }
+dynamic = ["version"]
+dependencies = [
+    # "frappe~=16.0.0" # Installed and managed by bench.
+    # litellm ships a PYO3 stable-ABI Rust extension. On Python 3.14 it (and
+    # pydantic_core, a Frappe core dep) only load with the environment variable
+    # PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1, already set in env/bin/activate.
+    "litellm",
+    "pymupdf",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+# These dependencies are only installed when developer mode is enabled
+[tool.bench.dev-dependencies]
+# package_name = "~=1.1.0"
+
+# These apt dependencies will be installed from Ubuntu repositories when you host your app on Frappe Cloud
+[deploy.dependencies.apt]
+packages = []
+
+[tool.ruff]
+line-length = 110
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "UP", "B", "RUF"]
+ignore = [
+    "B904",   # raise from within except — frappe uses bare raises extensively
+    "UP007",  # X | Y union types — frappe APIs use Optional[X]
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["frappe", "crema"]
+
+[tool.ruff.format]
+quote-style = "double"

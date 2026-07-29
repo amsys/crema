@@ -1,0 +1,21 @@
+{
+ "app": "crema",
+ "creation": "2026-07-28 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon": "bot",
+ "icon_type": "Link",
+ "idx": 0,
+ "label": "Crema",
+ "link_to": "Crema",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-07-28 00:00:00.000000",
+ "modified_by": "Administrator",
+ "name": "Crema",
+ "owner": "Administrator",
+ "parent_icon": "Framework",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}

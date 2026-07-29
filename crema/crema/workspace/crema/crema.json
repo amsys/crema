@@ -1,0 +1,147 @@
+{
+ "app": "crema",
+ "charts": [],
+ "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"LLM interface and security layer. Start in Crema Settings to configure providers and model assignments.\",\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Crema Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Crema Cost (USD)\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Crema Blocked\",\"col\":4}},{\"id\":\"crema-config-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Configuration\",\"col\":6}},{\"id\":\"crema-monitor-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Monitoring\",\"col\":6}}]",
+ "creation": "2026-07-28 00:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "bot",
+ "idx": 1,
+ "is_hidden": 0,
+ "label": "Crema",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Configuration",
+   "link_count": 3,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Crema Settings",
+   "link_count": 0,
+   "link_to": "Crema Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Crema Provider",
+   "link_count": 0,
+   "link_to": "Crema Provider",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Crema Automation Task",
+   "link_count": 0,
+   "link_to": "Crema Automation Task",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Monitoring",
+   "link_count": 2,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Crema Log",
+   "link_count": 0,
+   "link_to": "Crema Log",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Crema Usage",
+   "link_count": 0,
+   "link_to": "Crema Usage",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-07-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema",
+ "number_cards": [
+  {
+   "label": "Crema Calls",
+   "number_card_name": "Crema Calls"
+  },
+  {
+   "label": "Crema Cost (USD)",
+   "number_card_name": "Crema Cost (USD)"
+  },
+  {
+   "label": "Crema Blocked",
+   "number_card_name": "Crema Blocked"
+  }
+ ],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 1.0,
+ "shortcuts": [
+  {
+   "doc_view": "",
+   "label": "Crema Settings",
+   "link_to": "Crema Settings",
+   "stats_filter": "[]",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "label": "Crema Provider",
+   "link_to": "Crema Provider",
+   "stats_filter": "[]",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "label": "Crema Automation Task",
+   "link_to": "Crema Automation Task",
+   "stats_filter": "[]",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "label": "Crema Log",
+   "link_to": "Crema Log",
+   "stats_filter": "[]",
+   "type": "DocType"
+  },
+  {
+   "label": "Crema Usage",
+   "link_to": "Crema Usage",
+   "type": "Report"
+  }
+ ],
+ "title": "Crema",
+ "type": "Workspace"
+}

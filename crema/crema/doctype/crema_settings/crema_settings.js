@@ -37,6 +37,11 @@ function fetch_usage(frm, callback) {
 			callback();
 		},
 		error() {
+			// Deliberately no message here — this only feeds the Usage pills, and
+			// render_providers must still run. Reset to blank rather than leaving a stale
+			// usage_cache from a prior successful load, which would show numbers that no
+			// longer match what's on screen.
+			usage_cache = { interfaces: {}, providers: {} };
 			callback();
 		},
 	});
@@ -195,8 +200,10 @@ function render_providers(frm) {
 						$cell.html(`<span class="indicator-pill red">${__("Error")}</span>`);
 					},
 				});
+			})
+			.catch(() => {
+				$table.html(`<div class="text-danger">${__("Could not load providers.")}</div>`);
 			});
-		});
 }
 
 // ---- Model Assignments grid — provider -> model gating, per row. A blank

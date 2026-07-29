@@ -92,17 +92,29 @@ function crema_view_prompt(doctype) {
 	);
 }
 
-// A blocked prompt/document comes back as HTTP 417 with {blocked: true, reason}. frappe
-// routes 417 to frappe.call's `error` option, never `callback` (request.js maps
-// opts.error -> opts.error_callback, and the 417 statusCode handler only fires
-// error_callback) — so this must be wired as `error`, not read inside `callback`.
-function crema_show_blocked(r) {
+// A blocked prompt/document, a budget stop, or a config error comes back as HTTP 417
+// with {blocked, reason} (crema.api._error_response). frappe routes 417 to frappe.call's
+// `error` option, never `callback` (request.js maps opts.error -> opts.error_callback,
+// and the 417 statusCode handler only fires error_callback, passing the parsed body
+// through without rendering anything itself) — so this must be wired as `error` on
+// every crema frappe.call, not read inside `callback`.
+function crema_show_error(r) {
 	const data = r?.message;
-	if (data?.blocked) {
-		frappe.msgprint({ title: __("Blocked"), message: data.reason, indicator: "red" });
+	if (data?.reason) {
+		frappe.msgprint({
+			title: data.blocked ? __("Blocked") : __("Crema"),
+			message: data.reason,
+			indicator: "red",
+		});
+		return;
 	}
-	// Anything else (e.g. CremaConfigError) already surfaces via _server_messages, which
-	// frappe.request.cleanup renders on its own.
+	// frappe's own statusCode handlers (403/404/413/500/504/508) already msgprint
+	// something and then call error_callback with no arguments — only 417 passes a body
+	// through, and it renders nothing on its own. So `r` present without a `reason` is
+	// still a silent case and needs a message; `r` absent means frappe already spoke.
+	if (r) {
+		frappe.msgprint({ message: __("Crema could not complete this request."), indicator: "red" });
+	}
 }
 
 // ---- Shared preview rendering -------------------------------------------------------
@@ -142,7 +154,7 @@ function crema_extract_into_new_doc(doctype, file_url, instruction, dialog) {
 			if (!data) return;
 			crema_show_extract_preview(doctype, data, dialog);
 		},
-		error: crema_show_blocked,
+		error: crema_show_error,
 	});
 }
 
@@ -214,7 +226,7 @@ function crema_import_records(doctype, records) {
 		headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
 		body: fd,
 	})
-		.then((r) => r.json())
+		.then((r) => (r.ok ? r.json() : Promise.reject(new Error(`upload failed: ${r.status}`))))
 		.then((r) => {
 			const file_url = r.message?.file_url;
 			if (!file_url) {
@@ -226,6 +238,12 @@ function crema_import_records(doctype, records) {
 				import_type: "Insert New Records",
 				import_file: file_url,
 			});
+		})
+		// Non-2xx response or a network failure — both leave the dialog already hidden
+		// (crema_show_extract_preview's primary_action closes it before calling this), so
+		// without this the user is just left staring at the list with no explanation.
+		.catch(() => {
+			frappe.msgprint({ message: __("Could not upload the generated file."), indicator: "red" });
 		});
 }
 
@@ -325,7 +343,7 @@ function crema_ask_for_view(doctype, prompt) {
 			if (!data) return;
 			crema_apply_view_spec(doctype, data);
 		},
-		error: crema_show_blocked,
+		error: crema_show_error,
 	});
 }
 
@@ -410,16 +428,21 @@ function crema_apply_view_spec(doctype, data) {
 				live.start = 0;
 				return live.refresh();
 			})
-			.then(() => crema_after_view(doctype, spec, filters));
+			.then(() => crema_after_view(doctype, spec, filters))
+			// filter_area.set/refresh rejecting would otherwise skip the reason alert and
+			// the zero-result widen fallback with nothing shown at all.
+			.catch(crema_show_error);
 		return;
 	}
 
 	frappe.route_options = filters;
 	if (group_by) frappe.route_options._group_by = JSON.stringify(group_by);
-	frappe.set_route("List", doctype, view).then(() => {
-		if (crema_seed_list_state(cur_list, doctype, view, state)) cur_list.refresh();
-		crema_after_view(doctype, spec, filters);
-	});
+	frappe.set_route("List", doctype, view)
+		.then(() => {
+			if (crema_seed_list_state(cur_list, doctype, view, state)) cur_list.refresh();
+			crema_after_view(doctype, spec, filters);
+		})
+		.catch(crema_show_error);
 }
 
 // {fieldname: [op, value]} -> [[doctype, fieldname, op, value], ...] — same data,
@@ -548,8 +571,14 @@ function crema_widen_if_empty(doctype, filters) {
 						]),
 						indicator: "orange",
 					});
-				});
-		});
+				})
+				.catch(() =>
+					frappe.show_alert({ message: __("Could not search other fields."), indicator: "orange" })
+				);
+		})
+		.catch(() =>
+			frappe.show_alert({ message: __("Could not search other fields."), indicator: "orange" })
+		);
 }
 
 // Where both apply paths in crema_apply_view_spec converge once the list has rendered:
@@ -679,7 +708,7 @@ function crema_open_transform_dialog(frm) {
 						dialog.hide();
 					});
 				},
-				error: crema_show_blocked,
+				error: crema_show_error,
 			});
 		},
 	});
@@ -780,6 +809,12 @@ function crema_fetch_models(provider, callback) {
 		callback(r) {
 			callback(r.message || []);
 		},
+		// Same fate as an empty model list — the caller (crema_settings.js) already
+		// handles that by leaving the Autocomplete's data unset, and unlike a request the
+		// user just triggered, no message is warranted for a background list load.
+		error() {
+			callback([]);
+		},
 	});
 }
 
@@ -789,6 +824,10 @@ function crema_new_provider_dialog(on_created) {
 	// one step, backed by crema_provider.create_from_template.
 	frappe.call({
 		method: "crema.crema.doctype.crema_provider.crema_provider.get_presets",
+		// Nothing here calls dialog.show() unless this succeeds — without an error handler
+		// the button just does nothing at all on failure. The dialog needs preset_names to
+		// build its fields, so there's nothing useful to open here; just say why it didn't.
+		error: crema_show_error,
 		callback(r) {
 			const presets = r.message || {};
 			const preset_names = Object.keys(presets);
@@ -842,6 +881,7 @@ function crema_new_provider_dialog(on_created) {
 							dialog.hide();
 							if (on_created) on_created();
 						},
+						error: crema_show_error,
 					});
 				},
 			});
@@ -852,3 +892,5 @@ function crema_new_provider_dialog(on_created) {
 
 window.crema_fetch_models = crema_fetch_models;
 window.crema_new_provider_dialog = crema_new_provider_dialog;
+// crema_automation_task.js is likewise a separate script, evaluated outside this IIFE.
+window.crema_show_error = crema_show_error;

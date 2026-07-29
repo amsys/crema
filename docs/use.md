@@ -136,23 +136,25 @@ background job).
 
 ### Errors
 
-A blocked prompt or document returns HTTP status 417, with this body:
+A blocked prompt or document, a monthly budget already spent, or a configuration
+error — for example, an unresolved interface — all return HTTP status 417, with the
+same body shape:
 
 ```json
 {"blocked": true, "reason": "..."}
 ```
 
-A configuration error — for example, an unresolved interface — also returns status
-417, but with a normal error body, not the `blocked` shape. Read the response body to
-tell the two apart. Do not rely on the status code alone.
+`blocked` is `true` only for an actual security block; a budget or configuration stop
+returns `blocked: false` with a `reason` explaining what happened. Read `blocked`, not
+the status code, to tell a security block apart from a budget/configuration stop.
 
 A Python caller sees these as three distinct exception types: `CremaBlockedError`
 (the security scan or guard blocked the prompt), `CremaConfigError` (the interface
 can't be resolved to a usable provider), and `CremaBudgetError` (the interface's
 `monthly_budget_usd` is already spent this month — see
 [security.md](security.md#budgets)). All three are `frappe.ValidationError`
-subclasses, so an HTTP caller sees 417 for any of them; only `CremaBlockedError` gets
-the structured `{"blocked": true, "reason": ...}` body above.
+subclasses and all three get the structured `{"blocked": bool, "reason": ...}` body
+above over HTTP.
 
 ## Desk UI
 
@@ -216,13 +218,18 @@ diff for the open document (`transform_api`). Click **Apply** to fill the propos
 values into the form — the form is left dirty and unsaved, exactly like the list
 view's extract preview; save it yourself.
 
-### When a prompt is blocked
+### When a prompt is blocked, or a request fails
 
 A prompt the scan or the guard refuses — whether typed into a dialog, the search bar,
 or a document dropped for extraction — comes back as a red **Blocked** message giving
 the reason. Nothing was sent to the provider. The Crema Log still records the call,
 with status `Blocked`, so the block rate stays visible. See
 [security.md](security.md) for what the scan and the guard check.
+
+A monthly budget already spent, or an interface that can't be resolved to a usable
+provider, likewise comes back as a red message naming the reason, titled **Crema**
+rather than **Blocked**. Any other failure (a network error, an expired session, a
+server error) shows a message too — nothing in the desk UI fails without telling you.
 
 ### Usage and the workspace
 

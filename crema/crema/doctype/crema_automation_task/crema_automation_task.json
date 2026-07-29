@@ -1,0 +1,166 @@
+{
+ "actions": [],
+ "autoname": "field:task_name",
+ "creation": "2026-07-28 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "task_name",
+  "enabled",
+  "column_break_task",
+  "source_url",
+  "schedule",
+  "section_llm",
+  "interface",
+  "target_doctype",
+  "instruction",
+  "section_plan",
+  "plan_json",
+  "section_status",
+  "last_run",
+  "last_status",
+  "column_break_status",
+  "consecutive_failures",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "task_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Task Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "column_break_task",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "The only URL this task ever fetches. Admin-entered — never supplied by the LLM.",
+   "fieldname": "source_url",
+   "fieldtype": "Data",
+   "label": "Source URL",
+   "reqd": 1
+  },
+  {
+   "description": "Cron expression, e.g. <code>0 3 * * *</code>. The scheduler ticks every 15 minutes, so that is the effective granularity floor — anything finer still runs at most once per tick.",
+   "fieldname": "schedule",
+   "fieldtype": "Data",
+   "label": "Schedule (cron)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_llm",
+   "fieldtype": "Section Break",
+   "label": "Instruction"
+  },
+  {
+   "description": "One of the fixed interfaces.PREDEFINED names (see crema_automation_task.js — fetched from crema.api.get_interfaces, not hardcoded here).",
+   "fieldname": "interface",
+   "fieldtype": "Autocomplete",
+   "in_list_view": 1,
+   "label": "Interface",
+   "reqd": 1
+  },
+  {
+   "description": "The doctype rows are upserted into. Required: it is the fence that stops a self-written plan from writing anywhere else the isolation user can reach. The stored plan is validated against this doctype's meta.",
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "label": "Target DocType",
+   "options": "DocType",
+   "reqd": 1
+},
+  {
+   "description": "Plain-English description of what to extract from the source and how it maps onto the target doctype.",
+   "fieldname": "instruction",
+   "fieldtype": "Text",
+   "label": "Instruction",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_plan",
+   "fieldtype": "Section Break",
+   "label": "Plan"
+  },
+  {
+   "description": "Written by the planner on the first run and reused after. Parameters only (prompts, schemas, field maps) — never executable content. Clear it to force a replan.",
+   "fieldname": "plan_json",
+   "fieldtype": "Code",
+   "label": "Plan JSON",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_status",
+   "fieldtype": "Section Break",
+   "label": "Last Run"
+  },
+  {
+   "fieldname": "last_run",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Last Run",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Last Status",
+   "options": "\nSuccess\nReplanned\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Auto-disables the task at 5.",
+   "fieldname": "consecutive_failures",
+   "fieldtype": "Int",
+   "label": "Consecutive Failures",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-28 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Automation Task",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

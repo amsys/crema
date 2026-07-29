@@ -1,0 +1,115 @@
+{
+ "actions": [],
+ "creation": "2026-07-29 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "issingle": 1,
+ "field_order": [
+  "section_providers",
+  "providers_html",
+  "section_defaults",
+  "default_provider",
+  "default_model",
+  "column_break_defaults",
+  "default_isolation_user",
+  "default_monthly_budget_usd",
+  "section_assignments",
+  "assignments",
+  "section_logging",
+  "log_retention_days"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_providers",
+   "fieldtype": "Section Break",
+   "label": "Providers"
+  },
+  {
+   "fieldname": "providers_html",
+   "fieldtype": "HTML",
+   "label": "Providers"
+  },
+  {
+   "fieldname": "section_defaults",
+   "fieldtype": "Section Break",
+   "label": "Defaults"
+  },
+  {
+   "description": "Used by any Model Assignment row that leaves Provider blank. Set this once and Crema works for every interface without configuring all 11 rows individually.",
+   "fieldname": "default_provider",
+   "fieldtype": "Link",
+   "label": "Default Provider",
+   "options": "Crema Provider"
+  },
+  {
+   "description": "Used by any row that leaves Model blank.",
+   "fieldname": "default_model",
+   "fieldtype": "Autocomplete",
+   "label": "Default Model"
+  },
+  {
+   "fieldname": "column_break_defaults",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Used by any row that leaves Isolation User blank. Seeded on install/migrate with a dedicated low-privilege account (see crema.install._ensure_isolation_user) — same fencing rules as a per-row isolation user apply.",
+   "fieldname": "default_isolation_user",
+   "fieldtype": "Link",
+   "label": "Default Isolation User",
+   "options": "User"
+  },
+  {
+   "default": "0",
+   "description": "Used by any row that leaves Monthly Budget (USD) blank/0. 0 = unlimited. See docs/security.md#budgets.",
+   "fieldname": "default_monthly_budget_usd",
+   "fieldtype": "Currency",
+   "label": "Default Monthly Budget (USD)"
+  },
+  {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:(doc.assignments || []).some(r => r.provider || r.model || r.isolation_user)",
+   "fieldname": "section_assignments",
+   "fieldtype": "Section Break",
+   "label": "Model Assignments"
+  },
+  {
+   "description": "One row per crema.interfaces.PREDEFINED name — the full, fixed set. A blank Provider/Model/Isolation User falls back to the matching Default above; fill a cell here only to override the default for that one interface. Reconciled (rows added/removed/reordered to match PREDEFINED) on every save.",
+   "fieldname": "assignments",
+   "fieldtype": "Table",
+   "label": "Model Assignments",
+   "options": "Crema Model Assignment"
+  },
+  {
+   "fieldname": "section_logging",
+   "fieldtype": "Section Break",
+   "label": "Logging"
+  },
+  {
+   "default": "30",
+   "description": "Crema Log rows older than this are deleted daily (crema.automation.cleanup_logs).",
+   "fieldname": "log_retention_days",
+   "fieldtype": "Int",
+   "label": "Log Retention (days)"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

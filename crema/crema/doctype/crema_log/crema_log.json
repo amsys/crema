@@ -1,0 +1,151 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-07-28 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "interface",
+  "model",
+  "provider",
+  "user",
+  "column_break_log",
+  "status",
+  "prompt_sha",
+  "duration_ms",
+  "detail",
+  "section_usage",
+  "llm_calls",
+  "prompt_tokens",
+  "column_break_usage",
+  "completion_tokens",
+  "total_tokens",
+  "cost_usd"
+ ],
+ "fields": [
+  {
+   "fieldname": "interface",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Interface",
+   "read_only": 1
+  },
+  {
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Model",
+   "read_only": 1
+  },
+  {
+   "description": "Effective provider at call time. Data, not a Link — deleting a Crema Provider must never be blocked by its old log rows. Blank on rows written before this field existed.",
+   "fieldname": "provider",
+   "fieldtype": "Data",
+   "label": "Provider",
+   "read_only": 1
+  },
+  {
+   "description": "Real session user — not the interface's isolation user.",
+   "fieldname": "user",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_log",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Success\nCached\nBlocked\nError",
+   "read_only": 1
+  },
+  {
+   "description": "sha256 of the prompt — for correlation only, never the prompt itself.",
+   "fieldname": "prompt_sha",
+   "fieldtype": "Data",
+   "label": "Prompt SHA",
+   "read_only": 1
+  },
+  {
+   "fieldname": "duration_ms",
+   "fieldtype": "Int",
+   "label": "Duration (ms)",
+   "read_only": 1
+  },
+  {
+   "description": "Block reason or error class — never the prompt content.",
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Detail",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_usage",
+   "fieldtype": "Section Break",
+   "label": "Usage"
+  },
+  {
+   "description": "Provider calls billed for this row. Usually 1 — an escalated OCR call bills 2 (base + advanced_ocr) under one row.",
+   "fieldname": "llm_calls",
+   "fieldtype": "Int",
+   "label": "LLM Calls",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prompt_tokens",
+   "fieldtype": "Int",
+   "label": "Prompt Tokens",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_usage",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "completion_tokens",
+   "fieldtype": "Int",
+   "label": "Completion Tokens",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_tokens",
+   "fieldtype": "Int",
+   "label": "Total Tokens",
+   "read_only": 1
+  },
+  {
+   "description": "From litellm's response_cost. 0 if the provider/model isn't in litellm's cost map.",
+   "fieldname": "cost_usd",
+   "fieldtype": "Currency",
+   "label": "Cost (USD)",
+   "precision": "6",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-28 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Log",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

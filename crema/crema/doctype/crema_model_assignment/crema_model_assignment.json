@@ -1,0 +1,158 @@
+{
+ "actions": [],
+ "creation": "2026-07-29 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "interface_label",
+  "interface",
+  "provider",
+  "model",
+  "usage",
+  "column_break_config",
+  "isolation_user",
+  "monthly_budget_usd",
+  "temperature",
+  "cache_ttl",
+  "section_security",
+  "enable_prompt_scan",
+  "column_break_security",
+  "enable_llm_guard",
+  "output_trap",
+  "section_prompt",
+  "system_prompt"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "description": "Set by Crema Settings.validate from interfaces.LABELS — never typed by hand.",
+   "fieldname": "interface_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Interface",
+   "read_only": 1
+  },
+  {
+   "description": "The key passed to ask(\"<this>\", ...) etc. Set by Crema Settings.validate from interfaces.PREDEFINED — never typed by hand.",
+   "fieldname": "interface",
+   "fieldtype": "Data",
+   "label": "Interface Key",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Blank uses Crema Settings' Default Provider; if that's blank too, this interface falls back per interfaces.FALLBACKS. An effective provider (this or the default) requires an effective isolation user (this row's or the default's) — see CremaSettings.validate.",
+   "fieldname": "provider",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Provider",
+   "options": "Crema Provider"
+  },
+  {
+   "columns": 2,
+   "description": "Blank uses Crema Settings' Default Model. Greyed out until this row's own Provider is selected — model list is fetched from that provider.",
+   "fieldname": "model",
+   "fieldtype": "Autocomplete",
+   "in_list_view": 1,
+   "label": "Model"
+  },
+  {
+   "columns": 2,
+   "description": "Spend this calendar month against this row's effective budget (own, else Crema Settings' Default Monthly Budget). Never stored — painted client-side from crema.api.get_usage on every grid refresh.",
+   "fieldname": "usage",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Usage",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_config",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Sandbox identity — must not be Administrator. All document access during this interface's calls is fenced by this user's roles and User Permissions. Blank uses Crema Settings' Default Isolation User.",
+   "fieldname": "isolation_user",
+   "fieldtype": "Link",
+   "label": "Isolation User",
+   "options": "User"
+  },
+  {
+   "default": "0",
+   "description": "This interface's spend this calendar month, summed from Crema Log.cost_usd. 0 = unlimited. A call that would exceed this is blocked before the provider is called.",
+   "fieldname": "monthly_budget_usd",
+   "fieldtype": "Currency",
+   "label": "Monthly Budget (USD)"
+  },
+  {
+   "default": "0",
+   "fieldname": "temperature",
+   "fieldtype": "Float",
+   "label": "Temperature"
+  },
+  {
+   "default": "0",
+   "description": "Response cache TTL in seconds. 0 disables response caching.",
+   "fieldname": "cache_ttl",
+   "fieldtype": "Int",
+   "label": "Cache TTL (seconds)"
+  },
+  {
+   "fieldname": "section_security",
+   "fieldtype": "Section Break",
+   "label": "Security"
+  },
+  {
+   "default": "1",
+   "description": "Layer 1: regex/unicode prompt scan, always local, never calls an LLM.",
+   "fieldname": "enable_prompt_scan",
+   "fieldtype": "Check",
+   "label": "Enable Prompt Scan"
+  },
+  {
+   "fieldname": "column_break_security",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Layer 2: routes the prompt through the 'security' interface for an LLM risk classification. Requires the 'security' interface to be configured (a Provider assigned). Forced off on the 'security' interface itself to avoid recursion.",
+   "fieldname": "enable_llm_guard",
+   "fieldtype": "Check",
+   "label": "Enable LLM Guard"
+  },
+  {
+   "default": "Block",
+   "description": "Layer 3: asks the model to echo a per-call random token, and checks it came back. Off — no token sent, no cost. Log Only — record the miss, return the response anyway. Retry Once — one fresh attempt, then block. Block — a missing or echoed token blocks the call.",
+   "fieldname": "output_trap",
+   "fieldtype": "Select",
+   "label": "Output Trap",
+   "options": "Off\nLog Only\nRetry Once\nBlock"
+  },
+  {
+   "fieldname": "section_prompt",
+   "fieldtype": "Section Break",
+   "label": "System Prompt"
+  },
+  {
+   "description": "Auto-filled from the built-in default for predefined interface names if left empty.",
+   "fieldname": "system_prompt",
+   "fieldtype": "Long Text",
+   "label": "System Prompt"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Model Assignment",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -426,6 +426,21 @@ def _check_user_rate_limit() -> None:
         )
 
 
+def _error_response(exc: CremaBlockedError | CremaConfigError | CremaBudgetError) -> dict:
+    """417 body shared by ask_api/extract_api/transform_api for the three exceptions
+    they shape rather than let escape.
+
+    All three are frappe.ValidationError subclasses, so frappe would answer 417
+    either way — but CremaConfigError/CremaBudgetError are raised with a bare
+    `raise`, not frappe.throw, so frappe never populates `_server_messages` for
+    them, and the desk JS's 417 handler renders nothing on its own. Without this,
+    an unshaped one reaches the browser as an empty body: a cleared spinner and no
+    message at all. `blocked` stays reserved for an actual security-guard block.
+    """
+    frappe.local.response["http_status_code"] = 417
+    return {"blocked": isinstance(exc, CremaBlockedError), "reason": str(exc)}
+
+
 @frappe.whitelist()
 @rate_limit(limit=60, seconds=3600)
 def ask_api(interface: str, prompt: str, context: str | None = None, response_json: bool = False) -> dict:
@@ -440,13 +455,12 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
     them itself; a caller who could address the `security` classifier directly would
     have a jailbreak-calibration oracle.
 
-    A blocked prompt does not propagate as a generic 500/417 error page: it is
-    caught here and turned into a structured 417 body `{"blocked": true, "reason":
-    ...}` so HTTP callers can branch on it without parsing frappe's exception
-    envelope. CremaConfigError (admin misconfiguration, not a block) is deliberately
-    left to propagate as a normal frappe.throw — it too surfaces as 417, since
-    frappe.ValidationError defaults to that status; callers tell the two apart by the
-    response body, not the status code.
+    A blocked prompt, a budget stop, or a config error does not propagate as a
+    generic 500/417 error page: all three are caught here (see _error_response) and
+    turned into a structured 417 body `{"blocked": bool, "reason": ...}` so HTTP
+    callers can branch on it without parsing frappe's exception envelope or relying
+    on _server_messages — CremaConfigError/CremaBudgetError are raised with a bare
+    `raise`, not frappe.throw, so frappe never populates that field for them.
 
     `response_json=True` requests `response_format={"type": "json_object"}` from the
     model (same flag ask_json sets internally) — the result is still returned as a
@@ -461,9 +475,8 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
     kw = {"response_format": {"type": "json_object"}} if response_json else {}
     try:
         result = ask(interface, prompt, context=context, **kw)
-    except CremaBlockedError as exc:
-        frappe.local.response["http_status_code"] = 417
-        return {"blocked": True, "reason": str(exc)}
+    except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
+        return _error_response(exc)
     return {"result": result}
 
 
@@ -489,9 +502,8 @@ def extract_api(doctype: str, file_url: str, instruction: str | None = None) -> 
 
     try:
         return extract(doctype, file_url, instruction)
-    except CremaBlockedError as exc:
-        frappe.local.response["http_status_code"] = 417
-        return {"blocked": True, "reason": str(exc)}
+    except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
+        return _error_response(exc)
 
 
 @frappe.whitelist()
@@ -508,9 +520,8 @@ def transform_api(doctype: str, name: str, instruction: str) -> dict:
 
     try:
         return transform(doctype, name, instruction)
-    except CremaBlockedError as exc:
-        frappe.local.response["http_status_code"] = 417
-        return {"blocked": True, "reason": str(exc)}
+    except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
+        return _error_response(exc)
 
 
 @frappe.whitelist()

@@ -65,7 +65,8 @@ See [docs/](docs/README.md) for full setup, usage, and automation guides.
   limit, group, report, or kanban-ize the current list. If a filtered list finds nothing,
   one more database query finds which text field holds your words and filters on that
   field instead — no second model call. On a form, type an instruction to
-  get a proposed diff to apply and save yourself. A blocked prompt surfaces as a **Blocked** message, never a
+  get a proposed diff to apply and save yourself. A blocked prompt surfaces as a **Blocked** message; a
+  budget cap, a misconfigured interface, or any other failure surfaces as a message too, never a
   silent failure. Runs as the signed-in user, not a service account.
 - **Provider templates** — a wizard sets up OpenAI, OpenRouter, Groq, Mistral,
   DeepSeek, or Ollama with a key in one step, and a live Connection status shows

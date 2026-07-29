@@ -299,7 +299,7 @@ context("Crema desk UI", () => {
 
 	it("shows a blocked prompt as a red message, not a silent no-op", () => {
 		// 417 is routed by frappe.request to the `error` callback, never `success` — this
-		// pins that crema_show_blocked is actually wired up to receive it.
+		// pins that crema_show_error is actually wired up to receive it.
 		cy.intercept("POST", "/api/method/crema.api.ask_api", {
 			statusCode: 417,
 			body: { message: { blocked: true, reason: "looked like a prompt injection" } },
@@ -315,6 +315,42 @@ context("Crema desk UI", () => {
 		cy.wait("@ask_blocked");
 
 		cy.get(".msgprint").should("contain", "looked like a prompt injection");
+	});
+
+	it("shows a budget/config 417 (blocked: false) as a red message too", () => {
+		// Regression: CremaBudgetError/CremaConfigError are raised with a bare `raise`,
+		// not frappe.throw, so frappe populates no _server_messages for them — before
+		// api._error_response existed, this reached the browser as an empty 417 body
+		// and the spinner just cleared with nothing shown at all.
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 417,
+			body: { message: { blocked: false, reason: "'simple': monthly budget of $5 already spent." } },
+		}).as("ask_budget");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos about acme");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask_budget");
+
+		cy.get(".msgprint").should("contain", "monthly budget of $5 already spent");
+	});
+
+	it("shows a generic message for a 417 with no reason at all", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 417,
+			body: { message: {} },
+		}).as("ask_empty_417");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos about acme");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask_empty_417");
+
+		cy.get(".msgprint").should("contain", "Crema could not complete this request");
 	});
 
 	it("renders one row per record and an import button for a multi-record extract", () => {
@@ -344,6 +380,43 @@ context("Crema desk UI", () => {
 			cy.get("table tbody tr").should("have.length", 2);
 			cy.get(".btn-modal-primary").should("contain", "Import 2 Documents");
 		});
+	});
+
+	it("shows a red message if the generated CSV fails to upload", () => {
+		// crema_import_records is a raw fetch, not frappe.call — before this fix, a
+		// non-2xx response either rejected unhandled or fell through to the "no
+		// file_url" branch by accident, and a network failure was silent outright. The
+		// dialog is already hidden by the time this fires (primary_action hides it
+		// before calling crema_import_records), so a message here is the only signal.
+		cy.intercept("POST", "/api/method/crema.api.extract_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					records: [
+						{ set: { description: "First" }, child_set: {} },
+						{ set: { description: "Second" }, child_set: {} },
+					],
+					reason: "two todos found",
+					confidence: 0.9,
+				},
+			},
+		}).as("extract");
+		cy.intercept("POST", "/api/method/upload_file", { statusCode: 500, body: {} }).as("upload_fail");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".file-uploader .btn-file-upload").first().selectFile(
+				{ contents: Cypress.Buffer.from("dummy"), fileName: "todos.pdf", mimeType: "application/pdf" },
+				{ action: "drag-drop", force: true }
+			);
+		});
+		cy.wait("@extract");
+		cy.get(".modal").within(() => {
+			cy.get(".btn-modal-primary").contains("Import 2 Documents").click();
+		});
+		cy.wait("@upload_fail");
+
+		cy.get(".msgprint").should("contain", "Could not upload the generated file");
 	});
 
 	it("offers an Ask … option in the awesomebar on a list view", () => {

@@ -91,6 +91,124 @@ context("Crema desk UI", () => {
 		cy.location("search").should("not.contain", "not_a_field");
 	});
 
+	it("applies order_by to the sort selector and refreshes the list", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						order_by: "name desc",
+						reason: "sorted by name, descending",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("sort by name descending");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".sort-selector .dropdown-text").should("contain", "Name");
+		cy.get(".sort-selector .btn-order").should("have.attr", "data-value", "desc");
+	});
+
+	it("drops an order_by field the model invented and leaves the sort untouched", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						order_by: "not_a_field desc",
+						reason: "sorted",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get(".sort-selector .btn-order").invoke("attr", "data-value").then((before) => {
+			cy.get("[data-crema]").click();
+			cy.get(".modal").within(() => {
+				cy.get(".frappe-control[data-fieldname=instruction] textarea").type("sort somehow");
+				cy.get(".btn-modal-primary").click();
+			});
+			cy.wait("@ask");
+			cy.get(".sort-selector .btn-order").should("have.attr", "data-value", before);
+		});
+	});
+
+	it("applies page_length as a row limit", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({ view: "List", page_length: 1, reason: "top 1" }),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("show me the top 1");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".list-row-container").its("length").should("be.lte", 1);
+	});
+
+	it("round-trips a like filter with a wildcard intact", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						filters: { description: ["like", "t%"] },
+						reason: "todos starting with t",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos starting with t");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.location("search").should("contain", encodeURIComponent('["like","t%"]'));
+	});
+
+	it("drops a group_by with an invented aggregate fieldname", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						group_by: ["status", "not_a_field", "sum"],
+						reason: "grouped by status",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("group by status");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.location("search").should("not.contain", "_group_by");
+	});
+
 	it("shows a blocked prompt as a red message, not a silent no-op", () => {
 		// 417 is routed by frappe.request to the `error` callback, never `success` — this
 		// pins that crema_show_blocked is actually wired up to receive it.

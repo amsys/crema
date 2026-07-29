@@ -44,6 +44,54 @@ function crema_schema_prompt(doctype) {
 	return `Fields of doctype '${doctype}':\n${lines.join("\n")}`;
 }
 
+// Fieldnames actually shown as columns in the open list view — cur_list.columns only
+// exists once ListView.setup_columns has run for THIS doctype, so fall back to the same
+// in_list_view/title_field/name rule the framework itself builds columns from
+// (list_view.js setup_columns) when no live list view matches.
+function crema_visible_list_fields(doctype) {
+	if (typeof cur_list !== "undefined" && cur_list && cur_list.doctype === doctype && cur_list.columns) {
+		return new Set(cur_list.columns.filter((c) => c.df && c.df.fieldname).map((c) => c.df.fieldname));
+	}
+	const meta = frappe.get_meta(doctype);
+	const fields = meta.fields.filter((df) => df.in_list_view).map((df) => df.fieldname);
+	fields.push("name");
+	if (meta.title_field) fields.push(meta.title_field);
+	return new Set(fields);
+}
+
+// The view interface's system prompt (interfaces.DEFAULT_PROMPTS["view"]) states the
+// output shape; this is the per-request user turn, telling the model which fields it
+// may use, which of those are actually visible on screen, and the operator vocabulary
+// list filters actually support (frappe/public/js/frappe/ui/filters/filter.js) — without
+// this the model has no basis for picking a field for an unqualified request like
+// "items starting with foo", and no way to know "like" is its only substring/prefix tool.
+function crema_view_prompt(doctype) {
+	const visible = crema_visible_list_fields(doctype);
+	const lines = crema_readable_fields(doctype).map((df) => {
+		const shown = visible.has(df.fieldname) ? " [shown in list]" : "";
+		return `- ${df.fieldname} (${df.fieldtype}) ${df.label || ""}${shown}`.trim();
+	});
+	return (
+		`Fields of doctype '${doctype}':\n${lines.join("\n")}\n\n` +
+		"Rules for building the view specification:\n" +
+		"- If the request does not name a field, filter on a field marked [shown in list] " +
+		"(prefer a Data/Text field over a Link/Select).\n" +
+		'- "starting with X" -> ["like", "X%"]. "containing X" or "with X" -> ["like", "%X%"]. ' +
+		'"ending with X" -> ["like", "%X"].\n' +
+		"- Text matching is already case-insensitive on this system — never try to force a " +
+		"case-sensitive match, and do not mention case in the reason.\n" +
+		'- Legal operators: "=", "!=", "like", "not like", "in", "not in", "is", ">", "<", ' +
+		'">=", "<=", "Between", "Timespan". "is" takes only "set" or "not set" as its value. ' +
+		'"Timespan" takes a relative phrase such as "last week", "yesterday", "this month". ' +
+		'"in"/"not in" take a list of values.\n' +
+		"- Every filter is combined with AND — there is no way to OR across different fields. " +
+		"If the request implies an OR across fields, say so plainly in the reason instead of " +
+		"approximating it with AND.\n" +
+		'- order_by sorts the whole list: "fieldname asc" or "fieldname desc".\n' +
+		'- page_length is an integer row limit for requests like "top 10" or "first 5".'
+	);
+}
+
 // A blocked prompt/document comes back as HTTP 417 with {blocked: true, reason}. frappe
 // routes 417 to frappe.call's `error` option, never `callback` (request.js maps
 // opts.error -> opts.error_callback, and the 417 statusCode handler only fires
@@ -246,13 +294,20 @@ function crema_show_extract_preview(doctype, data, dialog) {
 // ---- Path B: prompt -> view ---------------------------------------------------------
 
 const CREMA_VALID_VIEWS = new Set(["List", "Report", "Kanban"]);
+// filter.js's own conditions list (Between/Timespan included, nested-set "descendants
+// of" family left out — those only make sense for a tree doctype the model can't know
+// about from the schema prompt alone).
+const CREMA_VALID_OPERATORS = new Set([
+	"=", "!=", "like", "not like", "in", "not in", "is", ">", "<", ">=", "<=", "Between", "Timespan",
+]);
+const CREMA_VALID_AGGREGATES = new Set(["count", "sum", "avg"]);
 
 function crema_ask_for_view(doctype, prompt) {
 	frappe.call({
 		method: "crema.api.ask_api",
 		args: {
 			interface: "view",
-			prompt: `${crema_schema_prompt(doctype)}\n\nRequest: ${prompt}`,
+			prompt: `${crema_view_prompt(doctype)}\n\nRequest: ${prompt}`,
 			response_json: 1,
 		},
 		freeze: true,
@@ -281,28 +336,61 @@ function crema_apply_view_spec(doctype, data) {
 	// Same discipline as automation._validate_plan, just client-side: drop anything the
 	// model invented that isn't actually a field this user may see.
 	const allowed = new Set(crema_readable_fields(doctype).map((df) => df.fieldname));
+	// name/creation/modified are standard docfields, never listed in meta.fields, but are
+	// always valid sort fields (frappe/public/js/frappe/ui/sort_selector.js).
+	const sortable = new Set([...allowed, "name", "creation", "modified"]);
 	const view = CREMA_VALID_VIEWS.has(spec.view) ? spec.view : "List";
 
 	const filters = {};
 	for (const [fieldname, cond] of Object.entries(spec.filters || {})) {
 		if (!allowed.has(fieldname) || !Array.isArray(cond) || cond.length !== 2) continue;
+		if (!CREMA_VALID_OPERATORS.has(cond[0])) continue;
 		filters[fieldname] = cond; // always [operator, value] — a bare value round-trips
 		// broken through frappe.route_options (router.js JSON-stringifies it, but
 		// list_view.js only JSON.parses values starting with "[").
 	}
 	frappe.route_options = filters;
-	if (Array.isArray(spec.group_by) && allowed.has(spec.group_by[0])) {
+	if (
+		Array.isArray(spec.group_by) &&
+		spec.group_by.length === 3 &&
+		allowed.has(spec.group_by[0]) &&
+		(spec.group_by[1] === null || allowed.has(spec.group_by[1])) &&
+		CREMA_VALID_AGGREGATES.has(spec.group_by[2])
+	) {
 		frappe.route_options._group_by = JSON.stringify(spec.group_by);
 	}
 
 	const columns = Array.isArray(spec.columns) ? spec.columns.filter((f) => allowed.has(f)) : [];
 
+	let order_by = null;
+	if (typeof spec.order_by === "string") {
+		const [field, dir] = spec.order_by.trim().split(/\s+/);
+		if (field && sortable.has(field) && ["asc", "desc"].includes((dir || "").toLowerCase())) {
+			order_by = { field, dir: dir.toLowerCase() };
+		}
+	}
+	const page_length = Number.isInteger(spec.page_length)
+		? Math.min(500, Math.max(1, spec.page_length))
+		: null;
+
 	frappe.set_route("List", doctype, view).then(() => {
+		const on_this_view = cur_list && cur_list.doctype === doctype;
+
 		// Report columns have no route-options path — mutate the live view instead.
-		if (columns.length && view === "Report" && cur_list) {
+		if (columns.length && view === "Report" && on_this_view) {
 			cur_list.fields = columns.map((f) => [f, doctype]);
 			cur_list.build_fields();
 			cur_list.setup_columns();
+		}
+		if (page_length && on_this_view) cur_list.page_length = page_length;
+
+		// sort_selector doesn't exist on every list-family view (e.g. Kanban) — on_sort_change
+		// is what actually refreshes and persists the sort, so it also covers the single
+		// refresh needed for the columns/page_length changes above; otherwise refresh directly.
+		if (order_by && on_this_view && cur_list.sort_selector) {
+			cur_list.sort_selector.set_value(order_by.field, order_by.dir);
+			cur_list.on_sort_change(order_by.field, order_by.dir);
+		} else if (on_this_view && (columns.length || page_length)) {
 			cur_list.refresh();
 		}
 		if (spec.reason) frappe.show_alert({ message: spec.reason, indicator: "blue" });

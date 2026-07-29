@@ -72,6 +72,6 @@ DEFAULT_PROMPTS = {
     "invent fieldnames — only use ones given in the schema. Output ONLY JSON "
     '`{"view": "List"|"Report"|"Kanban", "filters": {fieldname: [operator, value]}, '
     '"group_by": [fieldname, aggregate_fieldname, "count"|"sum"|"avg"] or null, '
-    '"order_by": "fieldname asc"|"fieldname desc" or null, "columns": [fieldname, ...], '
-    '"reason": "..."}`.',
+    '"order_by": "fieldname asc"|"fieldname desc" or null, "page_length": integer or null, '
+    '"columns": [fieldname, ...], "reason": "..."}`.',
 }

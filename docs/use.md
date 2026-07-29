@@ -170,7 +170,14 @@ can't, the dialog offers the request field alone.
 - **Type a request.** The system turns it into a filtered List, Report, or Kanban view
   of the current doctype (`ask_api` with the `view` interface) and switches you to it,
   with an alert explaining why. The schema sent to the model, and any field name it
-  proposes back, are both filtered down to fields you have at least read access to.
+  proposes back, are both filtered down to fields you have at least read access to. A
+  request can also set the sort order ("sorted by name descending"), limit the row
+  count ("show me the top 10"), and group by a field — all applied to the same view.
+  If you name no field, the system prefers one already shown as a column in the
+  current list. Two things a request cannot do: match text case-sensitively (matching
+  is always case-insensitive), and combine two different fields with OR — every
+  filter you ask for is combined with AND, so "starting with A or B" filters on
+  neither, and the alert says so instead of guessing.
 - **Drop a document onto the upload area.** The upload area takes one local file, by
   drag-and-drop or by clicking to pick it — there is no file browser, web link, or
   camera option. The system reads it (`extract_api`) and shows a preview — the proposed

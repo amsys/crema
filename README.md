@@ -61,9 +61,9 @@ See [docs/](docs/README.md) for full setup, usage, and automation guides.
 - **11 named interfaces** with an automatic fallback chain.
 - **Desk UI** — a robot button on any list view, `Ask …` in the awesomebar (list views
   only), and a robot button on any form. On a list, upload a document to get one or more
-  prefilled new records (the model decides how many), or type a prompt to filter, report,
-  or kanban-ize the current list. On a form, type an instruction to get a proposed diff
-  to apply and save yourself. A blocked prompt surfaces as a **Blocked** message, never a
+  prefilled new records (the model decides how many), or type a prompt to filter, sort,
+  limit, group, report, or kanban-ize the current list. On a form, type an instruction to
+  get a proposed diff to apply and save yourself. A blocked prompt surfaces as a **Blocked** message, never a
   silent failure. Runs as the signed-in user, not a service account.
 - **Provider templates** — a wizard sets up OpenAI, OpenRouter, Groq, Mistral,
   DeepSeek, or Ollama with a key in one step, and a live Connection status shows

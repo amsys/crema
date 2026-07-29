@@ -467,3 +467,24 @@ class IntegrationTestCremaLogInsert(IntegrationTestCase):
         log.insert("simple", "test-model", "Success", None, provider="_Test Crema Provider")
         row = frappe.get_last_doc("Crema Log", filters={"interface": "simple", "status": "Success"})
         self.assertEqual(row.provider, "_Test Crema Provider")
+
+
+class IntegrationTestCremaLogMeta(IntegrationTestCase):
+    def test_list_shows_the_interface_as_title_with_cost_beside_it(self):
+        meta = frappe.get_meta("Crema Log")
+        self.assertEqual(meta.title_field, "interface")
+        self.assertEqual(
+            {df.fieldname for df in meta.fields if df.in_list_view},
+            {"user", "status", "cost_usd"},
+        )
+        self.assertTrue(meta.get_field("section_diag").collapsible)
+
+    def test_no_field_can_hold_prompt_or_document_text(self):
+        """The layout change moved fields around. It must not have added one that could
+        hold prompt, context, or document text — see log.insert and docs/security.md."""
+        free_text = {"Small Text", "Text", "Long Text", "Text Editor", "Code", "HTML"}
+        meta = frappe.get_meta("Crema Log")
+        self.assertEqual(
+            {df.fieldname for df in meta.fields if df.fieldtype in free_text},
+            {"detail"},
+        )

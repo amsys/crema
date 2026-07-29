@@ -7,41 +7,30 @@
  "engine": "InnoDB",
  "field_order": [
   "interface",
-  "model",
-  "provider",
   "user",
   "column_break_log",
   "status",
-  "prompt_sha",
-  "duration_ms",
   "detail",
   "section_usage",
+  "total_tokens",
+  "column_break_usage",
+  "cost_usd",
+  "section_diag",
+  "model",
+  "provider",
+  "prompt_sha",
+  "column_break_diag",
+  "duration_ms",
   "llm_calls",
   "prompt_tokens",
-  "column_break_usage",
-  "completion_tokens",
-  "total_tokens",
-  "cost_usd"
+  "completion_tokens"
  ],
  "fields": [
   {
    "fieldname": "interface",
    "fieldtype": "Data",
-   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Interface",
-   "read_only": 1
-  },
-  {
-   "fieldname": "model",
-   "fieldtype": "Data",
-   "label": "Model",
-   "read_only": 1
-  },
-  {
-   "description": "Effective provider at call time. Data, not a Link — deleting a Crema Provider must never be blocked by its old log rows. Blank on rows written before this field existed.",
-   "fieldname": "provider",
-   "fieldtype": "Data",
-   "label": "Provider",
    "read_only": 1
   },
   {
@@ -60,21 +49,9 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Status",
    "options": "Success\nCached\nBlocked\nError",
-   "read_only": 1
-  },
-  {
-   "description": "sha256 of the prompt — for correlation only, never the prompt itself.",
-   "fieldname": "prompt_sha",
-   "fieldtype": "Data",
-   "label": "Prompt SHA",
-   "read_only": 1
-  },
-  {
-   "fieldname": "duration_ms",
-   "fieldtype": "Int",
-   "label": "Duration (ms)",
    "read_only": 1
   },
   {
@@ -90,6 +67,62 @@
    "label": "Usage"
   },
   {
+   "fieldname": "total_tokens",
+   "fieldtype": "Int",
+   "label": "Total Tokens",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_usage",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "From litellm's response_cost. 0 if the provider/model isn't in litellm's cost map.",
+   "fieldname": "cost_usd",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Cost (USD)",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.llm_calls > 1 || ['Blocked', 'Error'].includes(doc.status)",
+   "fieldname": "section_diag",
+   "fieldtype": "Section Break",
+   "label": "Diagnostics"
+  },
+  {
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Model",
+   "read_only": 1
+  },
+  {
+   "description": "Effective provider at call time. Data, not a Link — deleting a Crema Provider must never be blocked by its old log rows. Blank on rows written before this field existed.",
+   "fieldname": "provider",
+   "fieldtype": "Data",
+   "label": "Provider",
+   "read_only": 1
+  },
+  {
+   "description": "sha256 of the prompt — for correlation only, never the prompt itself.",
+   "fieldname": "prompt_sha",
+   "fieldtype": "Data",
+   "label": "Prompt SHA",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_diag",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "duration_ms",
+   "fieldtype": "Int",
+   "label": "Duration (ms)",
+   "read_only": 1
+  },
+  {
    "description": "Provider calls billed for this row. Usually 1 — an escalated OCR call bills 2 (base + advanced_ocr) under one row.",
    "fieldname": "llm_calls",
    "fieldtype": "Int",
@@ -103,27 +136,9 @@
    "read_only": 1
   },
   {
-   "fieldname": "column_break_usage",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "completion_tokens",
    "fieldtype": "Int",
    "label": "Completion Tokens",
-   "read_only": 1
-  },
-  {
-   "fieldname": "total_tokens",
-   "fieldtype": "Int",
-   "label": "Total Tokens",
-   "read_only": 1
-  },
-  {
-   "description": "From litellm's response_cost. 0 if the provider/model isn't in litellm's cost map.",
-   "fieldname": "cost_usd",
-   "fieldtype": "Currency",
-   "label": "Cost (USD)",
-   "precision": "6",
    "read_only": 1
   }
  ],
@@ -147,5 +162,6 @@
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
+ "title_field": "interface",
  "track_changes": 0
 }

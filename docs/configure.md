@@ -121,6 +121,10 @@ otherwise a percentage: green under 80%, orange 80–99%, red at 100% or over. S
 | `output_trap` | Select | `Block` by default (a freshly-reconciled row; an existing row from before this field was added stays at `Off` until you pick a value — see [security.md](security.md#layer-3--the-output-trap)). Layer 3 — the output trap. `Off` / `Log Only` / `Retry Once` / `Block`. |
 | `system_prompt` | Long Text | Fills in from a built-in default if you leave it empty. |
 
+Set `cache_ttl` on the `view` row to make a repeated desk "Ask Crema" list-view request
+free: the exact same request on the same doctype is served from cache, with no provider
+call, until the TTL expires.
+
 ### Crema Settings fields (the rest of the page)
 
 | Field | Type | Notes |

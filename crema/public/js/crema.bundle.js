@@ -302,6 +302,14 @@ const CREMA_VALID_OPERATORS = new Set([
 ]);
 const CREMA_VALID_AGGREGATES = new Set(["count", "sum", "avg"]);
 
+// Fieldtypes worth probing when a text lookup came back empty. Link/Select are in on
+// purpose — "todos for acme" often means a Link value, not a Data field.
+const CREMA_TEXTISH = new Set([
+	"Data", "Small Text", "Text", "Long Text", "Text Editor",
+	"Link", "Dynamic Link", "Select", "Read Only",
+]);
+const CREMA_FALLBACK_FIELD_CAP = 8;
+
 function crema_ask_for_view(doctype, prompt) {
 	frappe.call({
 		method: "crema.api.ask_api",
@@ -349,16 +357,14 @@ function crema_apply_view_spec(doctype, data) {
 		// broken through frappe.route_options (router.js JSON-stringifies it, but
 		// list_view.js only JSON.parses values starting with "[").
 	}
-	frappe.route_options = filters;
-	if (
+	const group_by =
 		Array.isArray(spec.group_by) &&
 		spec.group_by.length === 3 &&
 		allowed.has(spec.group_by[0]) &&
 		(spec.group_by[1] === null || allowed.has(spec.group_by[1])) &&
 		CREMA_VALID_AGGREGATES.has(spec.group_by[2])
-	) {
-		frappe.route_options._group_by = JSON.stringify(spec.group_by);
-	}
+			? spec.group_by
+			: null;
 
 	const columns = Array.isArray(spec.columns) ? spec.columns.filter((f) => allowed.has(f)) : [];
 
@@ -372,29 +378,185 @@ function crema_apply_view_spec(doctype, data) {
 	const page_length = Number.isInteger(spec.page_length)
 		? Math.min(500, Math.max(1, spec.page_length))
 		: null;
+	const state = { columns, order_by, page_length };
 
+	// Already on the target list: skip the router entirely and let one refresh() be the
+	// only list query — FilterArea.set() deliberately does not refresh
+	// (frappe/list/base_list.js), and get_args() reads the sort from
+	// sort_selector.get_sql_string(), not sort_by, so seeding the sort/page_length before
+	// that one refresh is enough; going through frappe.set_route costs a second query
+	// (the route's own refresh, then on_sort_change/refresh() again). The final URL is
+	// identical either way — router.js's push_state drops the query string, and
+	// list_view.refresh() always rewrites it from the live filters — so this doesn't
+	// change what lands in the address bar. Report/Kanban/group_by keep the route path:
+	// _group_by only round-trips through frappe.route_options (report_view.js).
+	const live = typeof cur_list !== "undefined" && cur_list;
+	const fast = live && live.doctype === doctype && live.view_name === "List" && view === "List" &&
+		live.filter_area && !group_by;
+
+	if (fast) {
+		crema_seed_list_state(live, doctype, view, state);
+		const rows = crema_filter_rows(doctype, filters);
+		// Only touch filter_area when there's an actual filter to apply — same guard
+		// list_view.js's own before_refresh() uses. A standard-filter field (e.g.
+		// ToDo's status) fires a debounced refresh on its own set_value() regardless of
+		// clear(false)'s refresh flag, so calling clear()/set() with nothing to set would
+		// arm a spurious extra query 300ms later for no reason.
+		const apply = rows.length
+			? live.filter_area.clear(false).then(() => live.filter_area.set(rows))
+			: Promise.resolve();
+		apply
+			.then(() => {
+				live.start = 0;
+				return live.refresh();
+			})
+			.then(() => crema_after_view(doctype, spec, filters));
+		return;
+	}
+
+	frappe.route_options = filters;
+	if (group_by) frappe.route_options._group_by = JSON.stringify(group_by);
 	frappe.set_route("List", doctype, view).then(() => {
-		const on_this_view = cur_list && cur_list.doctype === doctype;
-
-		// Report columns have no route-options path — mutate the live view instead.
-		if (columns.length && view === "Report" && on_this_view) {
-			cur_list.fields = columns.map((f) => [f, doctype]);
-			cur_list.build_fields();
-			cur_list.setup_columns();
-		}
-		if (page_length && on_this_view) cur_list.page_length = page_length;
-
-		// sort_selector doesn't exist on every list-family view (e.g. Kanban) — on_sort_change
-		// is what actually refreshes and persists the sort, so it also covers the single
-		// refresh needed for the columns/page_length changes above; otherwise refresh directly.
-		if (order_by && on_this_view && cur_list.sort_selector) {
-			cur_list.sort_selector.set_value(order_by.field, order_by.dir);
-			cur_list.on_sort_change(order_by.field, order_by.dir);
-		} else if (on_this_view && (columns.length || page_length)) {
-			cur_list.refresh();
-		}
-		if (spec.reason) frappe.show_alert({ message: spec.reason, indicator: "blue" });
+		if (crema_seed_list_state(cur_list, doctype, view, state)) cur_list.refresh();
+		crema_after_view(doctype, spec, filters);
 	});
+}
+
+// {fieldname: [op, value]} -> [[doctype, fieldname, op, value], ...] — same data,
+// the shape frappe.ui.FilterArea.set() (rather than frappe.route_options) expects.
+function crema_filter_rows(doctype, filters) {
+	return Object.entries(filters).map(([fieldname, [op, value]]) => [doctype, fieldname, op, value]);
+}
+
+// Sort/page_length/Report columns have no frappe.route_options path — they can only be
+// set on the live view object. Returns whether the caller still owes it a refresh (the
+// router path calls this after set_route resolves and only refreshes if something here
+// actually applied; the fast path always refreshes anyway, so it ignores the return).
+function crema_seed_list_state(list, doctype, view, state) {
+	const on_this_view = list && list.doctype === doctype;
+	let changed = false;
+
+	if (state.columns.length && view === "Report" && on_this_view) {
+		list.fields = state.columns.map((f) => [f, doctype]);
+		list.build_fields();
+		list.setup_columns();
+		changed = true;
+	}
+	if (state.page_length && on_this_view) {
+		list.page_length = state.page_length;
+		changed = true;
+	}
+	// sort_selector doesn't exist on every list-family view (e.g. Kanban).
+	if (state.order_by && on_this_view && list.sort_selector) {
+		list.sort_selector.set_value(state.order_by.field, state.order_by.dir);
+		list.sort_by = state.order_by.field;
+		list.sort_order = state.order_by.dir;
+		changed = true;
+	}
+	return changed;
+}
+
+// The literal a failed text lookup wanted — fires only for exactly ONE filter whose
+// operator is "like" or "=" on a CREMA_TEXTISH readable field. Everything else (a
+// number/date field, "is", "in", a multi-filter spec) -> null, and the whole fallback
+// below is a no-op.
+// ponytail: single-filter only. Zero rows under an AND is ambiguous about which filter
+// failed — widen to "replace the text filter, keep the rest" only if real specs need it.
+function crema_failed_term(doctype, filters) {
+	const entries = Object.entries(filters);
+	if (entries.length !== 1) return null;
+	const [fieldname, [op, value]] = entries[0];
+	if (op !== "like" && op !== "=") return null;
+
+	const df = frappe.get_meta(doctype).fields.find((f) => f.fieldname === fieldname);
+	if (!df || !CREMA_TEXTISH.has(df.fieldtype)) return null;
+
+	const term = String(value ?? "").replace(/^%+|%+$/g, "");
+	if (!term || term.includes("%") || term.length < 2) return null;
+	return { fieldname, term };
+}
+
+// Readable text-ish fields to probe, [shown in list] first (Array#sort is stable, so
+// declaration order holds within each group), capped so the OR-LIKE stays a bounded
+// scan. Built from crema_readable_fields — the same permission fence, never widened.
+// "name" is deliberately not probed: it is not in crema_readable_fields.
+function crema_fallback_candidates(doctype) {
+	const visible = crema_visible_list_fields(doctype);
+	return crema_readable_fields(doctype)
+		.filter((df) => CREMA_TEXTISH.has(df.fieldtype))
+		.map((df) => df.fieldname)
+		.sort((a, b) => (visible.has(b) ? 1 : 0) - (visible.has(a) ? 1 : 0))
+		.slice(0, CREMA_FALLBACK_FIELD_CAP);
+}
+
+// The zero-result fallback: no second LLM call, one probe query. Fires only when the
+// list just rendered zero rows for a single text-lookup filter.
+function crema_widen_if_empty(doctype, filters) {
+	if (
+		typeof cur_list === "undefined" ||
+		!cur_list ||
+		cur_list.doctype !== doctype ||
+		!Array.isArray(cur_list.data) ||
+		cur_list.data.length
+	) {
+		return;
+	}
+	const failed = crema_failed_term(doctype, filters);
+	if (!failed) return;
+
+	const candidates = crema_fallback_candidates(doctype);
+	if (!candidates.length) return;
+	const { term } = failed;
+	const label = (f) => frappe.meta.get_docfield(doctype, f)?.label || f;
+
+	frappe.db
+		.get_list(doctype, {
+			fields: candidates,
+			or_filters: candidates.map((f) => [f, "like", `%${term}%`]),
+			limit: 20,
+		})
+		.then((rows) => {
+			// or_filters only says a row matched, not which field matched it — count how
+			// many returned rows actually contain the term per candidate; highest count
+			// wins, ties break on candidate order (visible columns first).
+			const needle = term.toLowerCase();
+			const counts = candidates.map(
+				(f) => rows.filter((r) => String(r[f] ?? "").toLowerCase().includes(needle)).length
+			);
+			const best_i = counts.reduce((best, c, i) => (c > counts[best] ? i : best), 0);
+			if (!counts[best_i]) {
+				frappe.show_alert({
+					message: __('Nothing contains "{0}" in this list.', [term]),
+					indicator: "orange",
+				});
+				return;
+			}
+			const best = candidates[best_i];
+			cur_list.filter_area
+				.clear(false)
+				.then(() => cur_list.filter_area.set([[doctype, best, "like", `%${term}%`]]))
+				.then(() => {
+					cur_list.start = 0;
+					return cur_list.refresh();
+				})
+				.then(() => {
+					frappe.show_alert({
+						message: __('No match in {0}. Showing rows where {1} contains "{2}".', [
+							label(failed.fieldname),
+							label(best),
+							term,
+						]),
+						indicator: "orange",
+					});
+				});
+		});
+}
+
+// Where both apply paths in crema_apply_view_spec converge once the list has rendered:
+// the model's reason alert, then the zero-result fallback.
+function crema_after_view(doctype, spec, filters) {
+	if (spec.reason) frappe.show_alert({ message: spec.reason, indicator: "blue" });
+	crema_widen_if_empty(doctype, filters);
 }
 
 // ---- Dialog ---------------------------------------------------------------------------

@@ -109,6 +109,11 @@ alone. An OCR call that escalates to `advanced_ocr` still writes one row, but it
 
 The log never stores the prompt text, the context text, or document content.
 
+On the Crema Log form, `interface`, `user`, `status`, `detail`, `total_tokens`, and
+`cost_usd` are always visible. `model`, `provider`, `prompt_sha`, `duration_ms`,
+`llm_calls`, `prompt_tokens`, and `completion_tokens` are in a **Diagnostics** section.
+Grouping the fields does not change what is stored.
+
 Rows older than `Crema Settings.log_retention_days` (30 by default) are deleted daily.
 
 ## Budgets

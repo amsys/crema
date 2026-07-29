@@ -178,6 +178,12 @@ can't, the dialog offers the request field alone.
   is always case-insensitive), and combine two different fields with OR — every
   filter you ask for is combined with AND, so "starting with A or B" filters on
   neither, and the alert says so instead of guessing.
+
+  If the filtered view finds no records, the system does one more database query. It
+  looks for the same words in every text field you can read, then applies the one
+  field that holds them, and an alert tells you which field it used. This is a
+  widening of one filter, not an OR: the result shows one field, not two. The system
+  does not ask the model a second time.
 - **Drop a document onto the upload area.** The upload area takes one local file, by
   drag-and-drop or by clicking to pick it — there is no file browser, web link, or
   camera option. The system reads it (`extract_api`) and shows a preview — the proposed
@@ -226,6 +232,13 @@ Task), and a **Monitoring** section (Crema Log, Crema Usage).
 
 The workspace home shows three number cards, all-time totals: **Crema Calls**, **Crema
 Cost (USD)**, and **Crema Blocked**.
+
+The **Crema Log** list shows the interface name as the row title, with the user, the
+status, and the cost beside it. Use the **Interface** and **Status** filters at the top
+of the list to narrow it. On one row, a **Diagnostics** section holds the model, the
+provider, the prompt hash, the duration, and the per-call token counts. It opens
+automatically for a `Blocked` row, an `Error` row, or a row with more than one provider
+call.
 
 The **Crema Usage** report filters by From Date, To Date, Interface, and Status
 (`Success`/`Cached`/`Blocked`/`Error`), and groups by Interface, Model, User, or Day.

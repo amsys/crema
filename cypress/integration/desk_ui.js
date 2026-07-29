@@ -116,6 +116,35 @@ context("Crema desk UI", () => {
 		cy.get(".sort-selector .btn-order").should("have.attr", "data-value", "desc");
 	});
 
+	it("makes one list query for a spec with a sort", () => {
+		// Pin for the round-trip fix: applying a sort/page_length/columns spec used to
+		// refresh the list twice (once via the route change, once via on_sort_change).
+		// Already being on the target List should collapse that to one.
+		cy.intercept("POST", "/api/method/frappe.desk.reportview.get").as("listget");
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						order_by: "name desc",
+						reason: "sorted by name, descending",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("sort by name descending");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+		cy.wait("@listget");
+
+		cy.get("@listget.all").should("have.length", 1);
+	});
+
 	it("drops an order_by field the model invented and leaves the sort untouched", () => {
 		cy.intercept("POST", "/api/method/crema.api.ask_api", {
 			statusCode: 200,
@@ -207,6 +236,65 @@ context("Crema desk UI", () => {
 		cy.wait("@ask");
 
 		cy.location("search").should("not.contain", "_group_by");
+	});
+
+	it("widens to the field that holds the term when the filter matches nothing", () => {
+		// reference_type is blank on a plain ToDo, so the model's own filter matches
+		// nothing — the fallback should find "probe" in description instead, with no
+		// second LLM call.
+		cy.insert_doc("ToDo", { description: "crema fallback probe" }, true);
+		// frappe.db.get_list sends type: "GET" (frappe/public/js/frappe/db.js), not POST.
+		cy.intercept("GET", "/api/method/frappe.desk.reportview.get_list*").as("probe");
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						filters: { reference_type: ["like", "%probe%"] },
+						reason: "todos referencing probe",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos referencing probe");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+		cy.wait("@probe");
+
+		cy.get("@probe.all").should("have.length", 1);
+		cy.get("@ask.all").should("have.length", 1);
+		cy.location("search").should("contain", encodeURIComponent('["like","%probe%"]'));
+		cy.get(".list-row-container").its("length").should("be.gte", 1);
+	});
+
+	it("leaves an empty list alone when nothing matches anywhere", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						filters: { description: ["like", "%zzz-no-such-text%"] },
+						reason: "todos about zzz-no-such-text",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos about zzz-no-such-text");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".no-result").should("be.visible");
+		cy.get("@ask.all").should("have.length", 1);
 	});
 
 	it("shows a blocked prompt as a red message, not a silent no-op", () => {

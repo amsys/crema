@@ -38,6 +38,21 @@ chatbot on top is explicitly out of scope — see [ROADMAP.md](ROADMAP.md).
 
 See [docs/](docs/README.md) for full setup, usage, and automation guides.
 
+## Desk UI
+
+A robot button on every list view and every form, plus `Ask …` in the awesomebar.
+Runs as the signed-in user, never a service account.
+
+- **List → view.** Type a request to filter, sort, limit, group, or switch to Report or
+  Kanban. If the result is empty, one more database query finds which text field holds
+  your words and filters on that — no second model call.
+- **List → records.** Drop a document to get one or more prefilled new records (the
+  model decides how many).
+- **Form → diff.** Type an instruction to get a proposed diff for the open document.
+
+Nothing is written until you save it. A blocked prompt, a budget cap, or any other
+failure surfaces as a message — never a silent no-op.
+
 ## Interfaces
 
 | Interface | Purpose | Fallback |
@@ -56,52 +71,35 @@ See [docs/](docs/README.md) for full setup, usage, and automation guides.
 
 ## Features
 
-- **One entry point** — no public function anywhere accepts a model, provider, or API
-  key; only an interface name.
+- **One entry point** — no public function accepts a model, provider, or API key; only
+  an interface name.
 - **11 named interfaces** with an automatic fallback chain.
-- **Desk UI** — a robot button on any list view, `Ask …` in the awesomebar (list views
-  only), and a robot button on any form. On a list, upload a document to get one or more
-  prefilled new records (the model decides how many), or type a prompt to filter, sort,
-  limit, group, report, or kanban-ize the current list. If a filtered list finds nothing,
-  one more database query finds which text field holds your words and filters on that
-  field instead — no second model call. On a form, type an instruction to
-  get a proposed diff to apply and save yourself. A blocked prompt surfaces as a **Blocked** message; a
-  budget cap, a misconfigured interface, or any other failure surfaces as a message too, never a
-  silent failure. Runs as the signed-in user, not a service account.
 - **Provider templates** — a wizard sets up OpenAI, OpenRouter, Groq, Mistral,
-  DeepSeek, or Ollama with a key in one step, and a live Connection status shows
-  whether that key actually works.
-- **Model autocomplete** — the model list is fetched live from your provider.
+  DeepSeek, or Ollama with a key in one step, plus a live connection status check.
+- **Model autocomplete**, fetched live from your provider.
 - **Two-layer security** — a local regex/unicode prompt scan, plus an optional LLM
   guard that classifies risk.
-- **Isolation user sandbox** — every document access runs under a fenced, low-privilege
-  Frappe user; Frappe's own permission engine is the enforcement, not Crema's. Install
-  creates a default one (`crema@<site>`, no password) so this works out of the box.
+- **Isolation user sandbox** — document access runs under a fenced, low-privilege
+  Frappe user; Frappe's own permission engine enforces it, not Crema's.
 - **OCR** for images, scanned PDFs, and text PDFs, with a confidence score and
   automatic escalation to a stronger model.
-- **Smart import** — `extract()` reads a file and proposes the fields of one or more
-  new documents; how many records the file holds is the model's own call.
-- **Document transform** — `transform()` proposes a diff for an existing document, with
-  a form-view apply button in the Desk UI. Neither call writes anything; the caller
-  applies the result.
+- **Smart import** — `extract()` proposes the fields of one or more new documents from
+  a file; how many records it holds is the model's own call.
+- **Document transform** — `transform()` proposes a diff for an existing document;
+  neither call writes anything, the caller applies the result.
 - **Scheduled automation** — fetch a URL, self-plan once, extract, upsert, on a cron
   schedule. The plan is data, never code.
 - **Response caching**, configurable per interface or per call.
-- **Full audit log** — interface, model, user, status, duration, tokens, and cost, plus
-  a prompt hash. Never the prompt or document content itself.
-- **Usage dashboard** — a Crema Usage report (group by interface, model, user, or day,
-  with a total row and a bar chart) and workspace number cards for calls, cost, and
-  blocked rate, all reachable from the Crema workspace sidebar.
-- **Budgets** — an optional monthly USD cap per interface, with a shared default and a
-  combined per-provider ceiling; the next call over budget is blocked before it reaches
-  the provider, and a live Usage column shows spend against budget in Crema Settings.
+- **Full audit log** — interface, model, user, status, duration, tokens, cost, and a
+  prompt hash, never the prompt or document content itself.
+- **Budgets** — an optional monthly USD cap per interface and a combined per-provider
+  ceiling; the next call over budget is blocked before it reaches the provider.
+- **Usage dashboard** — a Crema Usage report and workspace number cards for calls,
+  cost, and blocked rate.
 - **HTTP endpoints** for `ask`, `extract`, and `transform`, rate-limited per IP and per
   user.
-- **Crema Settings** — Providers and Model Assignments on one page, and Crema's default
-  landing page when opened from the Framework app switcher. A Default Provider/Model/
-  Isolation User covers every interface out of the box; the model assignment set is
-  fixed and always present, reconciled on every save, at install, and at migrate, and
-  its grid stays collapsed until a row actually overrides a default.
+- **Crema Settings** — Providers and Model Assignments on one page; a Default Provider/
+  Model/Isolation User covers every interface out of the box.
 - **Desk workspace** with all doctypes, the usage report, and a sidebar entry.
 
 ## Requirements

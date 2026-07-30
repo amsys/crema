@@ -200,10 +200,11 @@ function render_providers(frm) {
 						$cell.html(`<span class="indicator-pill red">${__("Error")}</span>`);
 					},
 				});
-			})
-			.catch(() => {
-				$table.html(`<div class="text-danger">${__("Could not load providers.")}</div>`);
 			});
+		})
+		.catch(() => {
+			$table.html(`<div class="text-danger">${__("Could not load providers.")}</div>`);
+		});
 }
 
 // ---- Model Assignments grid — provider -> model gating, per row. A blank

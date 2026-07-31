@@ -56,8 +56,10 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict
 Read `file` — a File URL or raw bytes. `file` may be an image, a scanned PDF, or a
 text PDF. The system picks the right method for each case. If the `ocr` interface
 reports low confidence, the system retries once with `advanced_ocr`; `escalated`
-tells you if this happened. Use `instruction` to state layout hints, for example
-"the invoice number sits in the top-right box".
+tells you if this happened. The retry does not run when `advanced_ocr`'s monthly
+budget is already spent — the first attempt's text is returned instead. Use
+`instruction` to state layout hints, for example "the invoice number sits in the
+top-right box".
 
 ## `transform` — propose a change to an existing document
 

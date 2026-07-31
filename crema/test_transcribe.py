@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import frappe
+from crema import client
 from crema.api import transcribe
 from crema.exceptions import CremaBudgetError, CremaConfigError
 from crema.test_client import (
@@ -43,7 +44,8 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
 
     def test_transcribes_raw_bytes(self):
         with patch(
-            "crema.client._transcribe", return_value={"text": "hello world", "language": "en", "duration": 1.2}
+            "crema.client._transcribe",
+            return_value={"text": "hello world", "language": "en", "duration": 1.2},
         ) as mock_transcribe:
             result = transcribe(_AUDIO_BYTES)
 
@@ -88,7 +90,9 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
         self.assertTrue(log.detail)
 
     def test_transcribe_call_logs_a_crema_log_row(self):
-        with patch("crema.client._transcribe", return_value={"text": "hi", "language": "en", "duration": 0.5}):
+        with patch(
+            "crema.client._transcribe", return_value={"text": "hi", "language": "en", "duration": 0.5}
+        ):
             transcribe(_AUDIO_BYTES)
 
         log = frappe.get_last_doc("Crema Log", filters={"interface": "transcribe", "status": "Success"})
@@ -103,6 +107,79 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
 
         log = frappe.get_last_doc("Crema Log", filters={"interface": "transcribe", "status": "Error"})
         self.assertIn("provider exploded", log.detail)
+
+    def test_transcribe_builds_expected_litellm_kwargs(self):
+        """crema.client._transcribe's kwargs shape -- _transcribe's sibling of
+        test_client.py's test_complete_builds_expected_litellm_kwargs (which pins
+        _complete's kwargs the same way). Only litellm.transcription is mocked, not
+        client._transcribe itself, so api.transcribe's filename-from-mime derivation
+        (api.py ~line 469-476) is exercised along with _transcribe's own kwargs.
+
+        _AUDIO_BYTES matches none of _ocr._sniff_mime's magic-byte signatures, so mime
+        sniffs to "" -- deterministically the simplest case: mimetypes.guess_extension("")
+        is None, so the filename stays bare "audio" and the mime arg falls back to
+        "application/octet-stream", both asserted below."""
+        cfg = client._resolve("transcribe")
+        response = MagicMock()
+        response.get = lambda key, default=None: {"text": "hi", "language": None, "duration": None}.get(
+            key, default
+        )
+        response.usage = None
+        response._hidden_params = {}
+
+        with patch("litellm.transcription", return_value=response) as mock_transcription:
+            transcribe(_AUDIO_BYTES)
+
+        kwargs = mock_transcription.call_args.kwargs
+        self.assertEqual(kwargs["model"], f"openai/{cfg['model']}")
+        self.assertEqual(kwargs["file"], ("audio", _AUDIO_BYTES, "application/octet-stream"))
+        self.assertEqual(kwargs["api_base"], cfg["base_url"])
+        self.assertEqual(kwargs["api_key"], client._api_key(cfg["provider"]))
+        self.assertEqual(kwargs["timeout"], cfg["timeout_seconds"])
+        self.assertEqual(kwargs["response_format"], "verbose_json")
+        self.assertNotIn("language", kwargs)
+
+    def test_transcribe_filename_carries_an_extension_for_a_known_mime(self):
+        """Whisper-style endpoints commonly derive the audio format from the multipart
+        filename's extension, not (only) the content type — api.transcribe derives it
+        from the mime via mimetypes.guess_extension. Regression test: the filename
+        used to be the bare, extension-less literal "audio" for every mime."""
+        import mimetypes
+
+        response = MagicMock()
+        response.get = lambda key, default=None: {"text": "hi", "language": None, "duration": None}.get(
+            key, default
+        )
+        response.usage = None
+        response._hidden_params = {}
+
+        with (
+            patch("crema._ocr._load_bytes", return_value=(_AUDIO_BYTES, "audio/mpeg")),
+            patch("litellm.transcription", return_value=response) as mock_transcription,
+        ):
+            transcribe(_AUDIO_BYTES)
+
+        filename, audio, mime = mock_transcription.call_args.kwargs["file"]
+        self.assertEqual(mime, "audio/mpeg")
+        self.assertEqual(audio, _AUDIO_BYTES)
+        self.assertRegex(filename, r"^audio\.\w+$")
+        self.assertEqual(filename, "audio" + mimetypes.guess_extension("audio/mpeg"))
+
+    def test_transcribe_passes_language_to_litellm_when_given(self):
+        """Sibling of the kwargs test above, isolating the one conditional key:
+        "language" must reach litellm.transcription's kwargs when the caller passes
+        one, and be absent (proven above) when it doesn't."""
+        response = MagicMock()
+        response.get = lambda key, default=None: {"text": "hola", "language": "es", "duration": 1.0}.get(
+            key, default
+        )
+        response.usage = None
+        response._hidden_params = {}
+
+        with patch("litellm.transcription", return_value=response) as mock_transcription:
+            transcribe(_AUDIO_BYTES, language="es")
+
+        self.assertEqual(mock_transcription.call_args.kwargs["language"], "es")
 
     def test_cost_and_call_count_come_from_real_record_usage(self):
         """crema.client._transcribe isn't mocked away here (only litellm.transcription
@@ -132,7 +209,9 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
             }
         ).insert(ignore_permissions=True)
 
-        with patch("crema.client._transcribe", return_value={"text": "from file", "language": "en", "duration": 2.0}):
+        with patch(
+            "crema.client._transcribe", return_value={"text": "from file", "language": "en", "duration": 2.0}
+        ):
             result = transcribe(file_doc.file_url)
 
         self.assertEqual(result["text"], "from file")

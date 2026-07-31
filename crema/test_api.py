@@ -232,3 +232,51 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
         with patch("crema.client._complete", return_value="ok") as mock_complete:
             ask_api("simple", "hello")
         self.assertIsNone(mock_complete.call_args.args[2])
+
+
+class IntegrationTestCremaPackageExports(CremaFixtureTestCase):
+    """crema/__init__.py is the public contract a consuming app imports
+    (`from crema import ask`) — every other test file imports crema.api/crema.client
+    directly, so a missed or misspelled re-export would ship silently."""
+
+    _EXPORTS = (
+        "CremaBlockedError",
+        "CremaBudgetError",
+        "CremaConfigError",
+        "ask",
+        "ask_json",
+        "extract",
+        "health",
+        "is_configured",
+        "ocr",
+        "transcribe",
+        "transform",
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        frappe.set_user("Administrator")
+        _ensure_user(TEST_ISOLATION_USER)
+        _ensure_provider()
+        _ensure_interface("simple")
+        frappe.db.commit()
+
+    def test_package_reexports_the_full_public_surface(self):
+        import crema
+
+        for name in self._EXPORTS:
+            self.assertTrue(hasattr(crema, name), f"crema.{name} is not re-exported")
+            self.assertIn(name, crema.__all__)
+
+    def test_package_level_ask_runs_the_real_pipeline(self):
+        """`crema.ask` must be the same _Ask singleton crema.api exposes, not a copy —
+        one mocked _complete call proves the whole re-exported path is live."""
+        import crema
+
+        frappe.set_user("Administrator")
+        with patch("crema.client._complete", return_value="pong") as mock_complete:
+            result = crema.ask("simple", f"unique reexport prompt {uuid.uuid4().hex}")
+
+        self.assertEqual(result, "pong")
+        mock_complete.assert_called_once()

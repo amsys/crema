@@ -31,6 +31,14 @@ The guard fails open: if the guard call errors, or its reply cannot be read, the
 original call proceeds. The scan and Frappe's own permission checks are the hard
 fence. The guard adds a second opinion, not a second fence.
 
+Two failures are not guard errors, and do not fail open. If the scan (layer 1)
+blocks the content inside the guard's own call, the original call is blocked too —
+the scan always fails closed, also when the guard is what ran it. If the `security`
+interface cannot resolve at all, the call fails loudly with a configuration error.
+Crema Settings rejects `enable_llm_guard` at save time unless the `security`
+interface has an enabled provider, so this state means the configuration changed
+after the save.
+
 ## Layer 3 — the output trap
 
 The trap sends a per-call random token along with the request, and asks the model to
@@ -129,6 +137,10 @@ every interface that uses it. This is checked in addition to the interface's own
 budget: whichever is reached first blocks the call. `Crema Log.provider` records the
 effective provider on every row (blank on rows logged before this field existed), which
 is what the provider-level sum is computed from.
+
+An OCR call that would escalate checks `advanced_ocr`'s own budget first. If that
+budget is already spent, the escalation is skipped and the first attempt's text is
+returned — the call itself is not blocked, because its own spend already happened.
 
 The Crema Settings Model Assignments grid shows a live **Usage** column — spend to
 date if the interface has no budget, otherwise a percentage of its effective budget,

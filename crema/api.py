@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import mimetypes
 import time
 from typing import Any
 
@@ -256,7 +257,19 @@ class _Ask:
             try:
                 guard_raw = self("security", user_content)
                 risk = json.loads(strip_fence(guard_raw)).get("risk")
+            except CremaBlockedError:
+                # The nested call's own layer 1 flagged the content. Layer 1 fails
+                # CLOSED — reaching it through the guard's wrapper call doesn't earn
+                # it a pass into the fail-open branch below.
+                _log(cfg, "Blocked", "llm guard: layer-1 scan blocked the content", prompt_sha=prompt_sha)
+                raise
+            except CremaConfigError:
+                # An unresolvable "security" interface is a fail-loud admin
+                # misconfiguration (client._resolve) — not a guard runtime error.
+                raise
             except Exception:
+                # Includes CremaBudgetError: the guard exhausting its own budget must
+                # not block legitimate traffic — it is defense-in-depth, not the fence.
                 _log(
                     cfg,
                     "Error",
@@ -466,11 +479,21 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, A
         content, mime = _ocr_impl._load_bytes(file, cfg["isolation_user"])
         prompt_sha = hashlib.sha256(content).hexdigest()
         _log_mod.check_budget(cfg)
+        # Whisper-style endpoints commonly derive the audio format from the multipart
+        # filename's extension, not (only) the content type — an extension-less name
+        # can be rejected outright.
+        filename = "audio" + (mimetypes.guess_extension(mime or "") or "")
         result = client._transcribe(
-            cfg, content, "audio", mime or "application/octet-stream", language=language
+            cfg, content, filename, mime or "application/octet-stream", language=language
         )
     except CremaBudgetError as exc:
-        _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha, duration_ms=int((time.monotonic() - start) * 1000))
+        _log(
+            cfg,
+            "Blocked",
+            str(exc),
+            prompt_sha=prompt_sha,
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
         raise
     except Exception as exc:
         _log(

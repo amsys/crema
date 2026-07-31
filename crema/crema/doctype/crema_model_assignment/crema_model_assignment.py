@@ -1,6 +1,6 @@
 """Crema Model Assignment controller — a Crema Settings child row.
 
-Per-row validation only. The cross-row rules (the fixed PREDEFINED set, the
+Per-row validation only. The cross-row rules (the interfaces.names() row set, the
 'security' recursion guard, the llm-guard-requires-security check) live one level up,
 in CremaSettings.validate — see crema_settings.py.
 """

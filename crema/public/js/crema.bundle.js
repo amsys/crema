@@ -415,14 +415,18 @@ function crema_apply_view_spec(doctype, data) {
 	if (fast) {
 		crema_seed_list_state(live, doctype, view, state);
 		const rows = crema_filter_rows(doctype, filters);
-		// Only touch filter_area when there's an actual filter to apply — same guard
-		// list_view.js's own before_refresh() uses. A standard-filter field (e.g.
-		// ToDo's status) fires a debounced refresh on its own set_value() regardless of
-		// clear(false)'s refresh flag, so calling clear()/set() with nothing to set would
-		// arm a spurious extra query 300ms later for no reason.
-		const apply = rows.length
-			? live.filter_area.clear(false).then(() => live.filter_area.set(rows))
-			: Promise.resolve();
+		// Clear even when the spec has no filters: "show me everything" must not inherit
+		// the previous prompt's filters. list_view.js's own before_refresh() skips the
+		// clear in exactly that case (its this.filters.length > 0 guard) — that quirk is
+		// the bug, not the model. filter_area.get() is checked first so an already-
+		// unfiltered list doesn't pay for a clear(): a standard-filter field (e.g. ToDo's
+		// status) fires a debounced refresh on its own set_value() regardless of
+		// clear(false)'s refresh flag, arming a spurious extra query 300ms later.
+		let apply = Promise.resolve();
+		if (rows.length || live.filter_area.get().length) {
+			apply = live.filter_area.clear(false);
+			if (rows.length) apply = apply.then(() => live.filter_area.set(rows));
+		}
 		apply
 			.then(() => {
 				live.start = 0;
@@ -439,8 +443,19 @@ function crema_apply_view_spec(doctype, data) {
 	if (group_by) frappe.route_options._group_by = JSON.stringify(group_by);
 	frappe.set_route("List", doctype, view)
 		.then(() => {
-			if (crema_seed_list_state(cur_list, doctype, view, state)) cur_list.refresh();
-			crema_after_view(doctype, spec, filters);
+			const seeded = crema_seed_list_state(cur_list, doctype, view, state);
+			// Same stale-filter fence as the fast path, from the other side: before_refresh()
+			// only clears when the route carried filters, so a zero-filter spec would
+			// otherwise inherit the previous view's (Report/Kanban/group_by share one
+			// filter set with the List). A non-empty spec is already applied by then.
+			const stale =
+				!Object.keys(filters).length &&
+				cur_list.filter_area &&
+				cur_list.filter_area.get().length;
+			return (stale ? cur_list.filter_area.clear(false) : Promise.resolve()).then(() => {
+				if (seeded || stale) cur_list.refresh();
+				crema_after_view(doctype, spec, filters);
+			});
 		})
 		.catch(crema_show_error);
 }

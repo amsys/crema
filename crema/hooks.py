@@ -89,8 +89,9 @@ app_include_js = "crema.bundle.js"
 after_install = "crema.install.after_install"
 
 # Re-run the interface + dashboard seeding on every migrate so a name added to
-# interfaces.PREDEFINED later, or a Number Card an admin deleted, shows up again
-# without a manual step.
+# interfaces.PREDEFINED later, an interface a newly installed app registers through the
+# crema_interfaces hook, or a Number Card an admin deleted, shows up again without a
+# manual step.
 after_migrate = ["crema.install.sync_interfaces", "crema.install.sync_dashboard"]
 
 # Uninstallation

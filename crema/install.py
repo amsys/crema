@@ -55,16 +55,16 @@ def _ensure_isolation_user() -> str:
 
 def sync_interfaces() -> None:
     """Save the Crema Settings Single so CremaSettings.validate reconciles its
-    `assignments` child table to exactly one row per interfaces.PREDEFINED name, and
+    `assignments` child table to exactly one row per interfaces.names() name, and
     point default_isolation_user at the seeded isolation user if nothing else has been
     set there yet (never overwrites an admin's own choice).
 
     A seeded row has no provider — the Model Assignments grid always shows the full
-    fixed set, unconfigured rows included, and an unset provider is already what
+    set, unconfigured rows included, and an unset provider is already what
     client._load_from_db treats as "not configured" (the fallback chain in
     client._resolve is unaffected). Run on install and re-run on every migrate (see
-    hooks.after_migrate) so a name added to PREDEFINED later appears without a
-    manual step.
+    hooks.after_migrate) so a name added to PREDEFINED later, or one a newly installed
+    app registers through crema_interfaces, appears without a manual step.
     """
     settings = frappe.get_single("Crema Settings")
     if not settings.default_isolation_user:

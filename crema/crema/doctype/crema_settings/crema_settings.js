@@ -2,9 +2,11 @@
 // For license information, please see license.txt
 
 // Crema Settings — a Single, so it's one ordinary form: Providers (rendered into an
-// HTML field) + Model Assignments (a Table field, one row per crema.interfaces.PREDEFINED
-// name — see CremaSettings.validate for the reconcile). No add/delete row affordance:
-// the set is fixed. Saving goes through the normal frm.save() -> Document.validate/
+// HTML field) + Model Assignments (a Table field, one row per crema.interfaces.names()
+// name — core PREDEFINED plus whatever installed apps register through the
+// crema_interfaces hook; see CremaSettings.validate for the reconcile). No add/delete row
+// affordance: the set is not the user's to edit here. Saving goes through the normal
+// frm.save() -> Document.validate/
 // on_update path, so a real validation error surfaces as a real error, not a discarded one.
 
 // Usage (spend + budget, per interface and per provider) is fetched once per refresh

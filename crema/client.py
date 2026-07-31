@@ -62,6 +62,7 @@ def _load_from_db(name: str) -> dict[str, Any] | None:
         "enable_llm_guard": bool(doc.enable_llm_guard),
         "output_trap": doc.output_trap or "Off",
         "temperature": doc.temperature,
+        "max_tokens": doc.max_tokens or 0,
         "cache_ttl": doc.cache_ttl or 0,
         "monthly_budget_usd": doc.monthly_budget_usd or settings.default_monthly_budget_usd or 0,
         "provider_budget_usd": provider.monthly_budget_usd or 0,
@@ -83,13 +84,14 @@ def _resolve_one(name: str) -> dict[str, Any] | None:
 
 def _prompt_for(interface: str) -> str:
     """The requested interface's own prompt, even when it isn't configured — its
-    seeded row already carries DEFAULT_PROMPTS (CremaModelAssignment.validate)."""
+    seeded row already carries one (CremaModelAssignment.validate, via
+    interfaces.prompt_for)."""
     row = _assignment_row(interface)
-    return (row and row.system_prompt) or interfaces.DEFAULT_PROMPTS.get(interface, "")
+    return (row and row.system_prompt) or interfaces.prompt_for(interface)
 
 
 def _resolve(interface: str) -> dict[str, Any]:
-    """Resolve an interface name to a config dict, walking interfaces.FALLBACKS
+    """Resolve an interface name to a config dict, walking interfaces.fallback_for()
     until a configured interface with an enabled provider is found.
 
     "advanced_ocr" and "security" have no fallback entry — an unresolved
@@ -110,7 +112,7 @@ def _resolve(interface: str) -> dict[str, Any]:
             return cfg
 
         seen.add(name)
-        fallback = interfaces.FALLBACKS.get(name)
+        fallback = interfaces.fallback_for(name)
         if fallback is None or fallback in seen:
             raise CremaConfigError(f"No usable configuration found for crema interface '{interface}'")
         name = fallback
@@ -256,6 +258,8 @@ def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict |
         }
         if response_format:
             kwargs["response_format"] = response_format
+        if cfg.get("max_tokens"):
+            kwargs["max_tokens"] = cfg["max_tokens"]
 
         response = litellm.completion(**kwargs)
         _record_usage(response)
@@ -285,6 +289,34 @@ def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict |
     raise CremaBlockedError(miss)
 
 
+def _transcribe(
+    cfg: dict[str, Any], audio: bytes, filename: str, mime: str, language: str | None = None
+) -> dict[str, Any]:
+    """The only place a provider's transcription endpoint is actually called —
+    audio's sibling of `_complete`. No output trap: there is no system prompt to
+    protect and no text instruction channel a nonce could ride along on."""
+    import litellm
+
+    kwargs: dict[str, Any] = {
+        "model": f"openai/{cfg['model']}",
+        "file": (filename, audio, mime),
+        "api_base": cfg["base_url"],
+        "api_key": _api_key(cfg["provider"]),
+        "timeout": cfg["timeout_seconds"],
+        "response_format": "verbose_json",
+    }
+    if language:
+        kwargs["language"] = language
+
+    response = litellm.transcription(**kwargs)
+    _record_usage(response)
+    return {
+        "text": (response.get("text") or "").strip(),
+        "language": response.get("language"),
+        "duration": response.get("duration"),
+    }
+
+
 # A provider's /models response is untrusted third-party input that ends up in a
 # System Manager's Desk session (crema_settings.js feeds it to an Autocomplete, which
 # Awesomplete renders via innerHTML). Real-world model ids look like `gpt-4o`,
@@ -293,18 +325,20 @@ def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict |
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,128}$")
 
 
-def _fetch_models(provider: str) -> tuple[list[str], str | None]:
-    """(ids, error). Shared by list_models (cached, ids only) and check_connection
-    (uncached, surfaces the error) — litellm has no generic list-models call, so this
-    hits the OpenAI-compatible GET {base_url}/models directly. Ids that don't match
-    _MODEL_ID_RE are silently dropped from the ids list but don't affect success."""
+def _fetch_models(provider: str) -> tuple[list[str], str | None, bool]:
+    """(ids, error, reachable). Shared by list_models (cached, ids only) and
+    check_connection (uncached, surfaces the error) — litellm has no generic
+    list-models call, so this hits the OpenAI-compatible GET {base_url}/models
+    directly. Ids that don't match _MODEL_ID_RE are silently dropped from the ids
+    list but don't affect success. `reachable` is False only for a genuine
+    connection/timeout failure — a 401/403/500 still means the endpoint answered."""
     if not frappe.db.exists("Crema Provider", provider):
-        return [], "No such provider"
+        return [], "No such provider", True
 
     doc = frappe.get_doc("Crema Provider", provider)
     base_url = (doc.base_url or "").rstrip("/")
     if not base_url:
-        return [], "No Base URL configured"
+        return [], "No Base URL configured", True
 
     api_key = doc.get_password("api_key", raise_exception=False)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -330,23 +364,28 @@ def _fetch_models(provider: str) -> tuple[list[str], str | None]:
             for m in data
             if isinstance(m, dict) and isinstance(m.get("id"), str) and _MODEL_ID_RE.match(m["id"])
         ]
-        return ids, None
+        return ids, None, True
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        return [], _log.redact(f"{type(exc).__name__}: {exc}"), False
     except Exception as exc:
-        return [], _log.redact(f"{type(exc).__name__}: {exc}")
+        return [], _log.redact(f"{type(exc).__name__}: {exc}"), True
 
 
 @redis_cache(ttl=3600)
 def list_models(provider: str) -> list[str]:
     """Model ids available from `provider`. [] on any error."""
-    ids, _error = _fetch_models(provider)
+    ids, _error, _reachable = _fetch_models(provider)
     return ids
 
 
 def check_connection(provider: str) -> dict[str, Any]:
     """Live (uncached — an hour-stale status is worse than none) connectivity check
-    for the Providers panel on Crema Settings. {"ok": bool, "detail": str}: detail is
-    "<n> models" on success, else the redacted error _fetch_models returned."""
-    ids, error = _fetch_models(provider)
+    for the Providers panel on Crema Settings. {"ok": bool, "reachable": bool,
+    "detail": str}: detail is "<n> models" on success, else the redacted error
+    _fetch_models returned. `reachable=False` means the endpoint itself couldn't be
+    reached (DNS/connect/timeout) — as opposed to reachable but rejecting (401/403)
+    or erroring (5xx)."""
+    ids, error, reachable = _fetch_models(provider)
     if error is None:
-        return {"ok": True, "detail": f"{len(ids)} models"}
-    return {"ok": False, "detail": error}
+        return {"ok": True, "reachable": True, "detail": f"{len(ids)} models"}
+    return {"ok": False, "reachable": reachable, "detail": error}

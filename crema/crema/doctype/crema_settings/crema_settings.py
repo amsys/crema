@@ -47,17 +47,25 @@ class CremaSettings(Document):
                 )
 
     def _reconcile_assignments(self) -> None:
-        """Keep `assignments` to exactly one row per interfaces.PREDEFINED name, in
-        that order — append a missing name, drop an unknown one, reorder the rest.
-        This is what makes the set "all present and fixed"; it replaces the old
-        install.sync_interfaces insert loop."""
+        """Keep `assignments` to exactly one row per interfaces.names() name
+        (PREDEFINED plus every app-registered interface — see the `crema_interfaces`
+        hooks.py key), in that order — append a missing name, drop an unknown one,
+        reorder the rest. This is what makes the set "all present and fixed"; it
+        replaces the old install.sync_interfaces insert loop. A newly-created
+        app-registered row is seeded from its hook config (any Crema Model Assignment
+        fieldname — enable_prompt_scan, output_trap, max_tokens, ...) once, so an
+        admin's later edits in the desk survive the next reconcile."""
         by_name = {row.interface: row for row in self.assignments if row.interface}
         self.assignments = []
-        for name in interfaces.PREDEFINED:
+        app_cfg = interfaces.app_interfaces()
+        for name in interfaces.names():
             row = by_name.get(name)
             if row is None:
                 row = self.append("assignments", {})
                 row.interface = name
+                for field, value in app_cfg.get(name, {}).items():
+                    if field not in ("prompt", "fallback"):
+                        setattr(row, field, value)
             else:
                 self.assignments.append(row)
             row.interface_label = interfaces.LABELS.get(name, name)

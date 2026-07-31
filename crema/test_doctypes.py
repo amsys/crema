@@ -429,6 +429,48 @@ class IntegrationTestCremaSettingsReconcile(IntegrationTestCase):
         for name in interfaces.PREDEFINED:
             self.assertEqual(labels[name], interfaces.LABELS[name])
 
+    def test_app_registered_interface_is_seeded_and_edits_survive_reconcile(self):
+        """crema_interfaces (hooks.py) rows behave exactly like PREDEFINED ones: added
+        when missing, seeded once from the app's config, then left alone."""
+        fake = {
+            "_test_app_iface": {
+                "prompt": "app prompt",
+                "fallback": "simple",
+                "enable_prompt_scan": 0,
+                "output_trap": "Log Only",
+            }
+        }
+        try:
+            with patch("crema.interfaces.app_interfaces", return_value=fake):
+                settings = frappe.get_single("Crema Settings")
+                settings.save(ignore_permissions=True)
+
+                reloaded = frappe.get_single("Crema Settings")
+                row = next(r for r in reloaded.assignments if r.interface == "_test_app_iface")
+                self.assertEqual(row.interface_label, "_test_app_iface")  # LABELS.get(name, name)
+                self.assertEqual(row.system_prompt, "app prompt")
+                self.assertEqual(row.enable_prompt_scan, 0)
+                self.assertEqual(row.output_trap, "Log Only")
+
+                # An admin's later edit is not clobbered by a second reconcile — the
+                # hook config only seeds a *new* row, once.
+                row.output_trap = "Block"
+                reloaded.save(ignore_permissions=True)
+                row = next(
+                    r
+                    for r in frappe.get_single("Crema Settings").assignments
+                    if r.interface == "_test_app_iface"
+                )
+                self.assertEqual(row.output_trap, "Block")
+        finally:
+            # Outside the patch, app_interfaces() reverts to real (no app on this site
+            # declares this fake name), so the next reconcile drops the row — the same
+            # mechanism test_a_row_with_an_interface_name_outside_predefined_is_dropped_on_save
+            # exercises above.
+            frappe.get_single("Crema Settings").save(ignore_permissions=True)
+            names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
+            self.assertNotIn("_test_app_iface", names)
+
     def test_row_with_provider_and_no_model_warns_on_save_but_still_saves(self):
         """A provider with no effective model resolves to a broken litellm model
         string at call time (client._complete) — CremaSettings.validate warns instead

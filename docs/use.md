@@ -6,19 +6,25 @@ This page covers the calls a developer makes: from Python, or over HTTP.
 
 ```python
 def ask(interface_or_prompt: str, prompt: str | None = None, *, context: str | None = None,
-        files: list[str] | None = None, response_format: dict | None = None,
-        cache_ttl: int | None = None) -> str
+        files: list[str | tuple[bytes, str]] | None = None, response_format: dict | None = None,
+        cache_ttl: int | None = None, history: list[dict] | None = None) -> str
 ```
 
 Send `prompt` to the named `interface`. The call returns the model's text response.
 
 - `context` adds background text. The system scans `context` and `prompt` together,
   because an attack can split across the two fields.
-- `files` is a list of File URLs. The system sends readable files as vision input,
-  after a permission check on each file.
+- `files` is a list of File URLs, or `(bytes, mime)` pairs for content you already hold
+  in memory and have permission-checked yourself (a bot photo with no File behind it,
+  for example). The system sends readable files as vision input, checking permission
+  on each File URL first; a `(bytes, mime)` pair is used as-is.
 - `response_format` requests a structured reply, for example
   `{"type": "json_object"}`.
 - `cache_ttl` overrides the interface's cache setting for this one call.
+- `history` adds prior turns — a list of `{"role": "user"|"assistant", "content": str}`
+  dicts — between the interface's system prompt and this call's prompt. Crema keeps no
+  conversation state of its own; pass the same list back on the next turn to continue
+  it. The system scans the whole history together with `context` and `prompt`.
 
 Example:
 
@@ -96,6 +102,49 @@ for record in result["records"]:
     doc.update({**record["set"], **record["child_set"]})
     doc.insert()
 ```
+
+## `transcribe` — speech to text
+
+```python
+def transcribe(file: str | bytes, *, language: str | None = None) -> dict
+# returns {"text": str, "language": str | None, "duration": float | None}
+```
+
+Transcribe `file` — a File URL or raw audio bytes — with the `transcribe` interface's
+configured model. `language` is an optional ISO-639-1 hint (`"en"`, `"fr"`, ...); the
+provider still auto-detects if omitted. There is no system prompt for this interface,
+so the prompt-scan and LLM-guard security layers don't run — there is no user-supplied
+text to scan before the provider call happens. Still budget-checked and logged to
+Crema Log, same as every other interface, and has no fallback: a transcription call
+that can't resolve raises `CremaConfigError` rather than silently landing on a chat
+model.
+
+## `health` / `is_configured` — a below-System-Manager status check
+
+```python
+def health(interface: str = "simple", *, live: bool = True) -> dict
+# returns {"configured": bool, "ok": bool | None, "reachable": bool | None,
+#          "provider": str | None, "model": str | None, "detail": str,
+#          "spend": float, "budget": float}
+
+def is_configured(interface: str = "simple") -> bool
+```
+
+`check_provider` (the Crema Settings Providers panel's live check) is
+`only_for("System Manager")`, so nothing below that role can render its own health
+badge from it — that's what these two are for. Neither is `@frappe.whitelist()`'d and
+neither applies a role check of its own; call them in-process from behind whatever
+gate your own surface needs (`frappe.only_for(("Fleet Manager", "System Manager"))`,
+for example), the same way you'd call `ask`/`ocr`/`transcribe`. Never returns or logs
+an `api_key`.
+
+`health()` resolves `interface` (following the same fallback walk `ask()` does — if it
+falls back, `provider`/`model`/`spend`/`budget` describe the interface that actually
+resolved and would be billed, not the one you asked for) and, unless `live=False`,
+makes one live connectivity check against that interface's provider. `configured=False`
+means the interface can't be resolved to a usable provider at all — `ok`/`reachable`
+are `None` in that case, since there's no provider to check. `is_configured()` is the
+cheap, no-network shortcut: `health(interface, live=False)["configured"]`.
 
 ## HTTP endpoints
 

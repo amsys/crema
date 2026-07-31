@@ -42,5 +42,5 @@ class CremaModelAssignment(Document):
     def validate(self) -> None:
         validate_isolation_user(self.isolation_user, f"'{self.interface}': Isolation User")
 
-        if not self.system_prompt and self.interface in interfaces.PREDEFINED:
-            self.system_prompt = interfaces.DEFAULT_PROMPTS.get(self.interface, "")
+        if not self.system_prompt:
+            self.system_prompt = interfaces.prompt_for(self.interface)

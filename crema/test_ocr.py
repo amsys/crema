@@ -215,6 +215,35 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
         self.assertEqual(mock_complete.call_count, 1)
         self.assertEqual(result, {"text": "blurry", "confidence": 0.3, "escalated": False})
 
+    def test_escalation_skipped_when_advanced_ocr_budget_exhausted(self):
+        """advanced_ocr resolves and clears the same-provider/model skip (different
+        model from "ocr"), but its own interface budget is already spent this month --
+        _run's log.check_budget(adv_cfg) call (added alongside the same-config skip)
+        must catch CremaBudgetError and serve the base (unescalated) result instead of
+        making a second, budget-exceeding provider call. Same "serve what's already
+        paid for" shape as the unresolvable-advanced_ocr and same-config skips above,
+        for the budget ceiling instead."""
+        _ensure_interface("advanced_ocr", model="test-model-advanced", monthly_budget_usd=1)
+        frappe.get_doc(
+            {
+                "doctype": "Crema Log",
+                "interface": "advanced_ocr",
+                "provider": TEST_PROVIDER,
+                "status": "Success",
+                "cost_usd": 5,
+            }
+        ).insert(ignore_permissions=True)
+
+        low = '{"text": "blurry", "confidence": 0.3}'
+        with patch("crema.client._complete", return_value=low) as mock_complete:
+            result = ocr(_scanned_pdf_bytes())
+
+        self.assertEqual(mock_complete.call_count, 1)
+        self.assertEqual(result, {"text": "blurry", "confidence": 0.3, "escalated": False})
+
+        log = frappe.get_last_doc("Crema Log", filters={"interface": "ocr", "status": "Success"})
+        self.assertEqual(log.status, "Success")
+
     def test_unparseable_json_treated_as_low_confidence(self):
         """Unparseable JSON -> confidence None, treated the same as low-confidence."""
         with patch("crema.client._complete", return_value="not json at all") as mock_complete:

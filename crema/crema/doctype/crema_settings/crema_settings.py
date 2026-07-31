@@ -94,7 +94,12 @@ class CremaSettings(Document):
 
         # "security" has no fallback entry (interfaces.FALLBACKS) but IS covered by
         # default_provider like every other interface — see client._load_from_db.
-        security_configured = bool(security_row and (security_row.provider or self.default_provider))
+        # A name alone isn't enough: a disabled provider makes every guarded call
+        # silently fail open at runtime, so check the provider is real and enabled.
+        security_provider = security_row and (security_row.provider or self.default_provider)
+        security_configured = bool(
+            security_provider and frappe.db.get_value("Crema Provider", security_provider, "enabled")
+        )
         for row in self.assignments:
             if row.interface == "security" or not row.enable_llm_guard:
                 continue

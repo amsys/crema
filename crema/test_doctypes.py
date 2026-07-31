@@ -224,7 +224,11 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
 
         self.assertTrue(frappe.db.exists("Role", "Crema User"))
 
-    def test_sync_interfaces_seeds_one_row_per_predefined_name_and_is_idempotent(self):
+    def test_sync_interfaces_seeds_one_row_per_interface_name_and_is_idempotent(self):
+        """One row per interfaces.names() name — PREDEFINED plus every
+        app-registered interface, not PREDEFINED alone: on a site where another
+        installed app registers crema_interfaces, those rows are part of the
+        reconciled set too."""
         from crema.install import sync_interfaces
 
         sync_interfaces()
@@ -234,7 +238,7 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         for name in interfaces.PREDEFINED:
             self.assertIn(name, first_pass, f"{name} was not seeded")
         after = {r.interface for r in frappe.get_single("Crema Settings").assignments}
-        self.assertEqual(after, set(interfaces.PREDEFINED))
+        self.assertEqual(after, set(interfaces.names()))
 
     def test_sync_dashboard_creates_the_three_number_cards_and_is_idempotent(self):
         from crema.install import _DASHBOARD_CARDS, sync_dashboard
@@ -267,6 +271,61 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         cfg = client._resolve("classification")  # classification -> simple
         self.assertEqual(cfg["interface"], "simple")
 
+    def test_ensure_isolation_user_is_idempotent(self):
+        """Calling twice must return the same email and not insert a second User
+        row — the exists-check at the top of _ensure_isolation_user."""
+        from crema.install import _ensure_isolation_user
+
+        first = _ensure_isolation_user()
+        second = _ensure_isolation_user()
+
+        self.assertEqual(first, second)
+        self.assertEqual(frappe.db.count("User", {"email": first}), 1)
+
+    def test_ensure_isolation_user_cannot_log_in(self):
+        """No password is ever set, welcome-email is off, and the only role granted is
+        'Crema User' — this is what makes the seeded default a safe sandbox identity
+        rather than just a placeholder name."""
+        from crema.install import _ensure_isolation_user
+        from frappe.utils.password import get_decrypted_password
+
+        email = _ensure_isolation_user()
+        user = frappe.get_doc("User", email)
+
+        self.assertEqual(user.send_welcome_email, 0)
+        self.assertIsNone(get_decrypted_password("User", email, raise_exception=False))
+        self.assertEqual({r.role for r in user.get("roles")}, {"Crema User"})
+
+    def test_sync_interfaces_sets_default_isolation_user_when_blank(self):
+        from crema.install import _ensure_isolation_user, sync_interfaces
+
+        self.assertFalse(
+            frappe.get_single("Crema Settings").default_isolation_user
+        )  # setUp's _clear_defaults
+        self.addCleanup(self._reset_default_isolation_user)
+
+        sync_interfaces()
+
+        self.assertEqual(frappe.get_single("Crema Settings").default_isolation_user, _ensure_isolation_user())
+
+    def test_sync_interfaces_does_not_overwrite_an_already_set_default_isolation_user(self):
+        from crema.install import sync_interfaces
+
+        _ensure_user(TEST_ISOLATION_USER)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_isolation_user = TEST_ISOLATION_USER
+        settings.save(ignore_permissions=True)
+        self.addCleanup(self._reset_default_isolation_user)
+
+        sync_interfaces()  # must not touch an admin's own choice
+
+        self.assertEqual(frappe.get_single("Crema Settings").default_isolation_user, TEST_ISOLATION_USER)
+
+    def _reset_default_isolation_user(self):
+        settings = frappe.get_single("Crema Settings")
+        settings.default_isolation_user = ""
+        settings.save(ignore_permissions=True)
+
     def test_setting_provider_without_isolation_user_is_rejected(self):
         _ensure_provider()
         settings = frappe.get_single("Crema Settings")
@@ -286,11 +345,23 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         row.model = "test-model"
         row.isolation_user = TEST_ISOLATION_USER
         settings.save(ignore_permissions=True)  # must not raise
+        # Crema Settings is a shared Single (see setUp's own comment above) — leaving
+        # "extraction" configured would leak into every later test's assumption that
+        # it's blank.
+        self.addCleanup(self._reset_extraction_row)
 
         reloaded = next(
             r for r in frappe.get_single("Crema Settings").assignments if r.interface == "extraction"
         )
         self.assertEqual(reloaded.provider, TEST_PROVIDER)
+
+    def _reset_extraction_row(self):
+        settings = frappe.get_single("Crema Settings")
+        row = next(r for r in settings.assignments if r.interface == "extraction")
+        row.provider = ""
+        row.model = ""
+        row.isolation_user = ""
+        settings.save(ignore_permissions=True)
 
     def test_enabling_llm_guard_is_rejected_while_seeded_security_row_has_no_provider(self):
         """Distinct from the equivalent test in test_client.py, which configures
@@ -354,6 +425,34 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         settings.default_isolation_user = ""
         settings.save(ignore_permissions=True)
 
+    def test_enabling_llm_guard_is_rejected_when_security_provider_is_disabled(self):
+        """_apply_security_guard_rules now requires the effective security provider to
+        be *enabled*, not just named — a disabled provider can never actually run the
+        guard call, so it must be treated the same as "not configured"."""
+        disabled_provider = f"_test_crema_disabled_provider_{uuid.uuid4().hex[:8]}"
+        doc = frappe.new_doc("Crema Provider")
+        doc.provider_name = disabled_provider
+        doc.base_url = "http://localhost:11434/v1"
+        doc.enabled = 0
+        doc.insert(ignore_permissions=True)
+        try:
+            _ensure_user(TEST_ISOLATION_USER)
+            _ensure_provider()
+            settings = frappe.get_single("Crema Settings")
+            security_row = next(r for r in settings.assignments if r.interface == "security")
+            security_row.provider = disabled_provider
+            security_row.isolation_user = TEST_ISOLATION_USER
+            row = next(r for r in settings.assignments if r.interface == "translation")
+            row.provider = TEST_PROVIDER
+            row.model = "test-model"
+            row.isolation_user = TEST_ISOLATION_USER
+            row.enable_llm_guard = 1
+            with self.assertRaises(frappe.ValidationError) as ctx:
+                settings.save(ignore_permissions=True)
+            self.assertIn("security", str(ctx.exception))
+        finally:
+            frappe.delete_doc("Crema Provider", disabled_provider, ignore_permissions=True, force=True)
+
     def test_default_isolation_user_administrator_is_rejected(self):
         settings = frappe.get_single("Crema Settings")
         settings.default_isolation_user = "Administrator"
@@ -394,22 +493,25 @@ class IntegrationTestCremaSettingsReconcile(IntegrationTestCase):
         super().setUp()
         frappe.set_user("Administrator")
 
-    def test_save_reconciles_to_exactly_the_predefined_set(self):
+    def test_save_reconciles_to_exactly_the_full_interface_name_set(self):
+        """interfaces.names() — PREDEFINED plus app-registered, in that order. On a
+        site where another installed app registers crema_interfaces, those rows are
+        part of the fixed set, so asserting PREDEFINED alone would fail there."""
         settings = frappe.get_single("Crema Settings")
         settings.save(ignore_permissions=True)
         names = [r.interface for r in settings.assignments]
-        self.assertEqual(names, list(interfaces.PREDEFINED))
+        self.assertEqual(names, interfaces.names())
 
-    def test_a_row_with_an_interface_name_outside_predefined_is_dropped_on_save(self):
+    def test_a_row_with_an_interface_name_outside_the_known_set_is_dropped_on_save(self):
         settings = frappe.get_single("Crema Settings")
         settings.save(ignore_permissions=True)  # normalize first
         bogus = settings.append("assignments", {})
-        bogus.interface = "_not_a_real_predefined_name"
+        bogus.interface = "_not_a_real_interface_name"
         settings.save(ignore_permissions=True)
 
         names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
-        self.assertNotIn("_not_a_real_predefined_name", names)
-        self.assertEqual(names, set(interfaces.PREDEFINED))
+        self.assertNotIn("_not_a_real_interface_name", names)
+        self.assertEqual(names, set(interfaces.names()))
 
     def test_security_row_cannot_enable_its_own_llm_guard(self):
         settings = frappe.get_single("Crema Settings")
@@ -465,7 +567,7 @@ class IntegrationTestCremaSettingsReconcile(IntegrationTestCase):
         finally:
             # Outside the patch, app_interfaces() reverts to real (no app on this site
             # declares this fake name), so the next reconcile drops the row — the same
-            # mechanism test_a_row_with_an_interface_name_outside_predefined_is_dropped_on_save
+            # mechanism test_a_row_with_an_interface_name_outside_the_known_set_is_dropped_on_save
             # exercises above.
             frappe.get_single("Crema Settings").save(ignore_permissions=True)
             names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
@@ -478,6 +580,10 @@ class IntegrationTestCremaSettingsReconcile(IntegrationTestCase):
         mid-setup state."""
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_provider()
+        # The real site this suite runs against may have a Default Model set, which
+        # would legitimately silence the warning — blank the defaults first, same as
+        # test_client.py's resolution tests do (undone by the class-level rollback).
+        _clear_defaults()
         settings = frappe.get_single("Crema Settings")
         row = next(r for r in settings.assignments if r.interface == "extraction")
         row.provider = TEST_PROVIDER

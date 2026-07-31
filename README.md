@@ -68,39 +68,42 @@ failure surfaces as a message — never a silent no-op.
 | `summarization` | Concise, accurate summaries | `simple` |
 | `transform` | Propose a diff for an ERP document (never auto-writes) | `complex` |
 | `view` | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
+| `transcribe` | Speech-to-text for audio files | none |
 
 ## Features
 
 - **One entry point** — no public function accepts a model, provider, or API key; only
-  an interface name.
-- **11 named interfaces** with an automatic fallback chain.
-- **Provider templates** — a wizard sets up OpenAI, OpenRouter, Groq, Mistral,
-  DeepSeek, or Ollama with a key in one step, plus a live connection status check.
-- **Model autocomplete**, fetched live from your provider.
-- **Two-layer security** — a local regex/unicode prompt scan, plus an optional LLM
-  guard that classifies risk.
+  an interface name. `ask()` also takes context, files (File URLs or in-memory
+  `(bytes, mime)` tuples), and multi-turn history.
+- **12 named interfaces** with an automatic fallback chain. Other apps register their
+  own interfaces through a `crema_interfaces` hook; a predefined name can never be
+  overridden.
+- **Three security layers** — a local regex/unicode prompt scan, an optional LLM guard
+  that classifies risk, and an output-trap nonce that catches a hijacked response.
 - **Isolation user sandbox** — document access runs under a fenced, low-privilege
   Frappe user; Frappe's own permission engine enforces it, not Crema's.
 - **OCR** for images, scanned PDFs, and text PDFs, with a confidence score and
   automatic escalation to a stronger model.
-- **Smart import** — `extract()` proposes the fields of one or more new documents from
-  a file; how many records it holds is the model's own call.
-- **Document transform** — `transform()` proposes a diff for an existing document;
-  neither call writes anything, the caller applies the result.
+- **Transcription** — `transcribe()` turns an audio file into text, with the same
+  budget checks and audit log as every other call.
+- **Propose, never write** — `extract()` proposes one or more new documents from a
+  file (how many is the model's own call); `transform()` proposes a diff for an
+  existing document. Neither writes anything; the caller applies the result.
 - **Scheduled automation** — fetch a URL, self-plan once, extract, upsert, on a cron
   schedule. The plan is data, never code.
-- **Response caching**, configurable per interface or per call.
-- **Full audit log** — interface, model, user, status, duration, tokens, cost, and a
-  prompt hash, never the prompt or document content itself.
-- **Budgets** — an optional monthly USD cap per interface and a combined per-provider
-  ceiling; the next call over budget is blocked before it reaches the provider.
-- **Usage dashboard** — a Crema Usage report and workspace number cards for calls,
-  cost, and blocked rate.
+- **Health probe** — `health()` and `is_configured()` let a consuming app show its own
+  status page; the caller applies its own role check.
+- **Cost control and audit** — an optional monthly USD budget per interface and per
+  provider, response caching per interface or per call, a usage dashboard, and a full
+  audit log: interface, model, user, status, duration, tokens, cost, and a prompt
+  hash — never the prompt or document content itself.
 - **HTTP endpoints** for `ask`, `extract`, and `transform`, rate-limited per IP and per
   user.
-- **Crema Settings** — Providers and Model Assignments on one page; a Default Provider/
-  Model/Isolation User covers every interface out of the box.
-- **Desk workspace** with all doctypes, the usage report, and a sidebar entry.
+- **Admin in one place** — Crema Settings holds the providers (a template wizard for
+  OpenAI, OpenRouter, Groq, Mistral, DeepSeek, or Ollama, with live model autocomplete
+  and connection checks) and the per-interface model assignments; a default provider,
+  model, and isolation user cover every interface out of the box. A Desk workspace
+  adds the doctypes and the usage report.
 
 ## Requirements
 

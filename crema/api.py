@@ -33,7 +33,10 @@ __all__ = [
     "get_interfaces",
     "get_models",
     "get_usage",
+    "health",
+    "is_configured",
     "ocr",
+    "transcribe",
     "transform",
     "transform_api",
 ]
@@ -59,7 +62,13 @@ invent a record the document does not state. Output ONLY JSON with exactly this 
 could not fill in>"}"""
 
 
-def _prompt_hash(cfg: dict[str, Any], prompt: str, context: str | None, response_format: dict | None) -> str:
+def _prompt_hash(
+    cfg: dict[str, Any],
+    prompt: str,
+    context: str | None,
+    response_format: dict | None,
+    history: list[dict] | None = None,
+) -> str:
     parts = "|".join(
         [
             cfg["interface"],
@@ -68,6 +77,7 @@ def _prompt_hash(cfg: dict[str, Any], prompt: str, context: str | None, response
             prompt,
             context or "",
             json.dumps(response_format, sort_keys=True) if response_format else "",
+            json.dumps(history) if history else "",
         ]
     )
     return hashlib.sha256(parts.encode()).hexdigest()
@@ -85,15 +95,33 @@ def _user_content(prompt: str, context: str | None) -> str:
     return f"<context>\n{context}\n</context>\n{prompt}" if context else prompt
 
 
-def _build_messages(cfg: dict[str, Any], prompt: str, context: str | None) -> list[dict]:
+def _build_messages(
+    cfg: dict[str, Any], prompt: str, context: str | None, history: list[dict] | None = None
+) -> list[dict]:
     return [
         {"role": "system", "content": cfg.get("system_prompt") or ""},
+        *(history or []),
         {"role": "user", "content": _user_content(prompt, context)},
     ]
 
 
-def _resolve_files(files: list[str]) -> list[dict]:
+def _scan_context(context: str | None, history: list[dict] | None) -> str | None:
+    """Widen the text layer 1 scans to include a caller-supplied history — scan()
+    joins whatever it's given (see its own docstring on why), so an injection split
+    across an earlier turn is still caught, not just the latest one."""
+    if not history:
+        return context
+    turns = "\n".join(str(m.get("content", "")) for m in history)
+    return f"{context}\n{turns}" if context else turns
+
+
+def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
     """Permission-checked (as the isolation user) content parts for vision models.
+
+    A `str` is a Frappe File URL, permission-checked via file_doc.check_permission
+    before its content is read. A `(bytes, mime)` tuple is content the caller already
+    read under its own permission check — e.g. a bare image with no Frappe File behind
+    it at all (a bot photo) — and is prepped as-is, no re-check possible or needed.
 
     Delegates to crema._ocr.prep_parts, which routes PDFs through the same text-vs-scan
     detection ocr() uses (extracted text for text PDFs, rendered page images for
@@ -102,16 +130,21 @@ def _resolve_files(files: list[str]) -> list[dict]:
     import mimetypes
 
     parts: list[dict] = []
-    for file_url in files:
+    for f in files:
+        if isinstance(f, tuple):
+            content, mime = f
+            parts.extend(_ocr_impl.prep_parts(content, mime))
+            continue
+
         try:
-            file_doc = frappe.get_doc("File", {"file_url": file_url})
+            file_doc = frappe.get_doc("File", {"file_url": f})
             file_doc.check_permission("read")
             content = file_doc.get_content()
         except Exception:
             continue
 
         content = content if isinstance(content, bytes) else content.encode()
-        mime = mimetypes.guess_type(file_doc.file_name or file_url)[0] or ""
+        mime = mimetypes.guess_type(file_doc.file_name or f)[0] or ""
         parts.extend(_ocr_impl.prep_parts(content, mime))
     return parts
 
@@ -156,9 +189,10 @@ class _Ask:
         prompt: str | None = None,
         *,
         context: str | None = None,
-        files: list[str] | None = None,
+        files: list[str | tuple[bytes, str]] | None = None,
         response_format: dict | None = None,
         cache_ttl: int | None = None,
+        history: list[dict] | None = None,
     ) -> str:
         """Ask a configured interface. See the app plan for the full ordered flow.
 
@@ -170,6 +204,14 @@ class _Ask:
         this call only (e.g. to force-cache a call whose interface has caching off).
         No model/provider/api_key override exists here or anywhere public — that
         boundary is intentional, see the module docstring.
+
+        `history`, if given, is a list of prior `{"role": "user"|"assistant",
+        "content": str}` turns inserted between the system prompt and this call's user
+        turn. The interface's system prompt is still the only one, and crema stores
+        and manages no conversation of its own — the caller owns the transcript and
+        passes it back each turn. Scanned for injections together with `context` and
+        `prompt`, so a turn that hides an override doesn't get a pass for not being
+        the latest one.
         """
         if prompt is None:
             interface, prompt = "simple", interface
@@ -178,14 +220,15 @@ class _Ask:
         if cache_ttl is not None:
             cfg = {**cfg, "cache_ttl": cache_ttl}
 
-        prompt_sha = _prompt_hash(cfg, prompt, context, response_format)
+        prompt_sha = _prompt_hash(cfg, prompt, context, response_format, history)
         user_content = _user_content(prompt, context)
 
         if cfg["enable_prompt_scan"]:
             # scan() joins context+prompt and scans the join — see its docstring for why
             # it is handed the two fields rather than the delimiter-wrapped user_content
-            # that layer 2 and the provider get.
-            reason = security.scan(prompt, context)
+            # that layer 2 and the provider get. _scan_context widens that join to cover
+            # a caller-supplied history too.
+            reason = security.scan(prompt, _scan_context(context, history))
             if reason:
                 _log(cfg, "Blocked", reason, prompt_sha=prompt_sha)
                 raise CremaBlockedError(reason)
@@ -227,7 +270,7 @@ class _Ask:
             if risk == "suspicious":
                 _log(cfg, "Success", "llm guard: suspicious — proceeded", prompt_sha=prompt_sha)
 
-        messages = _build_messages(cfg, prompt, context)
+        messages = _build_messages(cfg, prompt, context, history)
 
         start = time.monotonic()
         try:
@@ -402,6 +445,103 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict:
     return _ocr_impl.ocr(file, instruction=instruction)
 
 
+def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, Any]:
+    """Transcribe an audio file — a Frappe File URL or raw bytes, the same
+    File-URL-or-bytes convention as ocr()/ask(files=[...]). Returns {"text": str,
+    "language": str | None, "duration": float | None}.
+
+    No system prompt exists for this interface (see interfaces.PREDEFINED/
+    DEFAULT_PROMPTS), so layers 1 (security.scan) and 2 (the LLM guard) don't run —
+    same reasoning crema._ocr's module docstring gives for OCR'd document content:
+    those layers scan text a caller supplies, and there is none here before the
+    provider call happens. Every call is still logged to Crema Log and
+    budget-checked, same as ask()/ocr(); reuses _ocr_impl._load_bytes for the
+    permission-checked File URL / raw-bytes read rather than duplicating it.
+    """
+    cfg = client._resolve("transcribe")
+
+    prompt_sha = None
+    start = time.monotonic()
+    try:
+        content, mime = _ocr_impl._load_bytes(file, cfg["isolation_user"])
+        prompt_sha = hashlib.sha256(content).hexdigest()
+        _log_mod.check_budget(cfg)
+        result = client._transcribe(
+            cfg, content, "audio", mime or "application/octet-stream", language=language
+        )
+    except CremaBudgetError as exc:
+        _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha, duration_ms=int((time.monotonic() - start) * 1000))
+        raise
+    except Exception as exc:
+        _log(
+            cfg,
+            "Error",
+            _log_mod.redact(f"{type(exc).__name__}: {exc}")[:2000],
+            prompt_sha=prompt_sha,
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+        raise
+
+    _log(cfg, "Success", None, prompt_sha=prompt_sha, duration_ms=int((time.monotonic() - start) * 1000))
+    return result
+
+
+def health(interface: str = "simple", *, live: bool = True) -> dict[str, Any]:
+    """Health snapshot for `interface`'s resolved configuration: provider, model,
+    live reachability, and month-to-date spend/budget. Never returns or logs an
+    api_key.
+
+    Deliberately NOT @frappe.whitelist()'d and applies no role check of its own —
+    check_provider (the Crema Settings equivalent) is only_for("System Manager"),
+    too narrow for a consuming app's own dashboard/health-check button below that
+    role. A caller applies whatever role gate its own surface needs (e.g.
+    frappe.only_for(("Fleet Manager", "System Manager"))), then calls this
+    in-process.
+
+    {"configured": bool, "ok": bool | None, "reachable": bool | None,
+     "provider": str | None, "model": str | None, "detail": str, "spend": float,
+     "budget": float}. `ok`/`reachable` are None when `live=False`, or when nothing
+     is configured (no network call to skip or make). `spend`/`budget` are the
+     *resolved* interface's — if `interface` fell back to another configured one,
+     that's the one actually billed (see client._resolve / log.check_budget), and
+     the one these numbers describe.
+    """
+    try:
+        cfg = client._resolve(interface)
+    except CremaConfigError as exc:
+        return {
+            "configured": False,
+            "ok": False,
+            "reachable": None,
+            "provider": None,
+            "model": None,
+            "detail": str(exc),
+            "spend": 0.0,
+            "budget": 0.0,
+        }
+
+    result: dict[str, Any] = {
+        "configured": True,
+        "ok": None,
+        "reachable": None,
+        "provider": cfg["provider"],
+        "model": cfg["model"],
+        "detail": "",
+        "spend": _log_mod.month_spend()["interface"].get(cfg["interface"], 0.0),
+        "budget": cfg.get("monthly_budget_usd") or 0.0,
+    }
+    if live:
+        conn = client.check_connection(cfg["provider"])
+        result.update(ok=conn["ok"], reachable=conn["reachable"], detail=conn["detail"])
+    return result
+
+
+def is_configured(interface: str = "simple") -> bool:
+    """Cheap, no-network check: does `interface` resolve to a usable (configured,
+    enabled-provider) config at all? health(interface, live=False)["configured"]."""
+    return health(interface, live=False)["configured"]
+
+
 def _check_user_rate_limit() -> None:
     """The per-session-user half of ask_api's and extract_api's rate limiting.
 
@@ -543,10 +683,11 @@ def check_provider(provider: str) -> dict[str, Any]:
 
 @frappe.whitelist()
 def get_interfaces() -> list[str]:
-    """Feeds the Interface Autocomplete on Crema Automation Task — the fixed
-    interfaces.PREDEFINED set, same source Crema Settings' assignments reconcile to."""
+    """Feeds the Interface Autocomplete on Crema Automation Task — PREDEFINED plus
+    every app-registered interface, same source Crema Settings' assignments reconcile
+    to (interfaces.names())."""
     frappe.only_for("System Manager")
-    return list(interfaces.PREDEFINED)
+    return interfaces.names()
 
 
 @frappe.whitelist()

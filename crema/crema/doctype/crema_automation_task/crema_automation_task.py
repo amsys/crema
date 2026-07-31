@@ -14,5 +14,5 @@ class CremaAutomationTask(Document):
         if not croniter.is_valid(self.schedule or ""):
             frappe.throw(f"'{self.schedule}' is not a valid cron expression.")
 
-        if self.interface not in interfaces.PREDEFINED:
+        if self.interface not in interfaces.names():
             frappe.throw(f"'{self.interface}' is not a known crema interface.")

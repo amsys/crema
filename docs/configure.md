@@ -54,7 +54,7 @@ grid:
    account (`crema@<site>`, no password, `Crema User` role only) created for exactly
    this. Leave it unless you want a different low-privilege account for the default.
 
-Save. Every one of the 11 predefined interfaces now resolves through these three
+Save. Every one of the 12 predefined interfaces now resolves through these three
 values, including `security` — turning on `enable_llm_guard` anywhere no longer needs
 `security` configured with its own provider first.
 
@@ -115,6 +115,7 @@ otherwise a percentage: green under 80%, orange 80–99%, red at 100% or over. S
 | `isolation_user` | Link (User) | Not `Administrator`. Not a `System Manager`. Blank uses the Default Isolation User. An effective provider (this row's or the default's) always needs an effective isolation user (this row's or the default's). |
 | `monthly_budget_usd` | Currency | 0 (default) means "use the Default Monthly Budget"; 0 there too means unlimited. See [security.md](security.md#budgets). |
 | `temperature` | Float | 0 by default. |
+| `max_tokens` | Int | Caps the response length. 0 (default) leaves the provider's own default untouched. |
 | `cache_ttl` | Int | Seconds to cache a response. 0 turns caching off. |
 | `enable_prompt_scan` | Check | On by default. Layer 1 — the local scan. |
 | `enable_llm_guard` | Check | Off by default. Layer 2 — the LLM guard. Needs an effective `security` provider (its own row, or Default Provider). |
@@ -150,6 +151,7 @@ call, until the TTL expires.
 | `summarization` | Summarization | Concise, accurate summaries | `simple` |
 | `transform` | Transform | Propose a diff for an ERP document | `complex` |
 | `view` | View | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
+| `transcribe` | Transcribe | Speech-to-text via `crema.transcribe()` | none — a transcription call cannot fall back to a chat model |
 
 If an interface has no provider of its own, the system tries Crema Settings' Default
 Provider first. Only if that is also blank does it try the next interface in its
@@ -161,13 +163,50 @@ the prompt of the interface you actually asked for — `view`, `transform`, and
 `extraction` each expect strict JSON back, and the fallback's own prompt would
 produce plain text the caller cannot parse.
 
+An installed app can add its own interfaces too — see below. Those rows appear in the
+grid alongside the 12 above, same reconcile, same locked add/delete.
+
 ## How to add a new interface name
+
+**From another installed app (no crema edit):** add a `crema_interfaces` dict to that
+app's `hooks.py` — either inline:
+
+```python
+crema_interfaces = {
+    "my_app_ocr": {"prompt": "...", "fallback": "ocr"},
+}
+```
+
+or, if the prompt text lives in its own module, a dotted path string to the dict
+instead (resolved lazily via `frappe.get_attr` — the same convention Frappe's own
+`after_install`/scheduler hooks use, so that module is only imported the first time a
+caller actually asks something, not on every process boot):
+
+```python
+crema_interfaces = "my_app.llm.interfaces.INTERFACES"
+```
+
+`prompt` and `fallback` are required; every other key is a `Crema Model Assignment`
+fieldname (`enable_prompt_scan`, `output_trap`, `max_tokens`, ...) seeded onto the row
+the first time it's created — an admin can change any of it afterward in the desk. A
+name already in the 12 built-in interfaces is ignored, so an app can never redefine
+`security` or `ocr`. Run `bench migrate` (or restart) so the new row appears.
+
+**In crema itself**, for a new built-in interface that talks to a provider the same
+way `ask()` already does (a chat completion):
 
 1. Open `crema/interfaces.py`.
 2. Add the name to the `PREDEFINED` list.
 3. Add a default system prompt to `DEFAULT_PROMPTS`.
 4. If the interface should degrade to another one, add it to `FALLBACKS`.
 
-No other code change is needed.
+No other code change is needed for that shape. An interface calling a genuinely
+different provider endpoint — `transcribe` (`litellm.transcription`, not
+`litellm.completion`) is the precedent — additionally needs its own function next to
+`client._complete` and its own entry point in `crema/api.py` (see `transcribe()`),
+since it has no system prompt to run through `_resolve`'s usual chat-message path. It
+still skips `DEFAULT_PROMPTS` and usually `FALLBACKS` (a transcription call cannot
+fall back to a chat model, an OCR call cannot fall back to a transcription one — each
+non-chat interface's fallback chain, if any, stays within its own kind).
 
 Next step: [use.md](use.md).

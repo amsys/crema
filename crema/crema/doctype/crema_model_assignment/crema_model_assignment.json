@@ -15,6 +15,7 @@
   "isolation_user",
   "monthly_budget_usd",
   "temperature",
+  "max_tokens",
   "cache_ttl",
   "section_security",
   "enable_prompt_scan",
@@ -35,7 +36,7 @@
    "read_only": 1
   },
   {
-   "description": "The key passed to ask(\"<this>\", ...) etc. Set by Crema Settings.validate from interfaces.PREDEFINED — never typed by hand.",
+   "description": "The key passed to ask(\"<this>\", ...) etc. Set by Crema Settings.validate from interfaces.names() — never typed by hand.",
    "fieldname": "interface",
    "fieldtype": "Data",
    "label": "Interface Key",
@@ -44,7 +45,7 @@
   },
   {
    "columns": 2,
-   "description": "Blank uses Crema Settings' Default Provider; if that's blank too, this interface falls back per interfaces.FALLBACKS. An effective provider (this or the default) requires an effective isolation user (this row's or the default's) — see CremaSettings.validate.",
+   "description": "Blank uses Crema Settings' Default Provider; if that's blank too, this interface falls back per interfaces.fallback_for(). An effective provider (this or the default) requires an effective isolation user (this row's or the default's) — see CremaSettings.validate.",
    "fieldname": "provider",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -92,6 +93,13 @@
    "fieldname": "temperature",
    "fieldtype": "Float",
    "label": "Temperature"
+  },
+  {
+   "default": "0",
+   "description": "Caps the response length passed to the provider. 0 = provider default (unset).",
+   "fieldname": "max_tokens",
+   "fieldtype": "Int",
+   "label": "Max Tokens"
   },
   {
    "default": "0",
@@ -144,7 +152,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-29 00:00:00.000000",
+ "modified": "2026-07-31 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Model Assignment",

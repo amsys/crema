@@ -10,6 +10,38 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
 - `extract()` now proposes several records from one file, not just one — the model
   decides how many records a document holds; a caller no longer ticks a checkbox up
   front to say so.
+- App-registered interfaces: any installed app can add a new interface name via the
+  `crema_interfaces` hooks.py key (`{name: {"prompt", "fallback", ...}}`, or a dotted
+  path string to one — the same lazy-resolution convention Frappe's own hooks already
+  use for `after_install`/scheduler jobs, so the app's own prompt module is only
+  imported on first use, not at every process boot), read by `interfaces.names()` /
+  `interfaces.app_interfaces()` and reconciled onto Crema Settings by
+  `CremaSettings._reconcile_assignments` exactly like `PREDEFINED` always was. An app
+  names a prompt and a fallback — never a model, provider, or key; those stay
+  admin-owned in the desk, same as every core interface.
+- `ask(files=[...])` now also accepts `(bytes, mime)` tuples alongside Frappe File
+  URLs — for vision content a caller already holds and has permission-checked itself
+  (a bot photo with no Frappe File behind it, for example), not just a File on disk.
+- A per-interface `Max Tokens` field on `Crema Model Assignment`, carried into
+  `client._complete`'s `max_tokens` kwarg when set (0, the default, leaves the
+  provider's own default untouched).
+- `ask(..., history=[...])` lets a caller pass prior `{"role", "content"}` turns,
+  inserted between the interface's system prompt and the current call's user turn —
+  `security.scan` covers the whole joined history, not just the latest turn. See the
+  closing line below for what this does and doesn't mean for the chatbot non-goal.
+- A `transcribe` interface next to `ocr()`: `crema.transcribe(file, language=...)`
+  calls `litellm.transcription` the same way `_complete` calls `litellm.completion` —
+  no system prompt, no fallback (a transcription call cannot fall back to a chat
+  model), still budget-checked and logged to Crema Log. Closes the gap the "Model and
+  provider plumbing" section used to describe: a consuming app that also needs
+  speech-to-text no longer has to read `Crema Provider` directly for its key.
+- `crema.health(interface, live=True)` / `crema.is_configured(interface)`: a
+  below-System-Manager status check. Deliberately not `@frappe.whitelist()`'d and
+  applies no role check of its own — the consuming app's dashboard/health-check button
+  applies whatever gate it needs, then calls in-process. Reports provider, model, live
+  reachability (now split from "ok" — see `client.check_connection`'s new `reachable`
+  key, so a down endpoint reads differently from a rejected key), and month-to-date
+  spend/budget. Never returns or logs an `api_key`.
 
 #### Desk experience
 
@@ -47,6 +79,14 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   private-IP/loopback block. Accepted risk today because `source_url` is only
   settable by a System Manager, but a deny-list (or an allow-listed egress proxy)
   would close it properly.
+- Per-app scan patterns — the `security._INJECTION_PATTERNS` mirror of the
+  `crema_interfaces` hook. `scan()` must stay frappe-free (no hooks lookup inside it),
+  so this belongs one level up: a caller-side merge that widens what gets passed to
+  `scan()`, the same shape `_scan_context` already uses for `history`.
+- An output-side content filter hook. `log.redact` only scrubs a provider's own
+  `api_key` out of error text, never the model's reply; a consuming app that needs a
+  PII/secret-term filter on every response runs its own regex layer today because
+  crema has no equivalent.
 
 - **Layer 1 evasion resistance.** `security.scan` is ordered-list, first-match-wins
   regex over ~20 literal English phrasings, run once after NFKC normalization. It
@@ -98,4 +138,7 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
      semantic paraphrase is layer 2's job. Trading layer 1 false positives for recall
      layer 2 already provides would be a bad trade, not a hardening win.
 
-Explicitly, and permanently, out of scope: turning `crema` into a chatbot.
+Explicitly, and permanently, out of scope: turning `crema` into a chatbot — a chat
+*surface* with its own session store, turn management, or UI. `ask(..., history=...)`
+lets a caller hand crema its own transcript for one call; crema still owns exactly one
+system prompt per interface and persists no conversation of its own.

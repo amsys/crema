@@ -311,7 +311,7 @@ class UnitTestCremaAppInterfaces(UnitTestCase):
 
     def test_names_appends_app_names_after_predefined(self):
         with patch("crema.interfaces.app_interfaces", return_value=self._FAKE):
-            self.assertEqual(interfaces.names(), interfaces.PREDEFINED + ["_test_app_iface"])
+            self.assertEqual(interfaces.names(), [*interfaces.PREDEFINED, "_test_app_iface"])
 
     def test_prompt_for_and_fallback_for_read_app_config(self):
         with patch("crema.interfaces.app_interfaces", return_value=self._FAKE):
@@ -956,7 +956,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             status = check_provider(TEST_PROVIDER)
         self.assertEqual(status, {"ok": True, "reachable": True, "detail": "1 models"})
 
-    # --- get_interfaces is System-Manager-only, returns PREDEFINED --------------
+    # --- get_interfaces is System-Manager-only, returns interfaces.names() ------
 
     def test_get_interfaces_returns_the_full_interface_name_set(self):
         """PREDEFINED plus every app-registered interface (interfaces.names()) — the

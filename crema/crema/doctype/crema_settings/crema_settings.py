@@ -2,7 +2,8 @@
 doctype and the old 'Crema Settings' Page.
 
 Owns the cross-row rules the child doctype (Crema Model Assignment) can't see on its
-own: the fixed PREDEFINED row set, the 'security' recursion guard, and the
+own: the interfaces.names() row set (core PREDEFINED + app-registered), the 'security'
+recursion guard, and the
 llm-guard-requires-a-configured-security-interface check.
 """
 

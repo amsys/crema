@@ -214,6 +214,33 @@ context("Crema desk UI", () => {
 		cy.location("search").should("contain", encodeURIComponent('["like","t%"]'));
 	});
 
+	it("clears the previous prompt's filters when the next spec has none", () => {
+		// The fast path used to only touch filter_area when the spec had a filter to set
+		// (mirroring list_view.js's own before_refresh() guard), so "show me everything"
+		// silently answered the *previous* question against a still-filtered list.
+		const ask = (result) =>
+			cy.intercept("POST", "/api/method/crema.api.ask_api", {
+				statusCode: 200,
+				body: { message: { result: JSON.stringify(result) } },
+			}).as("ask");
+		const prompt = (text) => {
+			cy.get("[data-crema]").click();
+			cy.get(".modal").within(() => {
+				cy.get(".frappe-control[data-fieldname=instruction] textarea").type(text);
+				cy.get(".btn-modal-primary").click();
+			});
+			cy.wait("@ask");
+		};
+
+		ask({ view: "List", filters: { description: ["like", "t%"] }, reason: "todos starting with t" });
+		prompt("todos starting with t");
+		cy.location("search").should("contain", "description");
+
+		ask({ view: "List", reason: "everything" });
+		prompt("show me everything");
+		cy.location("search").should("not.contain", "description");
+	});
+
 	it("drops a group_by with an invented aggregate fieldname", () => {
 		cy.intercept("POST", "/api/method/crema.api.ask_api", {
 			statusCode: 200,
@@ -471,13 +498,17 @@ context("Crema Settings", () => {
 		cy.visit("/app/crema-settings");
 	});
 
-	// interfaces.PREDEFINED has 11 names — the Model Assignments grid always shows
-	// exactly that many rows, seeded at install/migrate, none addable or removable
-	// (CremaSettings.js sets grid.cannot_add_rows / cannot_delete_rows).
-	const PREDEFINED_COUNT = 11;
-
-	it("shows the full, fixed set of model assignment rows with no add/delete affordance", () => {
-		cy.get('[data-fieldname="assignments"] .grid-row').should("have.length", PREDEFINED_COUNT);
+	// The Model Assignments grid always shows exactly one row per interfaces.names()
+	// (core PREDEFINED + whatever installed apps register via the crema_interfaces
+	// hook), seeded at install/migrate, none addable or removable (crema_settings.js
+	// sets grid.df.cannot_add_rows / cannot_delete_rows). Counted live rather than
+	// hardcoded, since the app-registered half varies per site.
+	it("shows the full set of model assignment rows with no add/delete affordance", () => {
+		cy.window()
+			.then((win) => win.frappe.xcall("crema.api.get_interfaces"))
+			.then((names) => {
+				cy.get('[data-fieldname="assignments"] .grid-row').should("have.length", names.length);
+			});
 		cy.get('[data-fieldname="assignments"]').within(() => {
 			cy.get("button, a").contains(/add row|delete/i).should("not.exist");
 		});

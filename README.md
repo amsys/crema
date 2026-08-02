@@ -123,7 +123,6 @@ monthly budget, or any other failure surfaces as a message — never a silent no
 | Python 3.14 | |
 | [`litellm`](https://github.com/BerriAI/litellm) | the provider call layer |
 | [`pymupdf`](https://github.com/pymupdf/PyMuPDF) | PDF text extraction and rendering |
-| [`regex`](https://github.com/mrabarnett/mrab-regex) | unicode property classes for the prompt scan |
 | [`ftfy`](https://github.com/rspeer/python-ftfy) | repairs damaged text before the prompt scan |
 | [`anyascii`](https://github.com/anyascii/anyascii) | folds look-alike letters to ASCII for the prompt scan |
 | `croniter` | validates automation schedules — ships with Frappe itself |

@@ -30,11 +30,12 @@
    "fieldname": "interface",
    "fieldtype": "Data",
    "in_standard_filter": 1,
-   "label": "Interface",
-   "read_only": 1
+   "label": "Use Case",
+   "read_only": 1,
+   "description": "Which use case made this request."
   },
   {
-   "description": "Real session user — not the interface's isolation user.",
+   "description": "The person who made the request — not the account Crema acted as.",
    "fieldname": "user",
    "fieldtype": "Data",
    "in_list_view": 1,
@@ -52,10 +53,11 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Success\nCached\nBlocked\nError",
-   "read_only": 1
+   "read_only": 1,
+   "description": "Success — answered by the AI. Cached — answered from a saved earlier reply, at no cost. Blocked — stopped by a safety check or a spending limit. Error — the request failed."
   },
   {
-   "description": "Block reason or error class — never the prompt content.",
+   "description": "Why it was blocked, or what went wrong. Never contains the text that was sent.",
    "fieldname": "detail",
    "fieldtype": "Small Text",
    "label": "Detail",
@@ -64,20 +66,21 @@
   {
    "fieldname": "section_usage",
    "fieldtype": "Section Break",
-   "label": "Usage"
+   "label": "Cost"
   },
   {
    "fieldname": "total_tokens",
    "fieldtype": "Int",
    "label": "Total Tokens",
-   "read_only": 1
+   "read_only": 1,
+   "description": "How much text was handled, counted the way AI services bill it."
   },
   {
    "fieldname": "column_break_usage",
    "fieldtype": "Column Break"
   },
   {
-   "description": "From litellm's response_cost. 0 if the provider/model isn't in litellm's cost map.",
+   "description": "What this request cost. 0 if the price of this model is not known.",
    "fieldname": "cost_usd",
    "fieldtype": "Currency",
    "in_list_view": 1,
@@ -90,7 +93,7 @@
    "collapsible_depends_on": "eval:doc.llm_calls > 1 || ['Blocked', 'Error'].includes(doc.status)",
    "fieldname": "section_diag",
    "fieldtype": "Section Break",
-   "label": "Diagnostics"
+   "label": "Details"
   },
   {
    "fieldname": "model",
@@ -99,17 +102,17 @@
    "read_only": 1
   },
   {
-   "description": "Effective provider at call time. Data, not a Link — deleting a Crema Provider must never be blocked by its old log rows. Blank on rows written before this field existed.",
+   "description": "Which AI service answered. Kept as plain text, so deleting a service never removes its history.",
    "fieldname": "provider",
    "fieldtype": "Data",
    "label": "Provider",
    "read_only": 1
   },
   {
-   "description": "sha256 of the prompt — for correlation only, never the prompt itself.",
+   "description": "A one-way fingerprint of the text sent, so identical requests can be matched up. The text itself is never stored.",
    "fieldname": "prompt_sha",
    "fieldtype": "Data",
-   "label": "Prompt SHA",
+   "label": "Prompt Fingerprint",
    "read_only": 1
   },
   {
@@ -119,26 +122,26 @@
   {
    "fieldname": "duration_ms",
    "fieldtype": "Int",
-   "label": "Duration (ms)",
+   "label": "Time Taken (ms)",
    "read_only": 1
   },
   {
-   "description": "Provider calls billed for this row. Usually 1 — an escalated OCR call bills 2 (base + advanced_ocr) under one row.",
+   "description": "How many calls to the AI service this entry was billed for. Usually 1 — an OCR request that needed a second, stronger attempt bills 2.",
    "fieldname": "llm_calls",
    "fieldtype": "Int",
-   "label": "LLM Calls",
+   "label": "Provider Calls",
    "read_only": 1
   },
   {
    "fieldname": "prompt_tokens",
    "fieldtype": "Int",
-   "label": "Prompt Tokens",
+   "label": "Sent Tokens",
    "read_only": 1
   },
   {
    "fieldname": "completion_tokens",
    "fieldtype": "Int",
-   "label": "Completion Tokens",
+   "label": "Received Tokens",
    "read_only": 1
   }
  ],

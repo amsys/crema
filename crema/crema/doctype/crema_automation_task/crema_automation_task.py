@@ -65,15 +65,59 @@ class CremaAutomationTask(Document):
 
         self._warn_unreadable_source()
 
-    def onload(self) -> None:
-        """Next scheduled run, for the form's status panel. Computed here rather than
-        through a whitelisted endpoint — croniter is server-side, the value is read-only,
-        and the form already loads the document."""
-        if self.trigger == "Document Event" or not croniter.is_valid(self.schedule or ""):
-            return
-        self.set_onload(
-            "next_run", croniter(self.schedule, self.last_run or now_datetime()).get_next(datetime)
-        )
+    # -- virtual fields -----------------------------------------------------------
+    #
+    # Read-only views onto data the form used to render as a hand-built HTML blob. Each
+    # one backs an `is_virtual` field in the doctype JSON, so frappe reads it through the
+    # property and never creates a column or stores a row — `plan_json` stays the single
+    # source of truth for `automation.py`.
+    #
+    # These run on every document load, including list views. A property that raises
+    # would break the load itself, so all of them swallow bad input and return an empty
+    # value instead: a stored plan is model-authored and an old one may not match the
+    # shape the current code expects.
+
+    @property
+    def next_run(self) -> datetime | None:
+        if not self.enabled or self.trigger == "Document Event":
+            return None
+        if not croniter.is_valid(self.schedule or ""):
+            return None
+        return croniter(self.schedule, self.last_run or now_datetime()).get_next(datetime)
+
+    @property
+    def plan_target_doctype(self) -> str | None:
+        return self._plan_map().get("doctype")
+
+    @property
+    def plan_match_fields(self) -> str | None:
+        fields = self._plan_map().get("match_fields")
+        return ", ".join(fields) if isinstance(fields, list) else None
+
+    @property
+    def plan_field_map(self) -> list[dict[str, str]]:
+        field_map = self._plan_map().get("field_map")
+        if not isinstance(field_map, dict):
+            return []
+        return [{"source_key": str(k), "target_field": str(v)} for k, v in field_map.items()]
+
+    @property
+    def plan_prompt(self) -> str | None:
+        extract = self._plan().get("extract")
+        return extract.get("prompt") if isinstance(extract, dict) else None
+
+    def _plan(self) -> dict:
+        if not self.plan_json:
+            return {}
+        try:
+            plan = frappe.parse_json(self.plan_json)
+        except Exception:
+            return {}
+        return plan if isinstance(plan, dict) else {}
+
+    def _plan_map(self) -> dict:
+        plan_map = self._plan().get("map")
+        return plan_map if isinstance(plan_map, dict) else {}
 
     def on_update(self) -> None:
         self._clear_event_cache()

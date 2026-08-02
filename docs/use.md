@@ -5,7 +5,7 @@ This page covers the calls a developer makes: from Python, or over HTTP.
 ## `ask` — call an interface
 
 ```python
-def ask(interface_or_prompt: str, prompt: str | None = None, *, context: str | None = None,
+def ask(interface: str, prompt: str | None = None, *, context: str | None = None,
         files: list[str | tuple[bytes, str]] | None = None, response_format: dict | None = None,
         cache_ttl: int | None = None, history: list[dict] | None = None) -> str
 ```
@@ -16,8 +16,12 @@ Send `prompt` to the named `interface`. The call returns the model's text respon
   because an attack can split across the two fields.
 - `files` is a list of File URLs, or `(bytes, mime)` pairs for content you already hold
   in memory and have permission-checked yourself (a bot photo with no File behind it,
-  for example). The system sends readable files as vision input, checking permission
-  on each File URL first; a `(bytes, mime)` pair is used as-is.
+  for example). For each File URL, the system checks read permission as the
+  interface's isolation user, then attaches the file: an image goes as vision input,
+  a scanned PDF goes as rendered page images, and a text PDF goes as its extracted
+  text. The system silently skips a File it cannot read, and any type that is not a
+  PDF or an image — the call still runs, without that file. The system uses a
+  `(bytes, mime)` pair as-is.
 - `response_format` requests a structured reply, for example
   `{"type": "json_object"}`.
 - `cache_ttl` overrides the interface's cache setting for this one call.
@@ -43,8 +47,10 @@ way: `ask.translation(...)`, `ask.complex(...)`, and so on.
 def ask_json(interface: str, prompt: str, **kw) -> dict
 ```
 
-Same as `ask`, and also parses the reply as JSON. Use this when the interface's
-prompt asks for a JSON object.
+Same as `ask`, and also parses the reply as JSON. Unless you pass your own
+`response_format`, it asks the provider for a JSON object
+(`response_format={"type": "json_object"}`). Use this when the interface's prompt
+asks for a JSON object.
 
 ## `ocr` — read text from a file
 
@@ -55,11 +61,14 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict
 
 Read `file` — a File URL or raw bytes. `file` may be an image, a scanned PDF, or a
 text PDF. The system picks the right method for each case. If the `ocr` interface
-reports low confidence, the system retries once with `advanced_ocr`; `escalated`
-tells you if this happened. The retry does not run when `advanced_ocr`'s monthly
-budget is already spent — the first attempt's text is returned instead. Use
-`instruction` to state layout hints, for example "the invoice number sits in the
-top-right box".
+reports low confidence, the system retries once with `advanced_ocr`. `escalated`
+tells you the retry ran; the call returns whichever attempt reports the higher
+confidence, so `escalated: true` can come back with the first attempt's text. The
+system skips the retry in three cases: `advanced_ocr` does not resolve to a
+provider, `advanced_ocr` resolves to the same provider and model as `ocr` (the
+fast-path default — see [configure.md](configure.md#procedure-b--set-the-defaults-the-fast-path)),
+or `advanced_ocr`'s monthly budget is already spent. Use `instruction` to state
+layout hints, for example "the invoice number sits in the top-right box".
 
 ## `transform` — propose a change to an existing document
 
@@ -79,7 +88,7 @@ doc.update({**result["set"], **result["child_set"]})
 doc.save()
 ```
 
-## `extract` — smart import from a file
+## `extract` — propose records from a file
 
 ```python
 def extract(doctype: str, file: str | bytes, instruction: str | None = None) -> dict
@@ -90,10 +99,12 @@ def extract(doctype: str, file: str | bytes, instruction: str | None = None) -> 
 Read `file` with `ocr()`, and propose field values for one or more **new** `doctype`
 documents. How many records the file holds — one, or several — is the model's own
 call, not yours: a file describing a single thing always comes back as a one-element
-`records` list. This call checks that you may create a `doctype` document before it
-spends any LLM call. It never writes a document. `instruction` reaches both the OCR
-pass and the field-mapping pass — use it for layout hints on a recurring document
-layout. `confidence` comes from the OCR pass; check it before you trust any record.
+`records` list. Before it spends any LLM call, this call checks create permission on
+`doctype` — as the `extraction` interface's isolation user, inside the sandbox (see
+[security.md](security.md#the-sandbox)). It never writes a document. `instruction`
+reaches both the OCR pass and the field-mapping pass — use it for layout hints on a
+recurring document layout. `confidence` comes from the OCR pass; check it before you
+trust any record.
 
 Apply each record the same way as `transform`:
 
@@ -114,12 +125,13 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict
 
 Transcribe `file` — a File URL or raw audio bytes — with the `transcribe` interface's
 configured model. `language` is an optional ISO-639-1 hint (`"en"`, `"fr"`, ...); the
-provider still auto-detects if omitted. There is no system prompt for this interface,
-so the prompt-scan and LLM-guard security layers don't run — there is no user-supplied
-text to scan before the provider call happens. Still budget-checked and logged to
-Crema Log, same as every other interface, and has no fallback: a transcription call
-that can't resolve raises `CremaConfigError` rather than silently landing on a chat
-model.
+provider still auto-detects when you omit it. This interface has no system prompt,
+so the scan and the guard do not run — there is no user-supplied text to scan before
+the provider call happens — and the output trap does not run either, because there
+is no system prompt to protect (see [security.md](security.md)). The system still
+checks the budget and logs every call to Crema Log. The interface has no fallback: a
+transcription call that cannot resolve raises `CremaConfigError` instead of silently
+landing on a chat model.
 
 ## `health` / `is_configured` — a below-System-Manager status check
 
@@ -140,18 +152,20 @@ gate your own surface needs (`frappe.only_for(("Fleet Manager", "System Manager"
 for example), the same way you'd call `ask`/`ocr`/`transcribe`. Never returns or logs
 an `api_key`.
 
-`health()` resolves `interface` (following the same fallback walk `ask()` does — if it
-falls back, `provider`/`model`/`spend`/`budget` describe the interface that actually
-resolved and would be billed, not the one you asked for) and, unless `live=False`,
-makes one live connectivity check against that interface's provider. `configured=False`
-means the interface can't be resolved to a usable provider at all — `ok`/`reachable`
-are `None` in that case, since there's no provider to check. `is_configured()` is the
-cheap, no-network shortcut: `health(interface, live=False)["configured"]`.
+`health()` resolves `interface` with the same fallback walk `ask()` uses. If the
+interface falls back, `provider`/`model`/`spend`/`budget` describe the interface
+that actually resolved and would be billed, not the one you asked for. Unless
+`live=False`, the call makes one live connectivity check against that interface's
+provider. `configured=False` means the interface does not resolve to a usable
+provider at all; `ok` and `reachable` are `None` in that case, because there is no
+provider to check. `is_configured()` is the cheap, no-network shortcut:
+`health(interface, live=False)["configured"]`.
 
 ## HTTP endpoints
 
-Three endpoints expose `ask`, `extract`, and `transform` over HTTP. All three need
-the `System Manager` role or the `Crema User` role.
+Three call endpoints expose `ask`, `extract`, and `transform` over HTTP. All three
+need the `System Manager` role or the `Crema User` role. A set of System-Manager
+utility endpoints sits beside them — see the table further down.
 
 ### `POST /api/method/crema.api.ask_api`
 
@@ -188,16 +202,30 @@ extracts — and stops before any write. Backs the **Dry Run** button; see
 |---|---|---|
 | `task` | yes | The Crema Automation Task name. |
 
-Returns `{action, used_stored_plan, plan, rows, row_count, note}`, or
-`{action: "Report Only", report}`. Limited to 20 calls per hour per client IP, and
-uses the same 417 error shape as the endpoints above.
+Returns `{action, used_stored_plan, plan, rows, row_count, note, allowed_names}`,
+with `rows` capped at the first 20 — or `{action: "Report Only", report}`, or
+`{action, row_count, note}` when the source yields nothing. Limited to 20 calls per
+hour per client IP, and uses the same 417 error shape as the endpoints above.
+
+### Utility endpoints
+
+All System Manager only, all `POST /api/method/<name>`:
+
+| Endpoint | Purpose |
+|---|---|
+| `crema.api.get_interfaces` | The full interface name list. Feeds the Interface field on Crema Automation Task. |
+| `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
+| `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers panel's Connection badge. |
+| `crema.api.get_usage` | Month-to-date spend and budget per interface and per provider. Feeds the Usage column. |
+| `crema.api.run_automation_now` | Enqueue one automation task run. Backs the Run Now button — see [automation.md](automation.md). |
 
 ### Rate limits
 
-Two limits apply to the three endpoints above together: 60 calls per hour per client
-IP, and 60 calls per hour per session user. A user's budget is shared across all three.
-These limits do not apply to a Python caller running in-process (bench console, a
-background job).
+Two limits guard the three call endpoints. Each endpoint allows 60 calls per hour
+per client IP; the buckets are separate per endpoint, so one IP can spend at most
+180 calls per hour across the three. Each session user gets one shared bucket of 60
+calls per hour across all three together. These limits do not apply to a Python
+caller running in-process (bench console, a background job).
 
 ### Errors
 
@@ -213,13 +241,12 @@ same body shape:
 returns `blocked: false` with a `reason` explaining what happened. Read `blocked`, not
 the status code, to tell a security block apart from a budget/configuration stop.
 
-A Python caller sees these as three distinct exception types: `CremaBlockedError`
-(the security scan or guard blocked the prompt), `CremaConfigError` (the interface
-can't be resolved to a usable provider), and `CremaBudgetError` (the interface's
-`monthly_budget_usd` is already spent this month — see
-[security.md](security.md#budgets)). All three are `frappe.ValidationError`
-subclasses and all three get the structured `{"blocked": bool, "reason": ...}` body
-above over HTTP.
+A Python caller sees these as three distinct exception types. `CremaBlockedError`:
+the scan or the guard blocked the prompt. `CremaConfigError`: the interface does not
+resolve to a usable provider. `CremaBudgetError`: the interface's monthly budget is
+already spent this month — see [security.md](security.md#budgets). All three are
+`frappe.ValidationError` subclasses, and over HTTP all three get the structured
+`{"blocked": bool, "reason": ...}` body above.
 
 ## Desk UI
 
@@ -241,10 +268,10 @@ can't, the dialog offers the request field alone.
   request can also set the sort order ("sorted by name descending"), limit the row
   count ("show me the top 10"), and group by a field — all applied to the same view.
   If you name no field, the system prefers one already shown as a column in the
-  current list. Two things a request cannot do: match text case-sensitively (matching
-  is always case-insensitive), and combine two different fields with OR — every
-  filter you ask for is combined with AND, so "starting with A or B" filters on
-  neither, and the alert says so instead of guessing.
+  current list. A request cannot do two things. It cannot match text
+  case-sensitively — matching is always case-insensitive. And it cannot combine two
+  different fields with OR: the system combines every filter with AND, so "starting
+  with A or B" filters on neither field, and the alert says so instead of guessing.
 
   If the filtered view finds no records, the system does one more database query. It
   looks for the same words in every text field you can read, then applies the one
@@ -257,37 +284,37 @@ can't, the dialog offers the request field alone.
   record(s), the model's reason, and the OCR confidence. How many records the document
   holds is the model's own call, not a checkbox you tick up front:
   - **Nothing found** — the document held no records the system could map to
-    `doctype`. Nothing is created.
+    `doctype`. The system creates nothing.
   - **One record** — click **Create Document** to open a new, unsaved form with its
-    fields filled in, including child table rows. Nothing is written until you save it
-    yourself.
+    fields filled in, including child table rows. The system writes nothing until
+    you save the form yourself.
   - **Several records** — click **Import N Documents** to hand the records to a
     prefilled **Data Import**, which has its own preview step before it writes
     anything. This needs the `System Manager` role, same as Data Import always has.
 
 ### The search bar
 
-You can also skip the dialog entirely: with a list view open, type a prompt into the
-awesomebar (top of Desk). This needs the same role as the robot button, and only
-appears while a list view is open and your text doesn't start with `#` (the
-awesomebar's own prefix for jumping to a doctype). An `Ask <your prompt>` option
-appears directly under the built-in `Search for <your prompt>` entry — click it to run
-the same request the dialog's **Go** button would, and switch the view immediately,
-with no dialog.
+Skip the dialog entirely: open a list view, then type a prompt into the search bar
+at the top of Desk (Frappe's awesomebar). This needs the same role as the robot
+button. The option only appears while a list view is open and your text does not
+start with `#` (the search bar's own prefix for jumping to a doctype). An
+`Ask <your prompt>` option appears directly under the built-in
+`Search for <your prompt>` entry — click it to run the same request the dialog's
+**Go** button would, and switch the view immediately, with no dialog.
 
 ### Form view
 
 Open any document you may edit. A robot button sits in the same icon group as the
 reload button. It opens a dialog: type what should change, and the system proposes a
 diff for the open document (`transform_api`). Click **Apply** to fill the proposed
-values into the form — the form is left dirty and unsaved, exactly like the list
+values into the form — the form stays dirty and unsaved, exactly like the list
 view's extract preview; save it yourself.
 
 ### When a prompt is blocked, or a request fails
 
 A prompt the scan or the guard refuses — whether typed into a dialog, the search bar,
 or a document dropped for extraction — comes back as a red **Blocked** message giving
-the reason. Nothing was sent to the provider. The Crema Log still records the call,
+the reason. The system sent nothing to the provider. The Crema Log still records the call,
 with status `Blocked`, so the block rate stays visible. See
 [security.md](security.md) for what the scan and the guard check.
 
@@ -321,6 +348,8 @@ Settings.
 
 ## Caching a response
 
-Set `cache_ttl` on the interface to cache every call to it for that many seconds. Set
-the `cache_ttl` argument on one call to override the interface setting for that call
-only. A `cache_ttl` of 0 turns caching off.
+Set `cache_ttl` on the interface to cache every `ask`/`ask_json` call to it for that
+many seconds. Set the `cache_ttl` argument on one call to override the interface
+setting for that call only. A `cache_ttl` of 0 turns caching off. The cache covers
+`ask`/`ask_json` (and everything built on them) only — `ocr`, `advanced_ocr`, and
+`transcribe` never read it.

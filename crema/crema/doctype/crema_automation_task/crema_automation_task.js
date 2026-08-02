@@ -4,10 +4,11 @@
 // crema_show_error and crema_diff_table are defined once in crema.bundle.js
 // (app_include_js, so they're already on window by the time this form script runs).
 //
-// Everything below is presentation. The form shows three things the raw doctype cannot:
-// what the task will do NEXT (a status panel), what plan it wrote for itself (a field-map
-// table instead of a JSON blob), and what it WOULD do if it ran now (Dry Run — the
-// affordance that makes it safe to schedule something that writes).
+// The run status and the stored plan are ordinary doctype fields — the "Last Run" section
+// and the virtual plan_* fields declared in the JSON, filled server-side by properties on
+// CremaAutomationTask. This file only adds what a field cannot express: the header
+// indicator, the failure warning, the source-filter picker, and Dry Run (the affordance
+// that makes it safe to schedule something that writes).
 
 const CREMA_STATUS_COLORS = {
 	Success: "green",
@@ -15,100 +16,25 @@ const CREMA_STATUS_COLORS = {
 	Failed: "red",
 };
 
-function crema_pill(label, color) {
-	return `<span class="indicator-pill ${color}">${frappe.utils.escape_html(label)}</span>`;
-}
-
-function crema_panel_row(label, value) {
-	return `<div class="mb-1"><span class="text-muted">${frappe.utils.escape_html(
-		label
-	)}:</span> ${value}</div>`;
-}
-
-// The stored plan, readable. plan_json stays in its own collapsed section as the escape
-// hatch; this is what an operator actually needs to see. Every value here is
-// model-authored text going into an HTML field, so all of it is escaped.
-function crema_plan_html(frm) {
-	if (!frm.doc.plan_json) {
-		return `<div class="text-muted mt-3">${__(
-			"No plan yet — it is written on the first run."
-		)}</div>`;
-	}
-	let plan;
-	try {
-		plan = JSON.parse(frm.doc.plan_json);
-	} catch (e) {
-		return `<div class="text-muted mt-3">${__(
-			"The stored plan is not readable; it will be rewritten on the next run."
-		)}</div>`;
-	}
-	const map = (plan && plan.map) || {};
-	const prompt = ((plan && plan.extract) || {}).prompt || "";
-	return `
-		<div class="mt-3"><b>${__("Plan")}</b></div>
-		${crema_panel_row(__("Writes to"), frappe.utils.escape_html(map.doctype || "—"))}
-		${crema_panel_row(__("Matches on"), frappe.utils.escape_html((map.match_fields || []).join(", ")))}
-		${crema_diff_table({ set: map.field_map || {} })}
-		<div class="text-muted small">${__("Extraction prompt")}</div>
-		<pre class="small" style="white-space:pre-wrap">${frappe.utils.escape_html(prompt)}</pre>`;
-}
-
 function crema_render_status(frm) {
-	const field = frm.get_field("status_html");
-	if (!field) return;
-	const wrapper = field.$wrapper.empty();
 	if (frm.is_new()) return;
 
-	const status = frm.doc.last_status;
-	const parts = [crema_pill(status || __("Never run"), CREMA_STATUS_COLORS[status] || "gray")];
+	frm.page.set_indicator(
+		__(frm.doc.last_status || "Never run"),
+		CREMA_STATUS_COLORS[frm.doc.last_status] || "gray"
+	);
 
-	if (frm.doc.trigger === "Document Event") {
-		parts.push(
-			crema_panel_row(
-				__("Runs on"),
-				frappe.utils.escape_html(
-					`${frm.doc.source_doctype || "—"} · ${frm.doc.event || "—"}`
-				)
-			)
-		);
-	} else {
-		const next = frm.doc.__onload && frm.doc.__onload.next_run;
-		parts.push(
-			crema_panel_row(
-				__("Next run"),
-				frm.doc.enabled && next
-					? frappe.datetime.str_to_user(next)
-					: `<span class="text-muted">${__("not scheduled — the task is disabled")}</span>`
-			)
-		);
-	}
-
-	if (frm.doc.last_run) {
-		parts.push(crema_panel_row(__("Last run"), frappe.datetime.str_to_user(frm.doc.last_run)));
-	}
-	if (frm.doc.last_result) {
-		parts.push(crema_panel_row(__("Result"), frappe.utils.escape_html(frm.doc.last_result)));
-	}
-	if (frm.doc.last_error) {
-		parts.push(
-			`<div class="text-danger mt-2" style="white-space:pre-wrap">${frappe.utils.escape_html(
-				frm.doc.last_error
-			)}</div>`
-		);
-	}
 	// The auto-disable at 5 is otherwise completely silent — the only signal is the
-	// Enabled checkbox clearing itself.
-	if (frm.doc.consecutive_failures >= 3) {
-		parts.push(
-			`<div class="text-danger mt-2"><b>${__(
-				"{0} consecutive failures. This task disables itself at 5.",
-				[frm.doc.consecutive_failures]
-			)}</b></div>`
-		);
-	}
-
-	parts.push(crema_plan_html(frm));
-	$(`<div>${parts.join("")}</div>`).appendTo(wrapper);
+	// Enabled checkbox clearing itself. Set unconditionally: an empty message clears the
+	// banner, so a task that recovers doesn't keep a stale warning on the next refresh.
+	frm.dashboard.set_headline_alert(
+		frm.doc.consecutive_failures >= 3
+			? __("{0} runs failed in a row. This task turns itself off at 5.", [
+					frm.doc.consecutive_failures,
+				])
+			: "",
+		"red"
+	);
 }
 
 function crema_dry_run(frm) {

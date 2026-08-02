@@ -1,7 +1,7 @@
 {
  "app": "crema",
  "charts": [],
- "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"LLM interface and security layer. Start in Crema Settings to configure providers and model assignments.\",\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Crema Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Crema Cost (USD)\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Crema Blocked\",\"col\":4}},{\"id\":\"crema-config-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Configuration\",\"col\":6}},{\"id\":\"crema-monitor-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Monitoring\",\"col\":6}}]",
+ "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"Crema connects this site to an AI service, with safety checks and a spending limit on every request. Start in Settings to add a service and set your defaults.\",\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Spend\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Blocked\",\"col\":4}},{\"id\":\"crema-config-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Configuration\",\"col\":6}},{\"id\":\"crema-monitor-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Monitoring\",\"col\":6}}]",
  "creation": "2026-07-28 00:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -16,7 +16,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Configuration",
+   "label": "Setup",
    "link_count": 3,
    "link_type": "DocType",
    "onboard": 0,
@@ -25,7 +25,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Crema Settings",
+   "label": "Settings",
    "link_count": 0,
    "link_to": "Crema Settings",
    "link_type": "DocType",
@@ -35,7 +35,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Crema Provider",
+   "label": "Providers",
    "link_count": 0,
    "link_to": "Crema Provider",
    "link_type": "DocType",
@@ -45,7 +45,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Crema Automation Task",
+   "label": "Automations",
    "link_count": 0,
    "link_to": "Crema Automation Task",
    "link_type": "DocType",
@@ -55,7 +55,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Monitoring",
+   "label": "Activity",
    "link_count": 2,
    "link_type": "DocType",
    "onboard": 0,
@@ -64,7 +64,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Crema Log",
+   "label": "Call Log",
    "link_count": 0,
    "link_to": "Crema Log",
    "link_type": "DocType",
@@ -74,7 +74,7 @@
   {
    "hidden": 0,
    "is_query_report": 1,
-   "label": "Crema Usage",
+   "label": "Usage & Cost",
    "link_count": 0,
    "link_to": "Crema Usage",
    "link_type": "Report",
@@ -82,22 +82,22 @@
    "type": "Link"
   }
  ],
- "modified": "2026-07-29 00:00:00.000000",
+ "modified": "2026-08-03 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema",
  "number_cards": [
   {
-   "label": "Crema Calls",
-   "number_card_name": "Crema Calls"
+   "label": "Calls",
+   "number_card_name": "Calls"
   },
   {
-   "label": "Crema Cost (USD)",
-   "number_card_name": "Crema Cost (USD)"
+   "label": "Spend",
+   "number_card_name": "Spend"
   },
   {
-   "label": "Crema Blocked",
-   "number_card_name": "Crema Blocked"
+   "label": "Blocked",
+   "number_card_name": "Blocked"
   }
  ],
  "owner": "Administrator",
@@ -110,34 +110,34 @@
  "shortcuts": [
   {
    "doc_view": "",
-   "label": "Crema Settings",
+   "label": "Settings",
    "link_to": "Crema Settings",
    "stats_filter": "[]",
    "type": "DocType"
   },
   {
    "doc_view": "List",
-   "label": "Crema Provider",
+   "label": "Providers",
    "link_to": "Crema Provider",
    "stats_filter": "[]",
    "type": "DocType"
   },
   {
    "doc_view": "List",
-   "label": "Crema Automation Task",
+   "label": "Automations",
    "link_to": "Crema Automation Task",
    "stats_filter": "[]",
    "type": "DocType"
   },
   {
    "doc_view": "List",
-   "label": "Crema Log",
+   "label": "Call Log",
    "link_to": "Crema Log",
    "stats_filter": "[]",
    "type": "DocType"
   },
   {
-   "label": "Crema Usage",
+   "label": "Usage & Cost",
    "link_to": "Crema Usage",
    "type": "Report"
   }

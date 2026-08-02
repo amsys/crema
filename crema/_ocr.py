@@ -62,8 +62,11 @@ def _load_bytes(file: str | bytes, isolation_user: str) -> tuple[bytes, str]:
     """Return (bytes, mime) for `file`.
 
     A str is treated as a frappe File URL and resolved via frappe.utils.file_manager
-    INSIDE the isolation user's context so private-file permissions apply. Raw bytes
-    are used as-is, mime sniffed from magic bytes only.
+    inside the isolation user's context. Known limit: get_file() resolves the path
+    with a bare DB query and reads it off disk without check_permission(), so the
+    isolation context does NOT enforce private-file permissions here — see
+    CLAUDE.md's known-risk note and docs/security.md. Raw bytes are used as-is,
+    mime sniffed from magic bytes only.
     """
     if isinstance(file, bytes):
         return file, _sniff_mime(file)

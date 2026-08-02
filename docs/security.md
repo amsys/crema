@@ -71,6 +71,12 @@ Every document read or write inside a call runs as that interface's isolation us
 Frappe's own permission engine — roles and User Permissions — checks every access.
 Crema adds no permission logic of its own on top.
 
+An automation task runs the same way, and this now covers reading as well as writing:
+the whole run — the source read, the plan, the extraction, and the write — happens as
+the isolation user. A Document Query therefore cannot show the model a record that
+user could not open, and a URL fetch runs under the same identity as everything after
+it. See [automation.md](automation.md).
+
 The isolation user must be a low-privilege, dedicated account. The system refuses
 `Administrator` and any user with the `System Manager` role as an isolation user,
 because `System Manager` can read a provider's API key. Either choice would remove
@@ -162,7 +168,21 @@ State plainly, not defensively:
 
 - `automation._fetch` follows HTTP redirects and applies no private-IP or loopback
   block. This is an accepted risk today, because only a System Manager can set
-  `source_url`. See [ROADMAP.md](../ROADMAP.md) for the planned fix.
+  `source_url`. The **Dry Run** button also reaches it, from a web request rather
+  than only from the scheduler. See [ROADMAP.md](../ROADMAP.md) for the planned fix.
+- An automation task with a Document Query source reads records that ordinary users
+  write. Any user who can edit a field on `source_doctype` can therefore put text in
+  front of a model that runs as the interface's isolation user, which is usually more
+  privileged than they are. The task cannot be made to write outside `target_doctype`,
+  and `Update Source Records` cannot touch a record outside the batch it read — but
+  the *values* the model chooses for the other records in that batch can be steered
+  this way. Point a task at a doctype whose content you trust as much as its target.
+- The layer 1 scan is tuned for prompts, not for arbitrary document text, so it has a
+  false-positive rate on ordinary records — a soft hyphen pasted from a word
+  processor is enough. A Document Query drops the individual records that trip the
+  scan and reports the count in `last_result`, rather than failing the whole run;
+  without that, one odd record would block the batch, and five such runs would turn
+  the task off.
 - `ocr()` and `extract()` read a private File straight off disk. They do not check
   whether the isolation user could read that File document through Frappe's own
   permission check. The `ask(files=[...])` path does run this check correctly. This

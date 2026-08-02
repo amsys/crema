@@ -53,6 +53,74 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   only permitted when the interface's `output_trap` is `Off` or `Log Only` — a `Block`/
   `Retry Once` interface keeps its current all-or-nothing response.
 
+#### Automation
+
+- A file source. `source_type` is `URL` or `Document Query` today, so the ERP ingestion
+  every site actually wants — a supplier invoice PDF, an expense receipt photo, a bank
+  statement, a certificate of insurance, a signed delivery note, a supplier price
+  list — has no path into a task at all. Most of it is
+  already built: `api.extract(doctype, file_url)` does the whole file-to-records step
+  (OCR, text-vs-scanned PDF, multi-record splitting, `_filter_diff` against the target
+  meta) and returns its own `confidence`. The shape that reuses the most is a `File
+  Query` source — `_read_documents` verbatim over the `File` doctype, same filters, same
+  `source_limit`, same `incremental` watermark, same `get_list` read fence — whose
+  per-file step calls `extract()` instead of serialising the row to JSON. PLAN and
+  EXTRACT drop out of that path entirely, since `extract()` plans against the target
+  doctype's metadata itself; what `_upsert` still needs from the plan is `match_fields`,
+  so the same invoice attached twice updates one record instead of importing two.
+  One prerequisite, and it is not optional: `_ocr._load_bytes` resolves a File URL with
+  `frappe.utils.file_manager.get_file()`, which never calls `check_permission()` — its
+  docstring's claim that "private-file permissions apply" is not true today, and
+  `test_ocr.test_private_file_url_content_is_read_regardless_of_isolation_user_permission`
+  pins that. Bounded while a System Manager hands over the URL by hand; a task reading
+  whatever a `File` query returns, under an isolation user, would make the sandbox fence
+  advertised but not enforced. That check lands first, or this feature does not land.
+- A `Propose Only` action, and a confidence floor. Every other surface in crema proposes
+  and lets a human apply: `transform()` returns a diff the desk dialog applies into an
+  open form, `extract()` returns records the caller creates under its own permissions.
+  Automation is the one surface that writes unattended, so a task is either fully
+  trusted (`Upsert Records`) or writes nothing at all (`Report Only`) — there is no
+  middle setting, which is exactly where anything touching money sits. The shape: a
+  fourth action that runs the pipeline to the end of EXTRACT and parks the rows instead
+  of upserting them, plus an approve-or-discard step that replays `_upsert` on rows
+  already validated. `dry_run` is most of the read path already — it stops at precisely
+  this point and renders the rows for a dialog — so the new work is persistence and the
+  approve step, not the pipeline. A per-task confidence floor rides along: `ocr()` and
+  `extract()` both return a `confidence` this path discards, so a task cannot say "write
+  it when you are sure, park it when you are not". Note what this deliberately does not
+  unlock: `_upsert` calls `doc.save()` and nothing else, and submitting a document a
+  model derived is not on this list — the drafts are the point, and a human clicking
+  Submit is the approval.
+- Child tables in a document query. `_source_fields` keeps to `data_fieldtypes`, so a
+  record travels to the model without its own line items — a Sales Invoice with no item
+  rows, a BOM with no components, a Purchase Receipt with no received quantities, a
+  Stock Reconciliation with no per-item differences. That silently blocks the stock and
+  manufacturing reports a `Report Only` task looks made for: flag receipts whose
+  received quantity keeps landing short of what was ordered (the shrinkage /
+  short-shipment check), audit BOMs for components that are disabled, mis-priced, or in
+  the wrong UOM, summarise which items and warehouses keep losing stock across stock
+  reconciliations, cluster quality-inspection failures by their readings. The fix is
+  contained: serialise each child row through the same explicit-fieldlist fence
+  `_source_fields` already applies to the parent (per child meta — permlevel and
+  Password fields stay out), and cap the child rows per record so one 500-line invoice
+  does not eat the whole `_EXTRACT_CONTENT_CHARS` budget alone. Until then the planner
+  and the extractor disagree: `api._meta_summary` shows the planner child-table fields,
+  so an `Update Source Records` plan can name child fields of the very doctype whose
+  serialisation omits them — a plan that validates, then extracts nothing.
+- Related-record context for a document query. `_read_documents` reads exactly one
+  doctype's own fields, so every reconciliation an ERP wants — an invoice against its
+  order and receipt, a payment against the invoices it clears, a delivery against its
+  sales order, a work order's actual consumption against its BOM, a stocktake against
+  the ledger it should reconcile — has no way to put the other side of the comparison
+  in front of the model. The child-table gap above compounds it: most of what needs
+  comparing lives in the line items on both sides. Whatever supplies it has to keep `_source_fields`' explicit field list (`["*"]`
+  would hand permlevel fields on a `CORE_DOCTYPES` doctype straight to a provider) and
+  stay on `get_list` under the isolation user. The existing half is the permission-fenced
+  tool calling item below: give an interface a callback into `frappe.get_list` under its
+  isolation user and an automation task gets this for free, with no new source field at
+  all — the plan names what to look up, rather than the task configuring a join up
+  front. Worth building that one first and seeing what is genuinely left over.
+
 #### Model and provider plumbing
 
 - Permission-fenced tool calling: let an interface call back into `frappe.get_list` /

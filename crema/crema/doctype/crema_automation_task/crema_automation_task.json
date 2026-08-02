@@ -6,25 +6,50 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "status_html",
+  "section_basic",
   "task_name",
   "enabled",
   "column_break_task",
-  "source_url",
+  "trigger",
+  "schedule_preset",
   "schedule",
+  "event",
+  "section_source",
+  "source_type",
+  "source_url",
+  "source_doctype",
+  "source_filters",
+  "column_break_source",
+  "source_limit",
+  "incremental",
   "section_llm",
   "interface",
-  "target_doctype",
   "instruction",
+  "column_break_action",
+  "action",
+  "target_doctype",
+  "notify_to",
   "section_plan",
   "plan_json",
   "section_status",
   "last_run",
   "last_status",
+  "last_result",
   "column_break_status",
   "consecutive_failures",
   "last_error"
  ],
  "fields": [
+  {
+   "fieldname": "status_html",
+   "fieldtype": "HTML",
+   "label": "Status"
+  },
+  {
+   "fieldname": "section_basic",
+   "fieldtype": "Section Break"
+  },
   {
    "fieldname": "task_name",
    "fieldtype": "Data",
@@ -45,18 +70,101 @@
    "fieldtype": "Column Break"
   },
   {
+   "default": "Schedule",
+   "description": "<b>Schedule</b> runs on a cron expression. <b>Document Event</b> runs when a record of the source doctype is created, updated or submitted — it requires the Document Query source, and runs on that one record.",
+   "fieldname": "trigger",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Trigger",
+   "options": "Schedule\nDocument Event",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.trigger==\"Schedule\"",
+   "description": "Leave empty (or pick Custom) to write the cron expression yourself.",
+   "fieldname": "schedule_preset",
+   "fieldtype": "Select",
+   "label": "Schedule",
+   "options": "\nEvery 15 minutes\nHourly\nDaily 03:00\nWeekly (Mon 03:00)\nCustom"
+  },
+  {
+   "depends_on": "eval:doc.trigger==\"Schedule\" && (!doc.schedule_preset || doc.schedule_preset==\"Custom\")",
+   "description": "Cron expression, e.g. <code>0 3 * * *</code>. The scheduler ticks every 15 minutes, so that is the effective granularity floor — anything finer still runs at most once per tick. Filled from the preset unless the preset is Custom.",
+   "fieldname": "schedule",
+   "fieldtype": "Data",
+   "label": "Schedule (cron)",
+   "mandatory_depends_on": "eval:doc.trigger==\"Schedule\" && (!doc.schedule_preset || doc.schedule_preset==\"Custom\")"
+  },
+  {
+   "depends_on": "eval:doc.trigger==\"Document Event\"",
+   "description": "The document lifecycle event on the source doctype that runs this task.",
+   "fieldname": "event",
+   "fieldtype": "Select",
+   "label": "Event",
+   "mandatory_depends_on": "eval:doc.trigger==\"Document Event\"",
+   "options": "\nAfter Insert\nOn Update\nOn Submit"
+  },
+  {
+   "fieldname": "section_source",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "default": "URL",
+   "description": "Where the task reads from. Both source types are entered by a System Manager — the LLM never supplies a URL, a doctype or a filter.",
+   "fieldname": "source_type",
+   "fieldtype": "Select",
+   "label": "Source Type",
+   "options": "URL\nDocument Query",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.source_type==\"URL\"",
    "description": "The only URL this task ever fetches. Admin-entered — never supplied by the LLM.",
    "fieldname": "source_url",
    "fieldtype": "Data",
    "label": "Source URL",
-   "reqd": 1
+   "mandatory_depends_on": "eval:doc.source_type==\"URL\""
   },
   {
-   "description": "Cron expression, e.g. <code>0 3 * * *</code>. The scheduler ticks every 15 minutes, so that is the effective granularity floor — anything finer still runs at most once per tick.",
-   "fieldname": "schedule",
-   "fieldtype": "Data",
-   "label": "Schedule (cron)",
-   "reqd": 1
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Records are read with the interface's isolation user permissions — a document that user cannot read is never seen by the model.",
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source DocType",
+   "link_filters": "[[\"DocType\",\"issingle\",\"=\",0],[\"DocType\",\"istable\",\"=\",0]]",
+   "mandatory_depends_on": "eval:doc.source_type==\"Document Query\"",
+   "options": "DocType"
+  },
+  {
+   "default": "[]",
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Admin-entered filters. Click the table to edit them.",
+   "fieldname": "source_filters",
+   "fieldtype": "Code",
+   "label": "Source Filters",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "column_break_source",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "50",
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Most records to read in one run. A run that hits this limit rewinds its watermark, so the rest is picked up on the next run.",
+   "fieldname": "source_limit",
+   "fieldtype": "Int",
+   "label": "Row Limit"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.source_type==\"Document Query\" && doc.trigger==\"Schedule\"",
+   "description": "Read only records changed since the last run. Keep this on — without it every run re-bills the model for every matching record.",
+   "default": "1",
+   "fieldname": "incremental",
+   "fieldtype": "Check",
+   "label": "Only Changed Records"
   },
   {
    "fieldname": "section_llm",
@@ -72,27 +180,49 @@
    "reqd": 1
   },
   {
-   "description": "The doctype rows are upserted into. Required: it is the fence that stops a self-written plan from writing anywhere else the isolation user can reach. The stored plan is validated against this doctype's meta.",
-   "fieldname": "target_doctype",
-   "fieldtype": "Link",
-   "label": "Target DocType",
-   "options": "DocType",
-   "reqd": 1
-},
-  {
-   "description": "Plain-English description of what to extract from the source and how it maps onto the target doctype.",
+   "description": "Plain-English description of what to read from the source and what to do with it.",
    "fieldname": "instruction",
    "fieldtype": "Text",
    "label": "Instruction",
    "reqd": 1
   },
   {
+   "fieldname": "column_break_action",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Upsert Records",
+   "description": "<b>Upsert Records</b> creates or updates records of the target doctype. <b>Update Source Records</b> writes back onto the records the query returned — it never creates. <b>Report Only</b> writes nothing at all.",
+   "fieldname": "action",
+   "fieldtype": "Select",
+   "label": "Action",
+   "options": "Upsert Records\nUpdate Source Records\nReport Only",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.action==\"Upsert Records\"",
+   "description": "The doctype rows are upserted into. It is the fence that stops a self-written plan from writing anywhere else the isolation user can reach. The stored plan is validated against this doctype's meta.",
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "label": "Target DocType",
+   "mandatory_depends_on": "eval:doc.action==\"Upsert Records\"",
+   "options": "DocType"
+  },
+  {
+   "depends_on": "eval:doc.action==\"Report Only\"",
+   "description": "Comma-separated addresses to email the report to after each successful run. Leave empty to only store it below.",
+   "fieldname": "notify_to",
+   "fieldtype": "Small Text",
+   "label": "Email Report To"
+  },
+  {
+   "collapsible": 1,
    "fieldname": "section_plan",
    "fieldtype": "Section Break",
    "label": "Plan"
   },
   {
-   "description": "Written by the planner on the first run and reused after. Parameters only (prompts, schemas, field maps) — never executable content. Clear it to force a replan.",
+   "description": "Written by the planner on the first run and reused after. Parameters only (prompts, schemas, field maps) — never executable content. Clear it to force a replan. Not used by the Report Only action.",
    "fieldname": "plan_json",
    "fieldtype": "Code",
    "label": "Plan JSON",
@@ -120,6 +250,13 @@
    "read_only": 1
   },
   {
+   "description": "What the last run did: a row count for a writing action, or the report text for Report Only.",
+   "fieldname": "last_result",
+   "fieldtype": "Text",
+   "label": "Last Result",
+   "read_only": 1
+  },
+  {
    "fieldname": "column_break_status",
    "fieldtype": "Column Break"
   },
@@ -139,7 +276,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-28 12:00:00.000000",
+ "modified": "2026-08-02 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Automation Task",

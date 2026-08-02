@@ -909,3 +909,6 @@ window.crema_fetch_models = crema_fetch_models;
 window.crema_new_provider_dialog = crema_new_provider_dialog;
 // crema_automation_task.js is likewise a separate script, evaluated outside this IIFE.
 window.crema_show_error = crema_show_error;
+// The automation form's Dry Run preview renders extracted rows and a plan's field map
+// with the same key/value table the extract and transform previews already use.
+window.crema_diff_table = crema_diff_table;

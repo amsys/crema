@@ -19,6 +19,20 @@ def response_key(prompt_sha: str) -> str:
     return f"crema:resp:{prompt_sha}"
 
 
+def event_tasks_key() -> str:
+    """Key for the {(doctype, event): tasks} map automation.on_doc_event reads. That
+    handler runs on EVERY document write on the site, so this must stay one cached read,
+    never a query."""
+    return "crema:event_tasks"
+
+
+def clear_event_tasks() -> None:
+    """A Crema Automation Task saved/deleted: drop the doc-event map so a newly enabled
+    (or disabled) Document Event task takes effect on the next write."""
+    frappe.cache.delete_value(event_tasks_key())
+    frappe.local.crema_event_tasks = None
+
+
 def clear_provider(name: str) -> None:
     """Provider saved/deleted: nuke every resolved interface config (few providers,
     nuke-all is fine — cheap to rebuild) and the provider's cached model list."""

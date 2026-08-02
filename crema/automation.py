@@ -1,22 +1,37 @@
-"""Scheduler automation: FETCH -> (self-)PLAN -> EXTRACT -> UPSERT, with one replan.
+"""Scheduler automation: SOURCE -> (self-)PLAN -> EXTRACT -> WRITE, with one replan.
 
 Security posture — the reason this module is longer than "just call the LLM":
 
 * The LLM output NEVER becomes code. A plan is *parameters only* (an extract prompt,
-  a response schema, and fieldname->fieldname maps) consumed by the fixed three-stage
-  pipeline below. `_validate_plan` rejects any key it does not know about, so a plan
-  containing e.g. "code" or "script" is refused before it is ever stored.
+  a response schema, and fieldname->fieldname maps) consumed by the fixed pipeline
+  below. `_validate_plan` rejects any key it does not know about, so a plan containing
+  e.g. "code" or "script" is refused before it is ever stored.
 * Every doctype/fieldname string that came from the LLM is checked against
   `frappe.get_meta` before it reaches the database, both for the parent and for the
   child table.
-* The only URL ever fetched is `task.source_url`, entered by a System Manager. The LLM
-  cannot supply a URL.
-* Everything after the fetch runs inside `sandbox.isolation(<interface isolation
-  user>)` and writes with a plain `doc.save()` — no `ignore_permissions` anywhere, so
-  the isolation user's roles and User Permissions are the hard fence.
+* `source_url`, `source_doctype` and `source_filters` are all entered by a System
+  Manager. The LLM cannot supply a URL, a doctype or a filter.
+* The whole run — the source read included — happens inside
+  `sandbox.isolation(<interface isolation user>)`, and every write is a plain
+  `doc.save()`. No `ignore_permissions` anywhere, so the isolation user's roles and
+  User Permissions are the hard fence on what a task can read *and* write.
 
-The fetch itself is deliberately *outside* the sandbox: it is pure code with no LLM
-input, and outbound HTTP is a system-level capability, not a document permission.
+The three actions differ only in what stage 4 does with the extracted rows:
+
+* `Upsert Records` — find-or-create in `target_doctype`.
+* `Update Source Records` — update, never create, and only records whose `name` the
+  source query actually returned (`allowed_names`). `name` is usable as a *match* field
+  but is never written: `doc.update({"name": ...})` mutates `self.name`, and
+  `BaseDocument.db_update` would then write this document's values onto whatever row
+  the model named, with no permission check on that row.
+* `Report Only` — no plan at all, and no writes. The plan machinery exists to map LLM
+  output safely onto database fields; with nothing written there is nothing to validate.
+
+Document-query content is user-editable, so it is a live injection channel — layer 1
+still sees it (it travels in the *prompt* half of `api.ask_json`, and `security.scan`
+scans prompt and context joined). Records that trip the scan are dropped individually
+rather than failing the batch, since one soft hyphen in one record would otherwise take
+out the whole run — and five such runs auto-disable the task.
 """
 
 from __future__ import annotations
@@ -29,14 +44,24 @@ import requests
 from croniter import croniter
 
 import frappe
-from crema import _ocr, api, client, log, sandbox
-from frappe.utils import add_days, now_datetime, strip_html
+from crema import _ocr, api, client, log, sandbox, security
+from frappe.model import data_fieldtypes
+from frappe.utils import add_days, cint, now_datetime, strip_html
 
 _PLAN_CONTENT_CHARS = 8000
+_EXTRACT_CONTENT_CHARS = 60_000
 _MAX_FAILURES = 5
 _LOG_RETENTION_DAYS = 30  # fallback if Crema Settings.log_retention_days is unset
 _ERROR_MAX_CHARS = 2000
+_RESULT_MAX_CHARS = 20_000
 _FETCH_TIMEOUT = 60
+_SOURCE_LIMIT_DEFAULT = 50
+
+_EVENT_METHODS = {
+    "After Insert": "after_insert",
+    "On Update": "on_update",
+    "On Submit": "on_submit",
+}
 
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
 
@@ -59,12 +84,17 @@ _PLAN_SHAPE = """{
                           "field_map": {"<row key>": "<child fieldname>"}}}
 }"""
 
-_PLAN_RULES = """You are configuring a FIXED three-stage pipeline: FETCH (already done) -> EXTRACT -> UPSERT.
+_PLAN_RULES = """You are configuring a FIXED three-stage pipeline: SOURCE (already read) -> EXTRACT -> WRITE.
 You do not write code, you do not invent stages, you only fill in the parameters below.
 Your EXTRACT prompt must make the model return {"rows": [ ... ]} — a flat list of row objects.
 Each row is upserted into one record of the target doctype; when a child table is configured,
 the same row also contributes one child row to that record.
 Output ONLY JSON with exactly this shape (omit "child_table" if the target has no child table):"""
+
+_UPDATE_SOURCE_RULE = """This task UPDATES the records it just read — it never creates any.
+So "map.match_fields" must be exactly ["name"], "map.field_map" must map one of your row keys
+onto "name", and your EXTRACT prompt must tell the model to copy each record's "name" through
+verbatim from the source. Rows naming a record the source query did not return are discarded."""
 
 
 class AutomationError(frappe.ValidationError):
@@ -82,7 +112,7 @@ def tick() -> None:
     now = now_datetime()
     for task in frappe.get_all(
         "Crema Automation Task",
-        filters={"enabled": 1},
+        filters={"enabled": 1, "trigger": ("!=", "Document Event")},
         fields=["name", "schedule", "last_run", "creation"],
     ):
         try:
@@ -99,13 +129,15 @@ def cleanup_logs() -> None:
     frappe.db.delete("Crema Log", {"creation": ("<", add_days(now_datetime(), -retention_days))})
 
 
-def enqueue_task(task: str) -> str:
+def enqueue_task(task: str, doc_name: str | None = None) -> str:
     """Queue one run of `task`. Deduplicated — a task already queued or running is not
-    queued twice. Returns the job id."""
-    job_id = f"crema-task-{task}"
+    queued twice. An event-triggered run is deduplicated per *document*, so re-saving one
+    record debounces while two different records both run. Returns the job id."""
+    job_id = f"crema-task-{task}-{doc_name}" if doc_name else f"crema-task-{task}"
     job = frappe.enqueue(
         "crema.automation.run_task",
         task=task,
+        doc_name=doc_name,
         queue="long",
         timeout=1800,
         job_id=job_id,
@@ -114,64 +146,162 @@ def enqueue_task(task: str) -> str:
     return getattr(job, "id", None) or job_id
 
 
+def on_doc_event(doc, method: str) -> None:
+    """Wildcard `doc_events` handler — this runs on EVERY document write on the site, so
+    the fast path is a flag check plus one dict lookup and nothing else.
+
+    The flag is the reentrancy guard: without it a task that writes to the doctype it
+    watches re-triggers itself forever, and every Crema Log row written during a run
+    fires this handler too.
+    """
+    if getattr(frappe.local, "crema_in_automation", False):
+        return
+    for task in _event_tasks().get((doc.doctype, method), ()):
+        enqueue_task(task, doc_name=doc.name)
+
+
+def _event_tasks() -> dict[tuple[str, str], tuple[str, ...]]:
+    """{(doctype, method): (task, ...)} for enabled Document Event tasks. Memoized on
+    `frappe.local` so a request that writes many documents does one redis read, not one
+    per write; invalidated by CremaAutomationTask.on_update/on_trash."""
+    if (memo := getattr(frappe.local, "crema_event_tasks", None)) is not None:
+        return memo
+
+    from crema import cache
+
+    try:
+        rows = frappe.cache.get_value(cache.event_tasks_key(), _fetch_event_tasks)
+    except Exception:
+        # This handler sits on every document write on the site. It is never allowed to
+        # be the reason a save fails — during a migrate that adds these very columns, the
+        # query below raises on every write until the schema catches up.
+        frappe.local.crema_event_tasks = {}
+        return {}
+
+    mapping: dict[tuple[str, str], tuple[str, ...]] = {}
+    for row in rows or []:
+        method = _EVENT_METHODS.get(row["event"])
+        if not row["source_doctype"] or not method:
+            continue
+        key = (row["source_doctype"], method)
+        mapping[key] = (*mapping.get(key, ()), row["name"])
+
+    frappe.local.crema_event_tasks = mapping
+    return mapping
+
+
+def _fetch_event_tasks() -> list[dict]:
+    return frappe.get_all(
+        "Crema Automation Task",
+        filters={"enabled": 1, "trigger": "Document Event"},
+        fields=["name", "source_doctype", "event"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
 
 
-def run_task(task: str) -> str:
-    """Run one automation task end to end. Returns the recorded status."""
+def run_task(task: str, doc_name: str | None = None) -> str:
+    """Run one automation task end to end. `doc_name` is set by an event trigger and
+    narrows a document-query source to that one record. Returns the recorded status."""
     doc = frappe.get_doc("Crema Automation Task", task)
+
+    # Read the watermark BEFORE stamping it: db_set assigns in memory first, so after the
+    # next line `doc.last_run` is `now` and an incremental filter would match nothing.
+    since = doc.last_run
 
     # Stamp last_run first and commit: a task that explodes must not hot-loop on tick().
     doc.db_set("last_run", now_datetime(), update_modified=False)
     frappe.db.commit()
 
     try:
-        content = _fetch(doc.source_url)
-    except Exception as exc:
-        return _record(doc, "Failed", f"fetch failed — {_describe(exc)}")
-
-    try:
-        isolation_user = client._resolve(doc.interface)["isolation_user"]
+        cfg = client._resolve(doc.interface)
     except Exception as exc:
         # e.g. the interface's provider was disabled. Left uncaught this skipped
         # _record() entirely, so last_status stayed stale and the 5-failure
         # auto-disable never fired while tick() re-enqueued the task every 15 minutes.
         return _record(doc, "Failed", f"interface unresolvable — {_describe(exc)}")
 
-    with sandbox.isolation(isolation_user):
-        status, error, plan = _plan_and_execute(doc, content)
+    # The guard must cover every write this run makes, including _record's own db_set.
+    frappe.local.crema_in_automation = True
+    try:
+        with sandbox.isolation(cfg["isolation_user"]):
+            status, error, plan, result, high_water = _run_inside(doc, cfg, since, doc_name)
 
-    if plan is not None:
-        doc.db_set("plan_json", frappe.as_json(plan))
-    return _record(doc, status, error)
+        # Outside the sandbox on purpose: db_set stamps modified_by with the session user,
+        # and the task document's own audit trail belongs to the scheduler, not to the
+        # interface's isolation user.
+        if plan is not None:
+            doc.db_set("plan_json", frappe.as_json(plan))
+        if status != "Failed" and high_water:
+            # A capped incremental batch processed the oldest `limit` rows and would
+            # otherwise have its cursor left at `now`, silently starving the backlog.
+            # Rewind to the last row actually handled; the pre-run stamp above still
+            # guards the crash case.
+            doc.db_set("last_run", high_water, update_modified=False)
+        outcome = _record(doc, status, error, result)
+    finally:
+        frappe.local.crema_in_automation = False
+
+    _notify(doc, status, result)
+    return outcome
 
 
-def _plan_and_execute(doc, content: str) -> tuple[str, str, dict | None]:
+def _run_inside(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, str, dict | None, str, Any]:
+    """Everything that runs as the isolation user. Returns
+    (status, error, plan_to_store, result, high_water)."""
+    try:
+        content, allowed_names, note, high_water = _read_source(doc, cfg, since, doc_name)
+    except Exception as exc:
+        return "Failed", f"source read failed — {_describe(exc)}", None, "", None
+
+    if not content.strip():
+        # The normal state of a quiet incremental task. Left to fall through it would
+        # cost two LLM calls, record Failed, and auto-disable the task after five quiet
+        # nights.
+        return "Success", "", None, note or "no new records", None
+
+    if doc.action == "Report Only":
+        try:
+            report = api.ask(doc.interface, doc.instruction, context=content)
+        except Exception as exc:
+            return "Failed", _describe(exc), None, "", None
+        return "Success", "", None, _join_note(report[:_RESULT_MAX_CHARS], note), high_water
+
+    status, error, plan, result = _plan_and_execute(doc, content, allowed_names)
+    return status, error, plan, _join_note(result, note), high_water
+
+
+def _join_note(result: str, note: str) -> str:
+    return f"{result} ({note})" if result and note else result or note
+
+
+def _plan_and_execute(doc, content: str, allowed_names: set[str] | None) -> tuple[str, str, dict | None, str]:
     """Execute the stored plan (planning first if there is none); on any failure,
     replan exactly once with the failure text appended and try again.
 
-    Returns (status, error, plan_to_store). `plan_to_store` is None when the stored
-    plan is still the right one — a plan is only persisted once it has actually run.
+    Returns (status, error, plan_to_store, result). `plan_to_store` is None when the
+    stored plan is still the right one — a plan is only persisted once it has actually run.
     """
     stored = _stored_plan(doc)
     try:
         plan = stored if stored is not None else _make_plan(doc, content)
-        _execute(doc, plan, content)
-        return "Success", "", None if stored is not None else plan
+        result = _execute(doc, plan, content, allowed_names)
+        return "Success", "", None if stored is not None else plan, result
     except Exception as exc:
         first_error = _describe(exc)
 
     try:
         plan = _make_plan(doc, content, failure=first_error)
-        _execute(doc, plan, content)
-        return "Replanned", "", plan
+        result = _execute(doc, plan, content, allowed_names)
+        return "Replanned", "", plan, result
     except Exception as exc:
-        return "Failed", f"{first_error} || replan: {_describe(exc)}", None
+        return "Failed", f"{first_error} || replan: {_describe(exc)}", None, ""
 
 
-def _record(doc, status: str, error: str) -> str:
+def _record(doc, status: str, error: str, result: str = "") -> str:
     """Persist the outcome. Five consecutive failures disable the task."""
     if status == "Failed":
         failures = (doc.consecutive_failures or 0) + 1
@@ -179,6 +309,7 @@ def _record(doc, status: str, error: str) -> str:
             {
                 "last_status": "Failed",
                 "last_error": error[:_ERROR_MAX_CHARS],
+                "last_result": result[:_RESULT_MAX_CHARS] or None,
                 "consecutive_failures": failures,
             }
         )
@@ -189,8 +320,33 @@ def _record(doc, status: str, error: str) -> str:
                 message=f"{failures} consecutive failures. Last error:\n{error}",
             )
     else:
-        doc.db_set({"last_status": status, "last_error": None, "consecutive_failures": 0})
+        doc.db_set(
+            {
+                "last_status": status,
+                "last_error": None,
+                "last_result": result[:_RESULT_MAX_CHARS] or None,
+                "consecutive_failures": 0,
+            }
+        )
     return status
+
+
+def _notify(doc, status: str, result: str) -> None:
+    """Email a Report Only result. Outside the sandbox on purpose: the recipient list is
+    System-Manager-entered and sending mail is a system capability, not a document
+    permission — the same reasoning the URL fetch used to carry."""
+    if doc.action != "Report Only" or status == "Failed" or not doc.notify_to or not result:
+        return
+    try:
+        frappe.sendmail(
+            recipients=frappe.utils.split_emails(doc.notify_to),
+            subject=f"Crema: {doc.task_name}",
+            content=f"<pre>{frappe.utils.escape_html(result)}</pre>",
+        )
+    except Exception as exc:
+        # The run itself succeeded; a mail failure must not turn it into a Failed row and
+        # count toward the auto-disable.
+        frappe.log_error(title=f"Crema automation notify failed: {doc.name}"[:140], message=_describe(exc))
 
 
 def _describe(exc: Exception) -> str:
@@ -198,8 +354,95 @@ def _describe(exc: Exception) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 — FETCH (pure code, no LLM involved)
+# Stage 1 — SOURCE (pure code, no LLM involved)
 # ---------------------------------------------------------------------------
+
+
+def _read_source(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, set[str] | None, str, Any]:
+    """Read whatever this task's source is, as text. Returns
+    (content, allowed_names, note, high_water).
+
+    `allowed_names` is None for a URL source and the exact set of record names the query
+    returned for a document source — it is what fences `Update Source Records`.
+    """
+    if doc.source_type != "Document Query":
+        return _fetch(doc.source_url)[:_EXTRACT_CONTENT_CHARS], None, "", None
+    return _read_documents(doc, cfg, since, doc_name)
+
+
+def _source_fields(doctype: str) -> list[str]:
+    """The fields a document query reads. Deliberately explicit rather than `["*"]`:
+    `frappe.model.get_permitted_fields` short-circuits permlevel filtering entirely for
+    CORE_DOCTYPES (frappe/model/__init__.py), so `["*"]` on e.g. User would hand
+    `api_key` and `reset_password_key` straight to a third-party provider. Skipping the
+    `_comments`/`_assign` default fields is a bonus: they are free-text and the single
+    best injection surface on a record.
+    """
+    meta = frappe.get_meta(doctype)
+    fields = [
+        df.fieldname
+        for df in meta.fields
+        if df.fieldtype in data_fieldtypes and df.fieldtype != "Password" and not df.get("permlevel")
+    ]
+    return ["name", "modified", *fields]
+
+
+def _normalized_filters(raw: Any) -> list[list]:
+    """One filter shape downstream. frappe.ui.FilterGroup writes a list of
+    [fieldname, operator, value] (or 4-element, doctype-prefixed) rows; a hand-written
+    dict is also accepted. Normalizing to the list form means an added filter ANDs with a
+    user-supplied one on the same field instead of clobbering it."""
+    if isinstance(raw, dict):
+        return [[fieldname, "=", value] for fieldname, value in raw.items()]
+    return [list(row) for row in raw or [] if isinstance(row, list | tuple)]
+
+
+def _read_documents(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, set[str], str, Any]:
+    filters = _normalized_filters(frappe.parse_json(doc.source_filters or "[]"))
+
+    if doc_name:
+        filters.append(["name", "=", doc_name])
+    elif doc.incremental and since:
+        filters.append(["modified", ">", since])
+        # This task's own writes bump `modified`. Without this an Update Source Records
+        # task re-reads — and re-bills for — everything it just wrote, every tick,
+        # forever. A later human edit sets modified_by back to the human, so the record
+        # legitimately comes back.
+        filters.append(["modified_by", "!=", cfg["isolation_user"]])
+
+    # get_list, never get_all: this is the read fence. Oldest first, so a batch capped by
+    # source_limit takes the head of the backlog and run_task rewinds the watermark to
+    # the last row handled — newest-first would starve the tail permanently.
+    limit = cint(doc.source_limit) or _SOURCE_LIMIT_DEFAULT
+    rows = frappe.get_list(
+        doc.source_doctype,
+        filters=filters,
+        fields=_source_fields(doc.source_doctype),
+        limit=limit,
+        order_by="modified asc",
+    )
+    if not rows:
+        return "", set(), "", None
+
+    kept, dropped = rows, 0
+    if cfg["enable_prompt_scan"]:
+        # Triage, not the fence — api.ask_json still scans the assembled content. Without
+        # it one soft hyphen in one record blocks all 50, and five such runs disable the
+        # task. Only meaningful when the interface actually has layer 1 on.
+        kept = [row for row in rows if not security.scan(frappe.as_json(row))]
+        dropped = len(rows) - len(kept)
+
+    note = f"{dropped} skipped by the security scan" if dropped else ""
+    # Only a capped incremental batch may move the watermark. tick() walks the cron from
+    # last_run, so a rewind into the past re-arms the schedule at the very next 15-minute
+    # tick — for a capped backlog that is the point (drain at tick pace), but for any
+    # other run — non-incremental, uncapped, or a single-document event run — it re-fires
+    # the task once per tick, and a non-incremental task loops at full LLM cost forever.
+    capped = len(rows) == limit
+    high_water = rows[-1].get("modified") if doc.incremental and not doc_name and capped else None
+    if not kept:
+        return "", set(), note, high_water
+    return frappe.as_json(kept)[:_EXTRACT_CONTENT_CHARS], {row["name"] for row in kept}, note, high_water
 
 
 def _fetch(url: str) -> str:
@@ -245,8 +488,14 @@ def _make_plan(doc, content: str, failure: str | None = None) -> dict:
     return _validate_plan(raw, doc.target_doctype)
 
 
+def _plan_rules(doc) -> str:
+    if doc.action == "Update Source Records":
+        return f"{_PLAN_RULES}\n{_UPDATE_SOURCE_RULE}"
+    return _PLAN_RULES
+
+
 def _planning_prompt(doc, content: str, failure: str | None) -> str:
-    parts = [_PLAN_RULES, _PLAN_SHAPE, f"Task instruction:\n{doc.instruction}"]
+    parts = [_plan_rules(doc), _PLAN_SHAPE, f"Task instruction:\n{doc.instruction}"]
     if doc.target_doctype:
         parts.append(api._meta_summary(doc.target_doctype))
     parts.append(f"Source content (first {_PLAN_CONTENT_CHARS} characters):\n{content[:_PLAN_CONTENT_CHARS]}")
@@ -272,7 +521,10 @@ def _validate_field_maps(match_fields: Any, field_map: Any, meta, where: str) ->
     if not isinstance(match_fields, list) or not match_fields:
         raise AutomationError(f"{where}.match_fields must be a non-empty list")
 
-    known = {df.fieldname for df in meta.fields}
+    # `name` is not a docfield, but it is the only stable identifier an update-source plan
+    # can match on. Allowing it here is safe *only* because _upsert never writes it — see
+    # that function and the module docstring.
+    known = {df.fieldname for df in meta.fields} | {"name"}
     for key, fieldname in field_map.items():
         if not isinstance(key, str) or not isinstance(fieldname, str):
             raise AutomationError(f"{where}.field_map must map strings to strings")
@@ -305,7 +557,11 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
     doctype = mapping["doctype"]
     if not isinstance(doctype, str) or not frappe.db.exists("DocType", doctype):
         raise AutomationError(f"plan.map.doctype '{doctype}' does not exist")
-    if target_doctype and doctype != target_doctype:
+    # Refuse rather than skip the check on a blank target: with no target to compare
+    # against, a self-written plan could name any doctype the isolation user can reach.
+    if not target_doctype:
+        raise AutomationError("the task has no target doctype, so no plan can be validated against it")
+    if doctype != target_doctype:
         raise AutomationError(f"plan.map.doctype '{doctype}' is not the task's target '{target_doctype}'")
 
     meta = frappe.get_meta(doctype)
@@ -332,8 +588,27 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _execute(doc, plan: dict, content: str) -> None:
-    _upsert(plan["map"], _extract(doc, plan, content))
+def _execute(doc, plan: dict, content: str, allowed_names: set[str] | None) -> str:
+    """Run stage 4 and return a human-readable count for `last_result`."""
+    mapping = plan["map"]
+    if doc.action != "Update Source Records":
+        return _summary(_upsert(mapping, _extract(doc, plan, content)))
+
+    # Checked before the extraction call, so a plan of the wrong shape costs nothing.
+    # Raised, not thrown: this lands in _plan_and_execute's replan, so the failure text
+    # goes back to the planner and it corrects itself on the same run.
+    if list(mapping["match_fields"]) != ["name"]:
+        raise AutomationError('an update-source plan must match on ["name"]')
+
+    # A document query reads parent fields only, so the model has never seen the existing
+    # child rows — a child_table here would append against nothing it can dedup on.
+    mapping = {key: value for key, value in mapping.items() if key != "child_table"}
+    rows = _extract(doc, plan, content)
+    return _summary(_upsert(mapping, rows, create=False, allowed_names=allowed_names))
+
+
+def _summary(counts: dict[str, int]) -> str:
+    return ", ".join(f"{n} {label}" for label, n in counts.items() if n) or "nothing to do"
 
 
 def _extract(doc, plan: dict, content: str) -> list[dict]:
@@ -342,6 +617,9 @@ def _extract(doc, plan: dict, content: str) -> list[dict]:
     if schema := extract.get("response_schema"):
         kwargs["response_format"] = schema
 
+    # _PLAN_CONTENT_CHARS caps the *planning* prompt only; without this a 2 MB page or 50
+    # whole documents went to the extractor in full.
+    content = content[:_EXTRACT_CONTENT_CHARS]
     result = api.ask_json(doc.interface, f"{extract['prompt']}\n\n{content}", **kwargs)
     rows = result.get("rows") if isinstance(result, dict) else None
     rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
@@ -354,29 +632,106 @@ def _row_values(field_map: dict[str, str], row: dict) -> dict[str, Any]:
     return {fieldname: row[key] for key, fieldname in field_map.items() if key in row}
 
 
-def _upsert(mapping: dict, rows: list[dict]) -> None:
+def _upsert(
+    mapping: dict, rows: list[dict], *, create: bool = True, allowed_names: set[str] | None = None
+) -> dict[str, int]:
     """Find-or-create one record per row, then (optionally) upsert one child row from the
-    same row. Plain `doc.save()` — permissions are the isolation user's."""
+    same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts.
+
+    `create=False` and `allowed_names` are the `Update Source Records` fences: never
+    create, and never touch a record the source query did not return.
+    """
     doctype = mapping["doctype"]
     child = mapping.get("child_table")
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
 
     for row in rows:
         values = _row_values(mapping["field_map"], row)
         filters = {fieldname: values.get(fieldname) for fieldname in mapping["match_fields"]}
-        if any(value is None for value in filters.values()):
-            continue  # row can't be identified — skip rather than create a junk record
+        if any(value is None or isinstance(value, dict | list) for value in filters.values()):
+            # None: the row can't be identified — skip rather than create junk. dict/list:
+            # frappe reads a list filter value as ["operator", ...], so a row could
+            # smuggle ["like", "%"] into the match and hit an arbitrary record instead of
+            # one equal to the extracted value.
+            counts["skipped"] += 1
+            continue
 
         # get_list, not get_all: these filters are built from LLM-extracted values taken
         # from fetched (attacker-influenceable) content, and get_all ignores permissions
         # — it would happily locate and load a record the isolation user cannot see.
         existing = frappe.get_list(doctype, filters=filters, limit=1, pluck="name")
-        doc = frappe.get_doc(doctype, existing[0]) if existing else frappe.new_doc(doctype)
-        doc.update(values)
 
+        # Checked after the lookup, so the fence holds whatever match_fields the model
+        # picked — it never depends on the plan having matched on "name".
+        if allowed_names is not None and (not existing or existing[0] not in allowed_names):
+            counts["skipped"] += 1
+            continue
+        if not existing and not create:
+            counts["skipped"] += 1
+            continue
+
+        # `name` identifies a record; it is never written. doc.update({"name": ...})
+        # mutates self.name, and BaseDocument.db_update then writes THIS document's values
+        # onto whatever row the model named — with no permission check on that row.
+        values.pop("name", None)
+
+        doc = frappe.get_doc(doctype, existing[0]) if existing else frappe.new_doc(doctype)
+        if existing and not child and _unchanged(doc, values):
+            # Skipping the save is what stops an incremental Update Source task from
+            # bumping `modified` on every run and re-reading its own output forever. It
+            # also makes the replan-after-partial-failure path idempotent.
+            counts["unchanged"] += 1
+            continue
+
+        doc.update(values)
         if child:
             _upsert_child(doc, child, row)
-
         doc.save()
+        counts["updated" if existing else "created"] += 1
+
+    return counts
+
+
+def _unchanged(doc, values: dict[str, Any]) -> bool:
+    return all(str(doc.get(fieldname) or "") == str(value or "") for fieldname, value in values.items())
+
+
+def dry_run(task: str) -> dict[str, Any]:
+    """Everything run_task does up to and including EXTRACT, and nothing after it — no
+    record is created or updated. Reached from the form's Dry Run button.
+
+    The plan it settles on IS stored: reviewing plan A in a dialog and then letting the
+    3am run write plan B would defeat the point of previewing at all.
+    """
+    doc = frappe.get_doc("Crema Automation Task", task)
+    cfg = client._resolve(doc.interface)
+
+    with sandbox.isolation(cfg["isolation_user"]):
+        # since=None: a dry run right after a real run must not show an empty incremental
+        # window and look broken.
+        content, allowed_names, note, _ = _read_source(doc, cfg, None, None)
+        if not content.strip():
+            return {"action": doc.action, "row_count": 0, "note": note or "no records matched"}
+
+        if doc.action == "Report Only":
+            return {"action": doc.action, "report": api.ask(doc.interface, doc.instruction, context=content)}
+
+        stored = _stored_plan(doc)
+        plan = stored if stored is not None else _make_plan(doc, content)
+        rows = _extract(doc, plan, content)
+
+    if stored is None:
+        doc.db_set("plan_json", frappe.as_json(plan))
+
+    return {
+        "action": doc.action,
+        "used_stored_plan": stored is not None,
+        "plan": plan,
+        "rows": rows[:20],
+        "row_count": len(rows),
+        "allowed_names": len(allowed_names) if allowed_names is not None else None,
+        "note": note,
+    }
 
 
 def _upsert_child(doc, child: dict, row: dict) -> None:

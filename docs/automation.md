@@ -18,27 +18,37 @@ Build a task from three choices:
 |---|---|---|
 | `task_name` | Data | Required. Unique. |
 | `enabled` | Check | Off by default. |
-| `trigger` | Select | `Schedule` or `Document Event`. |
-| `schedule_preset` | Select | A common schedule. Leave it empty to write the cron expression yourself. |
-| `schedule` | Data | The cron expression. The preset fills it in. |
+| `trigger` | Select | Label **Trigger**. `Schedule` or `Document Event`. |
+| `schedule_preset` | Select | Label **How Often**. A common schedule, or `Custom`. The preset rewrites `schedule` on every save — pick `Custom`, or leave the preset empty, to keep a cron expression you wrote yourself. |
+| `schedule` | Data | Label **Custom Schedule (cron)**. The cron expression. The preset fills it in. |
 | `event` | Select | For a Document Event trigger: `After Insert`, `On Update`, or `On Submit`. |
 | `source_type` | Select | `URL` or `Document Query`. |
 | `source_url` | Data | For a URL source. The only URL this task reads. Only a System Manager can set it. |
-| `source_doctype` | Link (DocType) | For a Document Query source. Only a System Manager can set it. |
-| `source_filters` | Code (JSON) | Which records to read. Click the table to set them. |
-| `source_limit` | Int | Most records to read in one run. 50 by default, 200 maximum. |
-| `incremental` | Check | Read only records changed since the last run. On by default. |
-| `interface` | Autocomplete | Required. One of the interface names (see [configure.md](configure.md)). |
+| `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. |
+| `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. |
+| `source_limit` | Int | Label **Records Per Run**. Most records to read in one run. 50 by default, 200 maximum. |
+| `incremental` | Check | Label **Only Changed Records**. Read only records changed since the last run. On by default. Has no effect on a Document Event run, which always reads the one record that triggered it. |
+| `interface` | Autocomplete | Label **Use Case**. Required. One of the interface names (see [configure.md](configure.md)). |
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
 | `action` | Select | `Upsert Records`, `Update Source Records`, or `Report Only`. |
-| `target_doctype` | Link (DocType) | For `Upsert Records`. The only doctype this task can write to. |
-| `notify_to` | Small Text | For `Report Only`. Comma-separated addresses. |
-| `plan_json` | Code (read-only) | Written by the system on the first run. |
+| `target_doctype` | Link (DocType) | Label **Record Type to Write**. For `Upsert Records`. The only doctype this task can write to. |
+| `notify_to` | Small Text | Label **Email Report To**. For `Report Only`. Comma-separated addresses. |
+| `plan_json` | Code (read-only) | Label **Raw Plan (JSON)**. Written by the system on the first run. The system replaces it when you change the plan inputs, or when the stored plan no longer validates. |
+| `plan_target_doctype` | Data (read-only) | Label **Creates or Updates**. Read from the stored plan. |
+| `plan_match_fields` | Data (read-only) | Label **Finds Existing Records By**. Read from the stored plan. |
+| `plan_field_map` | Table (read-only) | Label **Field Mapping**. The stored plan's field map, one row per field. Read from the stored plan. |
+| `plan_prompt` | Small Text (read-only) | Label **What the AI Is Asked to Pull Out**. Read from the stored plan. |
+| `next_run` | Datetime (read-only) | Label **Next Run**. When the task is due next. Empty while the task is off, or when the trigger is Document Event. |
 | `last_run` | Datetime (read-only) | |
 | `last_status` | Select (read-only) | `Success`, `Replanned`, or `Failed`. |
-| `last_result` | Text (read-only) | What the last run did — a row count, or the report text. |
+| `last_result` | Text (read-only) | What the last run did — for example `3 created, 2 updated, 1 skipped`, `no new records`, or the report text. |
 | `consecutive_failures` | Int (read-only) | The task turns itself off at 5. |
 | `last_error` | Small Text (read-only) | |
+
+The result of the last run shows as a coloured indicator next to the task name at the
+top of the form. Open **Last Run** for the times, the result, and any error. Open
+**Plan** to read the plan in a table instead of raw JSON. A task that failed three times
+in a row also shows a warning across the top of the form.
 
 ## Create a task
 
@@ -48,6 +58,12 @@ Build a task from three choices:
 4. Save the document.
 5. Click **Dry Run**. Do this before you enable the task — see below.
 6. Set `enabled`, then save again.
+
+The save checks more than required fields. It refuses a Crema doctype as
+`source_doctype`, trial-runs `source_filters` so a broken filter fails at save time
+rather than at 3am, validates every `notify_to` address, and warns — orange, without
+blocking the save — when the interface's isolation user cannot read
+`source_doctype`.
 
 ## Dry Run
 
@@ -59,7 +75,11 @@ Use it to correct the `instruction` before the task runs on its own. A Dry Run s
 the plan it settles on, so the next real run uses the plan you looked at.
 
 Dry Run always ignores `incremental`, so it shows records even directly after a real
-run.
+run. It needs the `System Manager` role, and allows 20 calls per hour per client IP.
+
+**Run Now**, beside Dry Run, queues one real run immediately. It uses the same code
+path as the scheduler — always a background job, never an inline run — and needs the
+`System Manager` role too.
 
 ## Sources
 
@@ -73,24 +93,37 @@ not.
 
 The task reads records of `source_doctype` that match `source_filters`.
 
-The **isolation user** of the interface reads these records. A record that user
-cannot read is never sent to the model. Fields above permission level 0, and password
-fields, are never sent.
+The **isolation user** of the interface reads these records. The query never
+returns a record that user cannot read, so the model never sees it. The query also
+skips fields above permission level 0 and password fields.
 
 The query reads the record's own fields only. It does not read child tables (the
 item lines of an invoice, for example), attachments, or comments.
 
-Keep `incremental` on when the task processes changes. A run then reads only records
-changed since the last run, and skips records the task itself last changed.
+When the interface's `enable_prompt_scan` is on, the run also scans each record on
+its own before the batch goes to the model, and drops any record the scan flags.
+`last_result` counts the drops — `(2 skipped by the security scan)`.
+
+A run that finds no records stops before any LLM call, records `Success`, and
+stores `no new records` in `last_result`. A quiet night costs nothing, and does not
+count toward the five failures.
+
+Keep `incremental` on when the task processes changes. A run then reads only
+records changed since the last run. It skips records whose last change came from
+the interface's isolation user — the task's own writes, and the writes of any other
+task that shares that isolation user.
 
 Turn `incremental` off when the task reports a snapshot — for example, all overdue
 invoices today. Every run then sends every matching record to the model again, and
 you pay for all of them again. Set `source_limit` higher than the number of matching
-records: a snapshot run does not continue where the last run stopped.
+records: a snapshot run always reads the oldest matching records first, does not
+continue where the last run stopped, and so never reaches records past the cap.
 
-A run reads at most `source_limit` records, oldest first. If more records match, the
-task moves its marker to the last record it read, so the next run continues from
-there. `last_result` shows how many records the run handled.
+A run reads at most `source_limit` records, oldest first. A capped **incremental,
+scheduled** run moves its watermark (`last_run`) back to the last record it read, so
+the next run continues the backlog from there. Only that combination rewinds: a
+rewind re-arms the schedule at the next 15-minute tick, which is the point for a
+capped backlog — but it would make any other kind of run repeat, and pay, forever.
 
 ## Actions
 
@@ -102,10 +135,10 @@ creates records.
 ### Update Source Records
 
 The task writes new values onto the records the query read. It never creates a
-record. It can only change a record the query returned in the same run — a record the
-model names but the query did not return is skipped.
+record. It can only change a record the query returned in the same run — the system
+skips a record the model names but the query did not return.
 
-This action needs a Document Query source. `target_doctype` is set to
+This action needs a Document Query source. The system sets `target_doctype` to
 `source_doctype` for you.
 
 ### Report Only
@@ -119,12 +152,14 @@ also email the answer after each successful run.
 ### Schedule
 
 The scheduler ticks every 15 minutes. A `schedule` set finer than 15 minutes still
-runs once per tick, not more often.
+runs once per tick, not more often. The tick queues each due task once — it never
+double-queues a task that is already waiting or running.
 
 ### Document Event
 
 The task runs when a record of `source_doctype` is created, updated, or submitted,
-and it runs on that one record. This trigger needs a Document Query source.
+and it runs on that one record — `incremental` has no effect here. This trigger
+needs a Document Query source.
 
 A task never triggers itself: while a task runs, no document it writes starts another
 task run.
@@ -133,27 +168,40 @@ task run.
 
 The first run of a writing task has no stored plan. The system writes one: an
 extraction prompt, and a mapping from the source to the target doctype's fields. The
-system checks every doctype name and field name in the plan against the site's own
-metadata before it stores the plan. A plan that names an unknown field or doctype is
-rejected.
+mapping may include one child table — the item lines of an invoice, for example —
+with one child row per extracted row.
+
+A plan is parameters, never code. The system accepts only the keys it knows, so a
+plan cannot smuggle in a script. It also checks every doctype name and field name in
+the plan against the site's own metadata before it stores the plan. The system
+rejects a plan that names an unknown key, field, or doctype.
 
 Every run after the first reuses the stored plan. The system does not plan again,
 unless a run fails. After a failure, the system plans once more, with the failure
 message added, then gives up if that also fails.
 
 Change the instruction, the source, the target, or the action, and the system drops
-the stored plan. The next run writes a new one.
+the stored plan. The system also drops a stored plan that no longer validates —
+after a doctype change, for example. The next run writes a new one.
 
 ## Limits
 
 - The task turns itself off after 5 runs in a row fail.
 - `target_doctype` is the only doctype a task can write to. The plan cannot name a
   different one.
-- `source_url`, `source_doctype`, and `source_filters` are set by a System Manager.
+- Only a System Manager sets `source_url`, `source_doctype`, and `source_filters`.
   The LLM never supplies a URL, a doctype, or a filter.
-- A run that fails part way through keeps the records it already wrote. The retry
-  skips a record whose values are already correct, so no record is written twice.
-  `last_run` still moves forward.
+- A run that fails part way through keeps the records it already wrote. For a record
+  without child-table rows, the retry skips it when its values are already correct,
+  so the task does not write it twice. The task writes a record with child-table
+  rows again on every retry. `last_run` still moves forward.
+- The system skips an extracted row whose match value is empty, or is a list or an
+  object — an extracted value can never smuggle a filter operator into the record
+  lookup. On an update, extracted values can never change which record the task
+  writes to: the system strips `name` from the values before the update.
+- Content caps: the planner sees the first 8,000 characters of the source, and the
+  extractor the first 60,000. `last_result` holds at most 20,000 characters, and
+  `last_error` 2,000.
 - A task keeps only the result of its last run. For the record of each LLM call, see
   the Crema Log.
 

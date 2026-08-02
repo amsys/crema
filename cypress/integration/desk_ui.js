@@ -498,7 +498,7 @@ context("Crema Settings", () => {
 		cy.visit("/app/crema-settings");
 	});
 
-	// The Model Assignments grid always shows exactly one row per interfaces.names()
+	// The Use Cases grid always shows exactly one row per interfaces.names()
 	// (core PREDEFINED + whatever installed apps register via the crema_interfaces
 	// hook), seeded at install/migrate, none addable or removable (crema_settings.js
 	// sets grid.df.cannot_add_rows / cannot_delete_rows). Counted live rather than

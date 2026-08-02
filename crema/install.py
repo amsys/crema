@@ -73,19 +73,29 @@ def sync_interfaces() -> None:
 
 
 _DASHBOARD_CARDS = [
-    {"name": "Crema Calls", "function": "Count", "filters_json": "[]"},
+    {"name": "Calls", "function": "Count", "filters_json": "[]"},
     {
-        "name": "Crema Cost (USD)",
+        "name": "Spend",
         "function": "Sum",
         "aggregate_function_based_on": "cost_usd",
         "filters_json": "[]",
     },
     {
-        "name": "Crema Blocked",
+        "name": "Blocked",
         "function": "Count",
         "filters_json": '[["Crema Log","status","=","Blocked"]]',
     },
 ]
+
+# A Number Card's name *is* its label (Number Card.autoname), and the workspace points at
+# these by name, so dropping the "Crema " prefix is a rename of a live record — not a
+# relabel. Without this pass an already-installed site keeps the old cards and renders
+# three empty slots. Safe to leave in place: it is a no-op once every site has migrated.
+_RENAMED_DASHBOARD_CARDS = {
+    "Crema Calls": "Calls",
+    "Crema Cost (USD)": "Spend",
+    "Crema Blocked": "Blocked",
+}
 
 
 def sync_dashboard() -> None:
@@ -95,6 +105,11 @@ def sync_dashboard() -> None:
     a rolling window belongs to the Crema Usage report's date filters, not here. A
     Number Card is a real DocType record — there is nothing to seed from a fixtures
     export here, so this mirrors sync_interfaces' pattern instead."""
+    for old, new in _RENAMED_DASHBOARD_CARDS.items():
+        if frappe.db.exists("Number Card", old) and not frappe.db.exists("Number Card", new):
+            frappe.rename_doc("Number Card", old, new, force=True)
+            frappe.db.set_value("Number Card", new, "label", new)
+
     for card in _DASHBOARD_CARDS:
         if frappe.db.exists("Number Card", card["name"]):
             continue

@@ -25,10 +25,10 @@ chatbot on top is explicitly out of scope — see [ROADMAP.md](ROADMAP.md).
 1. **Add a provider.** Open **Crema Settings** (Crema's default landing page), click
    **New from Template** in the Providers panel, pick a preset, paste your API key,
    and create — this wizard also sets it as the default provider.
-2. **Set the default model.** Pick a **Default Model** above the Model Assignments
-   grid. A **Default Isolation User** is already filled in (install creates one for
+2. **Set the default model.** Pick a **Default Model** above the Use Cases
+   grid. A **Default Runs-As User** is already filled in (install creates one for
    you). Save — every interface now works; the grid stays collapsed unless you open a
-   row to override one interface's provider, model, or isolation user individually.
+   row to override one interface's provider, model, or Runs As user individually.
 3. **Call it:**
 
    ```python
@@ -40,18 +40,21 @@ See [docs/](docs/README.md) for full setup, usage, and automation guides.
 
 ## Desk UI
 
-A robot button on every list view and every form, plus `Ask …` in the awesomebar.
-Runs as the signed-in user, never a service account.
+A robot button on list views and on forms you may edit, plus `Ask …` in the search
+bar (the awesomebar). Your request runs under your own session. Document and file
+access inside a server call runs as the interface's isolation user — see
+[docs/security.md](docs/security.md).
 
 - **List → view.** Type a request to filter, sort, limit, group, or switch to Report or
-  Kanban. If the result is empty, one more database query finds which text field holds
-  your words and filters on that — no second model call.
+  Kanban. If the result is empty and the request was a single text lookup, one more
+  database query probes up to eight readable text fields to find which one holds your
+  words — no second model call.
 - **List → records.** Drop a document to get one or more prefilled new records (the
   model decides how many).
 - **Form → diff.** Type an instruction to get a proposed diff for the open document.
 
-Nothing is written until you save it. A blocked prompt, a budget cap, or any other
-failure surfaces as a message — never a silent no-op.
+Crema writes nothing until you save the result. A blocked prompt, an exceeded
+monthly budget, or any other failure surfaces as a message — never a silent no-op.
 
 ## Interfaces
 
@@ -80,10 +83,13 @@ failure surfaces as a message — never a silent no-op.
   overridden.
 - **Three security layers** — a local regex/unicode prompt scan, an optional LLM guard
   that classifies risk, and an output-trap nonce that catches a hijacked response.
-- **Isolation user sandbox** — document access runs under a fenced, low-privilege
-  Frappe user; Frappe's own permission engine enforces it, not Crema's.
-- **OCR** for images, scanned PDFs, and text PDFs, with a confidence score and
-  automatic escalation to a stronger model.
+- **Isolation user sandbox** — document access inside a call runs as a dedicated
+  low-privilege Frappe user, the isolation user; Frappe's own permission engine
+  enforces it, not Crema's.
+- **OCR** for images, scanned PDFs, and text PDFs, with a confidence score. A
+  low-confidence result escalates to the `advanced_ocr` interface — when that
+  interface resolves to a different provider or model than `ocr` (see
+  [docs/configure.md](docs/configure.md)).
 - **Transcription** — `transcribe()` turns an audio file into text, with the same
   budget checks and audit log as every other call.
 - **Propose, never write** — `extract()` proposes one or more new documents from a
@@ -96,17 +102,18 @@ failure surfaces as a message — never a silent no-op.
   data, never code.
 - **Health probe** — `health()` and `is_configured()` let a consuming app show its own
   status page; the caller applies its own role check.
-- **Cost control and audit** — an optional monthly USD budget per interface and per
-  provider, response caching per interface or per call, a usage dashboard, and a full
-  audit log: interface, model, user, status, duration, tokens, cost, and a prompt
-  hash — never the prompt or document content itself.
-- **HTTP endpoints** for `ask`, `extract`, and `transform`, rate-limited per IP and per
-  user.
-- **Admin in one place** — Crema Settings holds the providers (a template wizard for
-  OpenAI, OpenRouter, Groq, Mistral, DeepSeek, or Ollama, with live model autocomplete
-  and connection checks) and the per-interface model assignments; a default provider,
-  model, and isolation user cover every interface out of the box. A Desk workspace
-  adds the doctypes and the usage report.
+- **Cost control and audit** — an optional monthly budget per interface and per
+  provider, response caching per interface or per call, and a usage dashboard. Every
+  call writes an audit row: interface, model, user, status, duration, tokens, cost,
+  and a request hash — never the prompt or document content itself.
+- **HTTP endpoints** for `ask`, `extract`, and `transform`, rate-limited per IP and
+  per user, plus System-Manager utility endpoints (see
+  [docs/use.md](docs/use.md)).
+- **Admin in one place** — Crema Settings holds the providers and the per-interface
+  model assignments. A template wizard creates a provider for OpenAI, OpenRouter,
+  Groq, Mistral, DeepSeek, or Ollama, with live model autocomplete and connection
+  checks. A default provider, model, and isolation user cover every interface out of
+  the box. A Desk workspace adds the doctypes and the usage report.
 
 ## Requirements
 

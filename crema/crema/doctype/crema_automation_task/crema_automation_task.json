@@ -6,7 +6,14 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "status_html",
+  "section_status",
+  "last_status",
+  "next_run",
+  "last_run",
+  "last_result",
+  "column_break_status",
+  "consecutive_failures",
+  "last_error",
   "section_basic",
   "task_name",
   "enabled",
@@ -31,21 +38,13 @@
   "target_doctype",
   "notify_to",
   "section_plan",
-  "plan_json",
-  "section_status",
-  "last_run",
-  "last_status",
-  "last_result",
-  "column_break_status",
-  "consecutive_failures",
-  "last_error"
+  "plan_target_doctype",
+  "plan_match_fields",
+  "plan_field_map",
+  "plan_prompt",
+  "plan_json"
  ],
  "fields": [
-  {
-   "fieldname": "status_html",
-   "fieldtype": "HTML",
-   "label": "Status"
-  },
   {
    "fieldname": "section_basic",
    "fieldtype": "Section Break"
@@ -71,7 +70,7 @@
   },
   {
    "default": "Schedule",
-   "description": "<b>Schedule</b> runs on a cron expression. <b>Document Event</b> runs when a record of the source doctype is created, updated or submitted — it requires the Document Query source, and runs on that one record.",
+   "description": "<b>Schedule</b> — run at set times. <b>Document Event</b> — run each time a record is created, changed, or submitted. Document Event needs the Document Query source, and works on that one record.",
    "fieldname": "trigger",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -81,23 +80,23 @@
   },
   {
    "depends_on": "eval:doc.trigger==\"Schedule\"",
-   "description": "Leave empty (or pick Custom) to write the cron expression yourself.",
+   "description": "Pick how often this task runs. Choose Custom (or leave this empty) to write the timing yourself in the field below.",
    "fieldname": "schedule_preset",
    "fieldtype": "Select",
-   "label": "Schedule",
+   "label": "How Often",
    "options": "\nEvery 15 minutes\nHourly\nDaily 03:00\nWeekly (Mon 03:00)\nCustom"
   },
   {
    "depends_on": "eval:doc.trigger==\"Schedule\" && (!doc.schedule_preset || doc.schedule_preset==\"Custom\")",
-   "description": "Cron expression, e.g. <code>0 3 * * *</code>. The scheduler ticks every 15 minutes, so that is the effective granularity floor — anything finer still runs at most once per tick. Filled from the preset unless the preset is Custom.",
+   "description": "A cron expression, for example <code>0 3 * * *</code> for 03:00 every day. Crema checks for due tasks every 15 minutes, so a task set to run more often than that still runs only once per check. The box above fills this in unless you pick Custom.",
    "fieldname": "schedule",
    "fieldtype": "Data",
-   "label": "Schedule (cron)",
+   "label": "Custom Schedule (cron)",
    "mandatory_depends_on": "eval:doc.trigger==\"Schedule\" && (!doc.schedule_preset || doc.schedule_preset==\"Custom\")"
   },
   {
    "depends_on": "eval:doc.trigger==\"Document Event\"",
-   "description": "The document lifecycle event on the source doctype that runs this task.",
+   "description": "Which change to a record starts this task: when one is created, changed, or submitted.",
    "fieldname": "event",
    "fieldtype": "Select",
    "label": "Event",
@@ -111,7 +110,7 @@
   },
   {
    "default": "URL",
-   "description": "Where the task reads from. Both source types are entered by a System Manager — the LLM never supplies a URL, a doctype or a filter.",
+   "description": "Where this task reads from: a web address, or records already on this site. You choose the source yourself — the AI never picks one.",
    "fieldname": "source_type",
    "fieldtype": "Select",
    "label": "Source Type",
@@ -120,7 +119,7 @@
   },
   {
    "depends_on": "eval:doc.source_type==\"URL\"",
-   "description": "The only URL this task ever fetches. Admin-entered — never supplied by the LLM.",
+   "description": "The only address this task ever downloads. You set it here — the AI can never point the task somewhere else.",
    "fieldname": "source_url",
    "fieldtype": "Data",
    "label": "Source URL",
@@ -128,10 +127,10 @@
   },
   {
    "depends_on": "eval:doc.source_type==\"Document Query\"",
-   "description": "Records are read with the interface's isolation user permissions — a document that user cannot read is never seen by the model.",
+   "description": "Which kind of record this task reads. Records are read as the Runs As user set for this use case, so anything that user cannot open is never sent to the AI.",
    "fieldname": "source_doctype",
    "fieldtype": "Link",
-   "label": "Source DocType",
+   "label": "Record Type to Read",
    "link_filters": "[[\"DocType\",\"issingle\",\"=\",0],[\"DocType\",\"istable\",\"=\",0]]",
    "mandatory_depends_on": "eval:doc.source_type==\"Document Query\"",
    "options": "DocType"
@@ -139,10 +138,10 @@
   {
    "default": "[]",
    "depends_on": "eval:doc.source_type==\"Document Query\"",
-   "description": "Admin-entered filters. Click the table to edit them.",
+   "description": "Narrow down which records to read. Click the table to change them. You set these — the AI never adds a filter of its own.",
    "fieldname": "source_filters",
    "fieldtype": "Code",
-   "label": "Source Filters",
+   "label": "Which Records",
    "options": "JSON"
   },
   {
@@ -152,16 +151,15 @@
   {
    "default": "50",
    "depends_on": "eval:doc.source_type==\"Document Query\"",
-   "description": "Most records to read in one run. A run that hits this limit rewinds its watermark, so the rest is picked up on the next run.",
+   "description": "How many records to read at most in one run. If more records match, the task picks up where it stopped on its next run — nothing is skipped.",
    "fieldname": "source_limit",
    "fieldtype": "Int",
-   "label": "Row Limit"
+   "label": "Records Per Run"
   },
   {
    "default": "1",
    "depends_on": "eval:doc.source_type==\"Document Query\" && doc.trigger==\"Schedule\"",
-   "description": "Read only records changed since the last run. Keep this on — without it every run re-bills the model for every matching record.",
-   "default": "1",
+   "description": "Read only records that changed since the last run. Keep this on: with it off, every run sends every matching record to the AI again and you pay for all of them again.",
    "fieldname": "incremental",
    "fieldtype": "Check",
    "label": "Only Changed Records"
@@ -172,15 +170,15 @@
    "label": "Instruction"
   },
   {
-   "description": "One of the fixed interfaces.PREDEFINED names (see crema_automation_task.js — fetched from crema.api.get_interfaces, not hardcoded here).",
+   "description": "Which use case this task runs as. The use case decides the AI provider, the model, the spending limit, and the account the task acts as. Set them up in Crema Settings.",
    "fieldname": "interface",
    "fieldtype": "Autocomplete",
    "in_list_view": 1,
-   "label": "Interface",
+   "label": "Use Case",
    "reqd": 1
   },
   {
-   "description": "Plain-English description of what to read from the source and what to do with it.",
+   "description": "Say in plain English what to take from the source and what to do with it.",
    "fieldname": "instruction",
    "fieldtype": "Text",
    "label": "Instruction",
@@ -192,7 +190,7 @@
   },
   {
    "default": "Upsert Records",
-   "description": "<b>Upsert Records</b> creates or updates records of the target doctype. <b>Update Source Records</b> writes back onto the records the query returned — it never creates. <b>Report Only</b> writes nothing at all.",
+   "description": "<b>Upsert Records</b> — create new records, or update them if they already exist. <b>Update Source Records</b> — change only the records this task read; it never creates one. <b>Report Only</b> — write nothing, just save the answer (and email it, if you want).",
    "fieldname": "action",
    "fieldtype": "Select",
    "label": "Action",
@@ -201,38 +199,81 @@
   },
   {
    "depends_on": "eval:doc.action==\"Upsert Records\"",
-   "description": "The doctype rows are upserted into. It is the fence that stops a self-written plan from writing anywhere else the isolation user can reach. The stored plan is validated against this doctype's meta.",
+   "description": "The only kind of record this task can create or change. Crema checks every run against it, so the task can never write anywhere else.",
    "fieldname": "target_doctype",
    "fieldtype": "Link",
-   "label": "Target DocType",
+   "label": "Record Type to Write",
    "mandatory_depends_on": "eval:doc.action==\"Upsert Records\"",
    "options": "DocType"
   },
   {
    "depends_on": "eval:doc.action==\"Report Only\"",
-   "description": "Comma-separated addresses to email the report to after each successful run. Leave empty to only store it below.",
+   "description": "Email addresses to send the report to after each successful run, separated by commas. Leave empty to only save it on this task.",
    "fieldname": "notify_to",
    "fieldtype": "Small Text",
    "label": "Email Report To"
   },
   {
    "collapsible": 1,
+   "depends_on": "eval:!doc.__islocal && doc.action!=\"Report Only\"",
+   "description": "How this task decided to handle the source. Crema works it out on the first run and reuses it afterwards. It is a set of instructions, never code, and it is rewritten whenever you change what this task reads, writes, or is told to do.",
    "fieldname": "section_plan",
    "fieldtype": "Section Break",
    "label": "Plan"
   },
   {
-   "description": "Written by the planner on the first run and reused after. Parameters only (prompts, schemas, field maps) — never executable content. Clear it to force a replan. Not used by the Report Only action.",
+   "fieldname": "plan_target_doctype",
+   "fieldtype": "Data",
+   "is_virtual": 1,
+   "label": "Creates or Updates",
+   "read_only": 1
+  },
+  {
+   "description": "An existing record with the same value in these fields is updated instead of a new one being created.",
+   "fieldname": "plan_match_fields",
+   "fieldtype": "Data",
+   "is_virtual": 1,
+   "label": "Finds Existing Records By",
+   "read_only": 1
+  },
+  {
+   "fieldname": "plan_field_map",
+   "fieldtype": "Table",
+   "is_virtual": 1,
+   "label": "Field Mapping",
+   "options": "Crema Plan Field",
+   "read_only": 1
+  },
+  {
+   "fieldname": "plan_prompt",
+   "fieldtype": "Small Text",
+   "is_virtual": 1,
+   "label": "What the AI Is Asked to Pull Out",
+   "read_only": 1
+  },
+  {
+   "description": "The full plan as stored. Read-only — clear it only if you want Crema to start over.",
    "fieldname": "plan_json",
    "fieldtype": "Code",
-   "label": "Plan JSON",
+   "label": "Raw Plan (JSON)",
    "options": "JSON",
    "read_only": 1
   },
   {
+   "collapsible": 1,
+   "depends_on": "eval:!doc.__islocal",
    "fieldname": "section_status",
    "fieldtype": "Section Break",
    "label": "Last Run"
+  },
+  {
+   "depends_on": "eval:doc.trigger==\"Schedule\"",
+   "description": "When this task is due to run next. Empty while the task is switched off.",
+   "fieldname": "next_run",
+   "fieldtype": "Datetime",
+   "is_virtual": 1,
+   "label": "Next Run",
+   "read_only": 1
   },
   {
    "fieldname": "last_run",
@@ -250,7 +291,7 @@
    "read_only": 1
   },
   {
-   "description": "What the last run did: a row count for a writing action, or the report text for Report Only.",
+   "description": "What the last run did: how many records it handled, or the report text if this task only reports.",
    "fieldname": "last_result",
    "fieldtype": "Text",
    "label": "Last Result",
@@ -262,7 +303,7 @@
   },
   {
    "default": "0",
-   "description": "Auto-disables the task at 5.",
+   "description": "How many runs failed in a row. Crema switches the task off at 5. A successful run resets this to 0.",
    "fieldname": "consecutive_failures",
    "fieldtype": "Int",
    "label": "Consecutive Failures",

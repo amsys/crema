@@ -28,24 +28,24 @@
  "fields": [
   {
    "columns": 2,
-   "description": "Set by Crema Settings.validate from interfaces.LABELS — never typed by hand.",
+   "description": "The name of this use case. Crema keeps this list up to date for you.",
    "fieldname": "interface_label",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Interface",
+   "label": "Use Case",
    "read_only": 1
   },
   {
-   "description": "The key passed to ask(\"<this>\", ...) etc. Set by Crema Settings.validate from interfaces.names() — never typed by hand.",
+   "description": "The short name used when calling Crema from code. Crema fills this in for you.",
    "fieldname": "interface",
    "fieldtype": "Data",
-   "label": "Interface Key",
+   "label": "Use Case Key",
    "read_only": 1,
    "reqd": 1
   },
   {
    "columns": 2,
-   "description": "Blank uses Crema Settings' Default Provider; if that's blank too, this interface falls back per interfaces.fallback_for(). An effective provider (this or the default) requires an effective isolation user (this row's or the default's) — see CremaSettings.validate.",
+   "description": "Which AI service answers for this use case. Leave empty to use the Default Provider set above.",
    "fieldname": "provider",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -54,7 +54,7 @@
   },
   {
    "columns": 2,
-   "description": "Blank uses Crema Settings' Default Model. Greyed out until this row's own Provider is selected — model list is fetched from that provider.",
+   "description": "Which model to use. Leave empty to use the Default Model set above. You can only pick one once this row has its own Provider, because the list comes from that provider.",
    "fieldname": "model",
    "fieldtype": "Autocomplete",
    "in_list_view": 1,
@@ -62,7 +62,7 @@
   },
   {
    "columns": 2,
-   "description": "Spend this calendar month against this row's effective budget (own, else Crema Settings' Default Monthly Budget). Never stored — painted client-side from crema.api.get_usage on every grid refresh.",
+   "description": "What this use case has cost so far this month, against its spending limit. Shown live — never saved.",
    "fieldname": "usage",
    "fieldtype": "Data",
    "in_list_view": 1,
@@ -75,15 +75,15 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "Sandbox identity — must not be Administrator. All document access during this interface's calls is fenced by this user's roles and User Permissions. Blank uses Crema Settings' Default Isolation User.",
+   "description": "The account Crema acts as for this use case. It can only read and write what that account is allowed to. Give it as little access as the job needs. It cannot be Administrator or a System Manager. Leave empty to use the Default Runs-As User set above.",
    "fieldname": "isolation_user",
    "fieldtype": "Link",
-   "label": "Isolation User",
+   "label": "Runs As",
    "options": "User"
   },
   {
    "default": "0",
-   "description": "This interface's spend this calendar month, summed from Crema Log.cost_usd. 0 = unlimited. A call that would exceed this is blocked before the provider is called.",
+   "description": "The most this use case may spend per calendar month. 0 means no limit of its own — the Default Monthly Limit applies instead. A request that would go over is stopped before the AI service is called.",
    "fieldname": "monthly_budget_usd",
    "fieldtype": "Currency",
    "label": "Monthly Budget (USD)"
@@ -92,33 +92,34 @@
    "default": "0",
    "fieldname": "temperature",
    "fieldtype": "Float",
-   "label": "Temperature"
+   "label": "Creativity",
+   "description": "0 gives the steadiest, most repeatable answers. Higher values let the model vary its wording. Leave at 0 unless you want variety."
   },
   {
    "default": "0",
-   "description": "Caps the response length passed to the provider. 0 = provider default (unset).",
+   "description": "The most the model may write back. 0 lets the AI service use its own limit.",
    "fieldname": "max_tokens",
    "fieldtype": "Int",
-   "label": "Max Tokens"
+   "label": "Longest Answer"
   },
   {
    "default": "0",
-   "description": "Response cache TTL in seconds. 0 disables response caching.",
+   "description": "Remember an answer and reuse it for the same request during this time, at no extra cost. 0 asks the AI fresh every time.",
    "fieldname": "cache_ttl",
    "fieldtype": "Int",
-   "label": "Cache TTL (seconds)"
+   "label": "Reuse Answers For (seconds)"
   },
   {
    "fieldname": "section_security",
    "fieldtype": "Section Break",
-   "label": "Security"
+   "label": "Safety Checks"
   },
   {
    "default": "1",
-   "description": "Layer 1: regex/unicode prompt scan, always local, never calls an LLM.",
+   "description": "Check the text for known attack patterns before sending it. Runs on this server, costs nothing, and blocks anything suspicious. Keep this on.",
    "fieldname": "enable_prompt_scan",
    "fieldtype": "Check",
-   "label": "Enable Prompt Scan"
+   "label": "Text Scan"
   },
   {
    "fieldname": "column_break_security",
@@ -126,29 +127,29 @@
   },
   {
    "default": "0",
-   "description": "Layer 2: routes the prompt through the 'security' interface for an LLM risk classification. Requires the 'security' interface to be configured (a Provider assigned). Forced off on the 'security' interface itself to avoid recursion.",
+   "description": "Have a second AI read the text first and judge whether it is safe. Slower and costs extra. Needs the Security use case to have a working provider.",
    "fieldname": "enable_llm_guard",
    "fieldtype": "Check",
-   "label": "Enable LLM Guard"
+   "label": "AI Guard"
   },
   {
    "default": "Block",
-   "description": "Layer 3: asks the model to echo a per-call random token, and checks it came back. Off — no token sent, no cost. Log Only — record the miss, return the response anyway. Retry Once — one fresh attempt, then block. Block — a missing or echoed token blocks the call.",
+   "description": "Ask the model to repeat a secret word back, to prove the reply is really its own and was not hijacked. Off — do not check. Log Only — note it and use the reply anyway. Retry Once — try once more, then stop. Block — stop the request.",
    "fieldname": "output_trap",
    "fieldtype": "Select",
-   "label": "Output Trap",
+   "label": "Reply Check",
    "options": "Off\nLog Only\nRetry Once\nBlock"
   },
   {
    "fieldname": "section_prompt",
    "fieldtype": "Section Break",
-   "label": "System Prompt"
+   "label": "Standing Instructions"
   },
   {
-   "description": "Auto-filled from the built-in default for predefined interface names if left empty.",
+   "description": "Background instructions sent with every request for this use case. Leave empty to use Crema's built-in wording.",
    "fieldname": "system_prompt",
    "fieldtype": "Long Text",
-   "label": "System Prompt"
+   "label": "Standing Instructions"
   }
  ],
  "links": [],

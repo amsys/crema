@@ -469,7 +469,8 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, A
     those layers scan text a caller supplies, and there is none here before the
     provider call happens. Every call is still logged to Crema Log and
     budget-checked, same as ask()/ocr(); reuses _ocr_impl._load_bytes for the
-    permission-checked File URL / raw-bytes read rather than duplicating it.
+    File URL / raw-bytes read rather than duplicating it — which means it shares
+    _load_bytes' known private-file permission gap (see docs/security.md).
     """
     cfg = client._resolve("transcribe")
 
@@ -534,7 +535,7 @@ def health(interface: str = "simple", *, live: bool = True) -> dict[str, Any]:
     except CremaConfigError as exc:
         return {
             "configured": False,
-            "ok": False,
+            "ok": None,
             "reachable": None,
             "provider": None,
             "model": None,

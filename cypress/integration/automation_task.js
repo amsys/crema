@@ -34,12 +34,12 @@ context("Crema Automation Task form", () => {
 		}).as("interfaces");
 	});
 
-	it("shows a status pill and the buttons instead of a bare form", () => {
+	it("shows a status indicator and the buttons instead of a bare form", () => {
 		cy.visit(`/app/crema-automation-task/${TASK}`);
 		cy.wait("@interfaces");
-		// Never run yet, and disabled — the panel must say so rather than showing nothing.
-		cy.get('[data-fieldname="status_html"]').should("contain.text", "Never run");
-		cy.get('[data-fieldname="status_html"]').should("contain.text", "No plan yet");
+		// Never run yet, and disabled. The status lives in the page header indicator now
+		// rather than in an HTML field, so that is what has to say so.
+		cy.get(".page-head .indicator-pill").should("contain.text", "Never run");
 		cy.findByRole("button", { name: "Dry Run" }).should("exist");
 		cy.findByRole("button", { name: "Run Now" }).should("exist");
 	});

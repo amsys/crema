@@ -90,6 +90,21 @@ def _prompt_for(interface: str) -> str:
     return (row and row.system_prompt) or interfaces.prompt_for(interface)
 
 
+def _own_security_flags(interface: str) -> dict[str, Any]:
+    """The requested interface's scan/guard/trap settings, read from its own
+    (possibly unconfigured) seeded row — a fallback lends its provider, never its
+    security posture. {} when the name has no row (a synthetic or app name whose
+    row isn't reconciled yet), leaving the fallback row's flags in place."""
+    row = _assignment_row(interface)
+    if row is None:
+        return {}
+    return {
+        "enable_prompt_scan": bool(row.enable_prompt_scan),
+        "enable_llm_guard": bool(row.enable_llm_guard),
+        "output_trap": row.output_trap or "Off",
+    }
+
+
 def _resolve(interface: str) -> dict[str, Any]:
     """Resolve an interface name to a config dict, walking interfaces.fallback_for()
     until a configured interface with an enabled provider is found.
@@ -104,11 +119,15 @@ def _resolve(interface: str) -> dict[str, Any]:
         cfg = _resolve_one(name)
         if cfg is not None:
             if name != interface:
-                # The fallback supplies provider/model/isolation_user only. The
-                # requested interface's prompt is its contract -- view/transform/
-                # extraction emit strict JSON their callers parse, and complex's
-                # generic prompt would yield unparseable prose instead.
-                cfg = {**cfg, "system_prompt": _prompt_for(interface)}
+                # The fallback lends provider/model/isolation_user (and, per
+                # api.health's contract, its billing identity). The requested
+                # interface keeps its own contract: the prompt, because view/
+                # transform/extraction emit strict JSON their callers parse and
+                # complex's generic prompt would yield unparseable prose — and the
+                # scan/guard/trap flags, because a fallback row with weaker
+                # settings must not switch off the requested interface's own
+                # security posture.
+                cfg = {**cfg, "system_prompt": _prompt_for(interface), **_own_security_flags(interface)}
             return cfg
 
         seen.add(name)

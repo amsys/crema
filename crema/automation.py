@@ -260,8 +260,9 @@ def _run_inside(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, str, 
     if not content.strip():
         # The normal state of a quiet incremental task. Left to fall through it would
         # cost two LLM calls, record Failed, and auto-disable the task after five quiet
-        # nights.
-        return "Success", "", None, note or "no new records", None
+        # nights. high_water still propagates: a capped batch whose records were all
+        # dropped by the scan must rewind too, or the backlog behind it is never read.
+        return "Success", "", None, note or "no new records", high_water
 
     if doc.action == "Report Only":
         try:

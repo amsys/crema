@@ -25,23 +25,27 @@ virtual environment sets it automatically when you activate it.
 
 ## What the install step does
 
-The install step creates one role: **Crema User**. It has Desk access, so a user with
-this role can open Desk and use the Crema desk UI (the robot button on a list view, and
-`Ask …` in the awesomebar) alongside System Managers. Give it to any user who should be
-able to call Crema — through the Desk UI, or the HTTP endpoints directly.
+The install step creates one role: **Crema User**. The role has Desk access. A user
+with this role can open Desk and use the Crema desk UI — the robot button on a list
+view, and `Ask …` in the search bar — alongside System Managers. Give the role to any
+user who calls Crema, through the desk UI or through the HTTP endpoints.
 
-The install step also seeds one **Crema Model Assignment** row per predefined
-interface name onto **Crema Settings**, with no provider assigned yet — this is the
-fixed row set the Model Assignments grid shows. `bench migrate` re-runs this seeding
-step, so a name added to a future version of Crema appears without a manual step. It
-also creates the three Number Cards the Crema workspace shows (calls, cost, blocked).
+The install step also seeds one **Crema Model Assignment** row per interface name
+onto **Crema Settings**, with no provider assigned yet. The row set is not fixed: it
+is the predefined interfaces plus any interface another installed app registers
+through the `crema_interfaces` hook (see [configure.md](configure.md)). `bench
+migrate` re-runs this seeding step, so a name added by a future version of Crema, or
+by a newly installed app, appears without a manual step. The install step also
+creates the three Number Cards the Crema workspace shows (calls, cost, blocked).
 
 The install step also creates one Frappe user, `crema@<site>` — enabled, no password
-(it can never log in), holding only the `Crema User` role. It is set as Crema Settings'
-**Default Isolation User** unless that field already has a value. This is the sandbox
-identity every interface uses by default; it exists so setting a Default Provider in
-[configure.md](configure.md) is enough to make Crema usable, without also having to
-create and fence a user by hand first.
+(it can never log in), holding only the `Crema User` role. The seeding step sets it
+as Crema Settings' **Default Runs-As User** unless that field already has a value.
+This is the isolation user every interface uses by default. It exists so that one
+Default Provider in [configure.md](configure.md) makes Crema usable — you do not
+have to create and fence a user by hand first. An isolation user must not be
+`Administrator`, must not hold the `System Manager` role, and must not be a disabled
+user — Crema rejects all three at save time.
 
 The install step does not create a provider, or assign one to an interface. You do
 that yourself. Go to [configure.md](configure.md) next.

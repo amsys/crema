@@ -361,6 +361,23 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertEqual(cfg["interface"], "simple")
         self.assertEqual(cfg["system_prompt"], interfaces.DEFAULT_PROMPTS["translation"])
 
+    def test_fallback_keeps_requested_interface_security_flags(self):
+        """A fallback lends its provider, never its security posture: "translation"'s
+        own scan/trap settings survive the walk to "simple" (whose fixture row has
+        the scan on and the trap off — _ensure_interface defaults in setUpClass).
+        The billing identity stays the fallback's, per api.health's contract."""
+        settings = frappe.get_single("Crema Settings")
+        row = next(r for r in settings.assignments if r.interface == "translation")
+        row.enable_prompt_scan = 0
+        row.output_trap = "Retry Once"
+        settings.save(ignore_permissions=True)
+
+        cfg = client._resolve("translation")
+        self.assertEqual(cfg["interface"], "simple")
+        self.assertEqual(cfg["provider"], TEST_PROVIDER)
+        self.assertFalse(cfg["enable_prompt_scan"])
+        self.assertEqual(cfg["output_trap"], "Retry Once")
+
     # --- defaults ----------------------------------------------------------
 
     def test_blank_row_resolves_through_default_provider_model_and_isolation_user(self):
@@ -990,7 +1007,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             result,
             {
                 "configured": False,
-                "ok": False,
+                "ok": None,
                 "reachable": None,
                 "provider": None,
                 "model": None,

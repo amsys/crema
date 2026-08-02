@@ -79,10 +79,10 @@ function setup_assignments_grid(frm) {
 		usage_pill(usage_cache.interfaces[doc.interface])
 	);
 
-	grid.add_custom_button(__("Reset Assignments"), () => {
+	grid.add_custom_button(__("Reset All Use Cases"), () => {
 		frappe.confirm(
 			__(
-				"Clear every per-row override? All interfaces fall back to the Defaults above. Nothing is saved until you save the form."
+				"Clear every setting on every use case? They all fall back to the Defaults above. Nothing is saved until you save the form."
 			),
 			() => reset_assignments(frm)
 		);
@@ -170,9 +170,9 @@ function render_providers(frm) {
 							</tr>`
 						)
 						.join("")
-				: `<tr><td colspan="5" class="text-muted">${__("No providers yet.")}</td></tr>`;
+				: `<tr><td colspan="5" class="text-muted">${__("No AI services yet.")}</td></tr>`;
 			$table.html(`<table class="table table-bordered">
-				<thead><tr><th>${__("Provider")}</th><th>${__("Base URL")}</th><th>${__(
+				<thead><tr><th>${__("Name")}</th><th>${__("Address")}</th><th>${__(
 				"Status"
 			)}</th><th>${__("Connection")}</th><th>${__("Usage")}</th></tr></thead>
 				<tbody>${rows_html}</tbody>
@@ -205,7 +205,7 @@ function render_providers(frm) {
 			});
 		})
 		.catch(() => {
-			$table.html(`<div class="text-danger">${__("Could not load providers.")}</div>`);
+			$table.html(`<div class="text-danger">${__("Could not load the AI services.")}</div>`);
 		});
 }
 

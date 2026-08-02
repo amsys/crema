@@ -21,14 +21,26 @@ They are reachable from Python code only.
 
 The scan is a local regex and unicode check. It runs before any network call. It
 reads the prompt, the context, and any `history` turns together, because an attack
-can split its wording across the fields. The scan works in two passes. First it
-checks the raw text for invisible, bidirectional, and control characters — a soft
-hyphen or a right-to-left override blocks on its own. Then it normalizes the text
-(NFKC) and matches it against the injection patterns, so the patterns catch a
-fullwidth or other compatibility spelling of an attack phrase the same as its plain
-ASCII form. A long unbroken base64-like run also blocks: it can hide an instruction
-from the patterns. The scan blocks a call outright when it finds a match. This is a
-fail-closed check: the scan blocks an unclear case, it never passes one through.
+can split its wording across the fields.
+
+First the scan checks the raw text for invisible, bidirectional, and control
+characters — a soft hyphen or a right-to-left override blocks on its own. Then it
+makes the text canonical in four steps, and matches the canonical text against the
+injection patterns:
+
+1. It removes the invisible characters that are permitted, so a word split by a
+   zero-width joiner becomes one word again.
+2. It repairs damaged text, so a phrase that was decoded with the wrong character set
+   reads correctly again.
+3. It normalizes the text (NFKC), so a fullwidth or other compatibility spelling
+   matches the same as its plain form.
+4. It changes the text to lowercase ASCII, so a Cyrillic or Greek letter that stands in
+   for a Latin letter matches the same as the Latin letter.
+
+A long unbroken base64-like run also blocks: it can hide an instruction from the
+patterns. This check reads the raw text, not the canonical text. The scan blocks a call
+outright when it finds a match. This is a fail-closed check: the scan blocks an unclear
+case, it never passes one through.
 
 Turn the scan off per interface with `enable_prompt_scan` (**Text Scan** in the desk).
 It is on by default.
@@ -225,9 +237,12 @@ error log.
   They do not check whether the isolation user could read that File document through
   Frappe's own permission check. The `ask(files=[...])` path does run this check
   correctly. This is a known gap, not yet fixed.
-- The scan's NFKC normalization does not fold homoglyphs — a Cyrillic "о" standing in
-  for a Latin "o" still evades every pattern. That needs a confusables table, which
-  Crema does not have.
+- The scan folds many, but not all, look-alike letters. It changes each letter to the
+  Latin letters that give its sound, not to the Latin letter it looks like. The two
+  agree for most look-alikes, but not for all of them: the Cyrillic letter "es" looks
+  like a Latin "c" but gives "s", and the Cyrillic letter "er" looks like a Latin "p"
+  but gives "r". A word spelled with one of these letters still evades every pattern.
+  To close this needs a confusables table, which Crema does not have.
 - The output trap depends on the model actually following the instruction to echo the
   token. A model that drops it on ordinary replies produces a false block on
   `output_trap = Block`. There is no way to tell that apart from a real hijack
@@ -238,6 +253,6 @@ error log.
 1. Open `crema/security.py`.
 2. Append a `(compiled_regex, reason)` tuple to `_INJECTION_PATTERNS`. Use the flags
    `re.I | re.S` — a line break inside a pattern's gap can defeat a pattern that
-   lacks `re.S`. Patterns match text AFTER NFKC normalization, so write them against
-   the normalized (plain ASCII-ish) spelling of the phrase, not a fullwidth one.
+   lacks `re.S`. Patterns match the canonical text, so write them in plain lowercase
+   ASCII: not a fullwidth spelling, and not a spelling with look-alike letters.
 3. Add a matching case to the `CASES` table in `crema/test_security.py`.

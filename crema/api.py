@@ -751,3 +751,23 @@ def run_automation_now(task: str) -> str:
     from crema import automation
 
     return automation.enqueue_task(task)
+
+
+@frappe.whitelist()
+@rate_limit(limit=20, seconds=3600)
+def dry_run_automation(task: str) -> dict:
+    """ "Dry Run" on a Crema Automation Task — reads the source, plans, extracts, and
+    stops before any write. Runs inline (unlike run_automation_now, which enqueues)
+    because the caller is waiting on the result; `@rate_limit` is what bounds that, since
+    there is no enqueue-dedup to collapse repeats.
+    """
+    frappe.only_for("System Manager")
+    if not frappe.db.exists("Crema Automation Task", task):
+        frappe.throw(f"No Crema Automation Task named '{task}'")
+
+    from crema import automation
+
+    try:
+        return automation.dry_run(task)
+    except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
+        return _error_response(exc)

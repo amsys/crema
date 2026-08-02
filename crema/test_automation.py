@@ -184,7 +184,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
         self.assertEqual(status, "Failed")
         task.reload()
-        self.assertIn("fetch failed", task.last_error)
+        self.assertIn("source read failed", task.last_error)
 
     # --- first run: plan + upsert ----------------------------------------
 
@@ -523,6 +523,18 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
         self.assertEqual(frappe.db.count("ToDo"), before)
 
+    def test_upsert_skips_a_row_whose_match_value_is_not_a_scalar(self):
+        """frappe reads a list filter value as ["operator", ...] — an extracted row could
+        smuggle ["like", "%"] into the match filter and hit an arbitrary record instead
+        of one equal to the extracted value."""
+        mapping = {"doctype": "ToDo", "match_fields": ["description"], "field_map": {"text": "description"}}
+        before = frappe.db.count("ToDo")
+
+        counts = automation._upsert(mapping, [{"text": ["like", "%"]}])
+
+        self.assertEqual(counts["skipped"], 1)
+        self.assertEqual(frappe.db.count("ToDo"), before)
+
     def test_upsert_child_does_nothing_when_the_row_has_no_mapped_values(self):
         doc = frappe.new_doc("Contact")
         doc.first_name = f"_test_crema_child_{uuid.uuid4().hex[:8]}"
@@ -581,6 +593,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
         enqueue.assert_called_once_with(
             "crema.automation.run_task",
             task=task.name,
+            doc_name=None,
             queue="long",
             timeout=1800,
             job_id=f"crema-task-{task.name}",
@@ -665,3 +678,364 @@ class IntegrationTestCremaAutomationAskBoundary(CremaFixtureTestCase):
         self.assertEqual(status, "Success")
         log = frappe.get_last_doc("Crema Log", filters={"interface": TEST_INTERFACE, "status": "Success"})
         self.assertEqual(log.provider, TEST_PROVIDER)
+
+
+# ---------------------------------------------------------------------------
+# Document Query sources, the three actions, and the new triggers
+# ---------------------------------------------------------------------------
+
+
+def _make_query_task(**kw):
+    """A task whose source is a document query rather than a URL."""
+    doc = frappe.new_doc("Crema Automation Task")
+    doc.task_name = kw.pop("task_name", f"_test_crema_query_{uuid.uuid4().hex[:8]}")
+    doc.enabled = kw.pop("enabled", 1)
+    doc.source_type = "Document Query"
+    doc.source_doctype = kw.pop("source_doctype", "ToDo")
+    doc.source_filters = kw.pop("source_filters", "[]")
+    doc.source_limit = kw.pop("source_limit", 50)
+    doc.incremental = kw.pop("incremental", 0)
+    doc.schedule = kw.pop("schedule", "0 3 * * *")
+    doc.instruction = kw.pop("instruction", "Set a priority on every record.")
+    doc.interface = kw.pop("interface", TEST_INTERFACE)
+    doc.action = kw.pop("action", "Update Source Records")
+    doc.target_doctype = kw.pop("target_doctype", "ToDo")
+    doc.plan_json = kw.pop("plan_json", None)
+    for fieldname, value in kw.items():
+        setattr(doc, fieldname, value)
+    doc.insert(ignore_permissions=True)
+    return doc
+
+
+def _run_query(task: str, ask_results: list):
+    """run_task with canned LLM answers and no HTTP patch — a document source makes no
+    outbound request at all."""
+    with patch("crema.api.ask_json", side_effect=ask_results) as ask_json, patch("frappe.db.commit"):
+        status = automation.run_task(task)
+    return status, ask_json
+
+
+def _update_plan() -> dict:
+    return {
+        "version": 1,
+        "extract": {"prompt": "Copy each record's name through and choose a priority."},
+        "map": {"doctype": "ToDo", "match_fields": ["name"], "field_map": {"id": "name", "prio": "priority"}},
+    }
+
+
+class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        frappe.set_user("Administrator")
+        _ensure_user(TEST_ISOLATION_USER)
+        _ensure_provider()
+        _ensure_interface(TEST_INTERFACE, enable_prompt_scan=False)
+        frappe.db.commit()
+
+    def setUp(self) -> None:
+        super().setUp()
+        frappe.set_user("Administrator")
+
+    def _todo(self, description: str, **kw) -> str:
+        """A ToDo the isolation user can actually see — ToDo's has_permission hook only
+        lets a non-System-Manager touch rows allocated to them."""
+        doc = frappe.get_doc(
+            {
+                "doctype": "ToDo",
+                "description": description,
+                "allocated_to": TEST_ISOLATION_USER,
+                "priority": "Low",
+                **kw,
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    # --- source: document query -----------------------------------------
+
+    def test_document_query_never_sends_permlevel_or_underscore_fields(self):
+        """_source_fields is explicit rather than ["*"], because frappe skips permlevel
+        filtering entirely for CORE_DOCTYPES — and because _comments is the best
+        injection surface on any record."""
+        fields = automation._source_fields("ToDo")
+        self.assertIn("description", fields)
+        self.assertIn("name", fields)
+        self.assertNotIn("_comments", fields)
+        self.assertNotIn("_assign", fields)
+
+        user_fields = automation._source_fields("User")
+        self.assertNotIn("api_key", user_fields)
+        self.assertNotIn("reset_password_key", user_fields)
+
+    def test_document_query_content_reaches_the_extractor(self):
+        marker = uuid.uuid4().hex[:10]
+        name = self._todo(f"{marker} alpha")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+
+        status, ask_json = _run_query(task.name, [{"rows": [{"id": name, "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        self.assertIn(marker, ask_json.call_args[0][1])
+        self.assertEqual(frappe.db.get_value("ToDo", name, "priority"), "High")
+
+    def test_document_query_is_fenced_by_the_isolation_user(self):
+        """A record the isolation user cannot read is never seen by the model."""
+        marker = uuid.uuid4().hex[:10]
+        self._todo(f"{marker} hidden", allocated_to="Administrator")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+
+        status, ask_json = _run_query(task.name, [{"rows": []}])
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(ask_json.call_count, 0)  # nothing readable -> no LLM call at all
+
+    # --- action: update source ------------------------------------------
+
+    def test_update_source_never_creates_a_record(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo(f"{marker} alpha")
+        before = frappe.db.count("ToDo")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+
+        status, _ = _run_query(task.name, [{"rows": [{"id": "does-not-exist", "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(frappe.db.count("ToDo"), before)
+        task.reload()
+        self.assertIn("1 skipped", task.last_result)
+
+    def test_update_source_ignores_a_record_the_query_did_not_return(self):
+        """allowed_names is the fence: the model naming a record outside the batch — even
+        one it could otherwise reach — must not write to it."""
+        marker = uuid.uuid4().hex[:10]
+        in_batch = self._todo(f"{marker} alpha")
+        outsider = self._todo("_test_outsider", priority="Low")
+        task = _make_query_task(
+            source_filters=frappe.as_json([["description", "like", f"%{marker}%"]]),
+            plan_json=frappe.as_json(_update_plan()),
+        )
+
+        status, _ = _run_query(
+            task.name,
+            [{"rows": [{"id": in_batch, "prio": "High"}, {"id": outsider, "prio": "High"}]}],
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(frappe.db.get_value("ToDo", in_batch, "priority"), "High")
+        self.assertEqual(frappe.db.get_value("ToDo", outsider, "priority"), "Low")
+
+    def test_update_source_plan_must_match_on_name(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo(f"{marker} alpha")
+        bad = _update_plan()
+        bad["map"]["match_fields"] = ["description"]
+        bad["map"]["field_map"] = {"text": "description", "prio": "priority"}
+        task = _make_query_task(plan_json=frappe.as_json(bad))
+
+        # The shape is refused before any extraction call; the replan returns the same
+        # bad shape, so the run fails without ever reaching the extractor.
+        status, ask_json = _run_query(task.name, [bad])
+
+        self.assertEqual(ask_json.call_count, 1)  # the replan only — no extraction paid for
+
+        self.assertEqual(status, "Failed")
+        task.reload()
+        self.assertIn('match on ["name"]', task.last_error)
+
+    def test_a_row_key_mapped_onto_name_never_overwrites_another_record(self):
+        """`name` validates as a field so an update-source plan can match on it. _upsert
+        must still never WRITE it: doc.update({"name": ...}) mutates self.name, and
+        db_update would then write this document's values onto that other row."""
+        marker = uuid.uuid4().hex[:10]
+        target = self._todo(f"{marker} alpha")
+        victim = self._todo("_test_victim_untouched", priority="Low")
+
+        plan = {
+            "version": 1,
+            "extract": {"prompt": "Extract rows."},
+            "map": {
+                "doctype": "ToDo",
+                "match_fields": ["description"],
+                "field_map": {"text": "description", "id": "name", "prio": "priority"},
+            },
+        }
+        task = _make_query_task(action="Upsert Records", plan_json=frappe.as_json(plan))
+
+        status, _ = _run_query(
+            task.name,
+            [{"rows": [{"text": f"{marker} alpha", "id": victim, "prio": "High"}]}],
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(frappe.db.get_value("ToDo", victim, "priority"), "Low")
+        self.assertEqual(frappe.db.get_value("ToDo", victim, "description"), "_test_victim_untouched")
+        self.assertEqual(frappe.db.get_value("ToDo", target, "priority"), "High")
+
+    def test_a_second_identical_run_writes_nothing(self):
+        """The no-op skip is what stops an incremental update-source task from bumping
+        `modified` on its own rows and re-reading its own output forever."""
+        marker = uuid.uuid4().hex[:10]
+        name = self._todo(f"{marker} alpha")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+        rows = {"rows": [{"id": name, "prio": "High"}]}
+
+        _run_query(task.name, [rows])
+        task.reload()
+        self.assertIn("1 updated", task.last_result)
+
+        _run_query(task.name, [rows])
+        task.reload()
+        self.assertIn("1 unchanged", task.last_result)
+
+    # --- incremental ------------------------------------------------------
+
+    def test_incremental_reads_nothing_and_skips_the_llm_when_nothing_changed(self):
+        """The normal state of a quiet nightly task. Left to fall through it would cost
+        two LLM calls, record Failed, and auto-disable the task after five quiet nights."""
+        marker = uuid.uuid4().hex[:10]
+        self._todo(f"{marker} alpha")
+        task = _make_query_task(incremental=1, plan_json=frappe.as_json(_update_plan()))
+        task.db_set("last_run", now_datetime(), update_modified=False)
+
+        status, ask_json = _run_query(task.name, [])
+
+        self.assertEqual(status, "Success")
+        ask_json.assert_not_called()
+        task.reload()
+        self.assertEqual(task.last_result, "no new records")
+        self.assertEqual(task.consecutive_failures, 0)
+
+    def test_incremental_filters_on_the_previous_run_not_the_new_stamp(self):
+        """db_set assigns in memory before touching the DB, so reading doc.last_run after
+        the stamp would compare against `now` and match nothing, forever."""
+        marker = uuid.uuid4().hex[:10]
+        name = self._todo(f"{marker} alpha")
+        task = _make_query_task(incremental=1, plan_json=frappe.as_json(_update_plan()))
+        task.db_set("last_run", add_to_date(now_datetime(), days=-2), update_modified=False)
+
+        status, ask_json = _run_query(task.name, [{"rows": [{"id": name, "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        self.assertIn(marker, ask_json.call_args[0][1])
+
+    def test_successful_run_leaves_last_run_at_the_run_stamp_not_in_the_past(self):
+        """high_water must stay None for a non-incremental (or uncapped) run. Rewinding
+        last_run to the newest row's `modified` re-arms the cron — tick() walks the
+        schedule from last_run, so the task would be enqueued again on the very next
+        15-minute tick, and a non-incremental task would loop at full LLM cost forever."""
+        name = self._todo("stale row")
+        frappe.db.set_value(
+            "ToDo", name, "modified", add_to_date(now_datetime(), days=-3), update_modified=False
+        )
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))  # incremental off
+        before = now_datetime()
+
+        status, _ = _run_query(task.name, [{"rows": [{"id": name, "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        last_run = frappe.db.get_value("Crema Automation Task", task.name, "last_run")
+        self.assertGreaterEqual(last_run, before)
+
+    def test_capped_incremental_batch_rewinds_the_watermark_to_the_last_row_handled(self):
+        """A full batch means more rows may remain: the watermark moves back to the last
+        row read, so the next tick continues the backlog instead of skipping it."""
+        old = add_to_date(now_datetime(), days=-1)
+        first = self._todo("backlog one")
+        second = self._todo("backlog two")
+        frappe.db.set_value("ToDo", first, "modified", old, update_modified=False)
+        frappe.db.set_value("ToDo", second, "modified", add_to_date(old, minutes=5), update_modified=False)
+        task = _make_query_task(incremental=1, source_limit=1, plan_json=frappe.as_json(_update_plan()))
+        task.db_set("last_run", add_to_date(old, minutes=-10), update_modified=False)
+
+        status, _ = _run_query(task.name, [{"rows": [{"id": first, "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        last_run = frappe.db.get_value("Crema Automation Task", task.name, "last_run")
+        self.assertEqual(last_run, old)
+
+    # --- action: report only ---------------------------------------------
+
+    def test_report_only_writes_nothing_and_stores_the_answer(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo(f"{marker} alpha")
+        before = frappe.db.count("ToDo")
+        task = _make_query_task(action="Report Only")
+
+        with patch("crema.api.ask", return_value="Two items are open.") as ask, patch("frappe.db.commit"):
+            status = automation.run_task(task.name)
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(frappe.db.count("ToDo"), before)
+        task.reload()
+        self.assertEqual(task.last_result, "Two items are open.")
+        self.assertIn(marker, ask.call_args.kwargs["context"])
+        self.assertIsNone(task.plan_json)  # no plan is written or needed
+
+    def test_report_only_emails_when_a_recipient_is_set(self):
+        self._todo(f"{uuid.uuid4().hex[:10]} alpha")
+        task = _make_query_task(action="Report Only", notify_to="ops@example.com")
+
+        with (
+            patch("crema.api.ask", return_value="All clear."),
+            patch("frappe.sendmail") as sendmail,
+            patch("frappe.db.commit"),
+        ):
+            automation.run_task(task.name)
+
+        sendmail.assert_called_once()
+        self.assertEqual(sendmail.call_args.kwargs["recipients"], ["ops@example.com"])
+
+    # --- dry run ----------------------------------------------------------
+
+    def test_dry_run_extracts_without_writing(self):
+        marker = uuid.uuid4().hex[:10]
+        name = self._todo(f"{marker} alpha")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+
+        with patch("crema.api.ask_json", return_value={"rows": [{"id": name, "prio": "High"}]}):
+            result = automation.dry_run(task.name)
+
+        self.assertEqual(result["row_count"], 1)
+        self.assertTrue(result["used_stored_plan"])
+        self.assertEqual(frappe.db.get_value("ToDo", name, "priority"), "Low")  # untouched
+
+    # --- triggers ---------------------------------------------------------
+
+    def test_document_event_task_is_not_enqueued_by_the_cron_tick(self):
+        task = _make_query_task(trigger="Document Event", event="On Update", schedule="* * * * *")
+        with patch("crema.automation.enqueue_task") as enqueue:
+            automation.tick()
+        self.assertNotIn(task.name, [call.args[0] for call in enqueue.call_args_list])
+
+    def test_on_doc_event_enqueues_a_watching_task(self):
+        task = _make_query_task(trigger="Document Event", event="On Update")
+        doc = SimpleNamespace(doctype="ToDo", name="some-todo")
+
+        with patch("crema.automation.enqueue_task") as enqueue:
+            automation.on_doc_event(doc, "on_update")
+        enqueue.assert_called_once_with(task.name, doc_name="some-todo")
+
+        # an event the task does not watch
+        with patch("crema.automation.enqueue_task") as enqueue:
+            automation.on_doc_event(doc, "after_insert")
+        enqueue.assert_not_called()
+
+        # a doctype nobody watches
+        with patch("crema.automation.enqueue_task") as enqueue:
+            automation.on_doc_event(SimpleNamespace(doctype="Note", name="n"), "on_update")
+        enqueue.assert_not_called()
+
+    def test_on_doc_event_is_inert_during_a_run(self):
+        """Without this guard a task writing to the doctype it watches re-triggers itself
+        forever, and every Crema Log row written mid-run fires the handler too."""
+        _make_query_task(trigger="Document Event", event="On Update")
+        doc = SimpleNamespace(doctype="ToDo", name="some-todo")
+
+        frappe.local.crema_in_automation = True
+        try:
+            with patch("crema.automation.enqueue_task") as enqueue:
+                automation.on_doc_event(doc, "on_update")
+        finally:
+            frappe.local.crema_in_automation = False
+        enqueue.assert_not_called()

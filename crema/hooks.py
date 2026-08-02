@@ -144,13 +144,16 @@ after_migrate = ["crema.install.sync_interfaces", "crema.install.sync_dashboard"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+# A wildcard handler, so it runs on every document write on the site. on_doc_event is
+# written to be a flag check plus one dict lookup on a cached map for that reason — see
+# crema/automation.py. A Document Event automation task is the only thing it can act on.
+doc_events = {
+    "*": {
+        "after_insert": "crema.automation.on_doc_event",
+        "on_update": "crema.automation.on_doc_event",
+        "on_submit": "crema.automation.on_doc_event",
+    }
+}
 
 # Scheduled Tasks
 # ---------------

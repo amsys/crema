@@ -89,8 +89,11 @@ failure surfaces as a message — never a silent no-op.
 - **Propose, never write** — `extract()` proposes one or more new documents from a
   file (how many is the model's own call); `transform()` proposes a diff for an
   existing document. Neither writes anything; the caller applies the result.
-- **Scheduled automation** — fetch a URL, self-plan once, extract, upsert, on a cron
-  schedule. The plan is data, never code.
+- **Automation** — a task reads a URL or a permission-fenced query over your own
+  records, self-plans once, and then either upserts records, writes values back onto
+  the records it read, or just reports. It runs on a cron schedule or on a document
+  event, and a Dry Run button shows what it would do before it does it. The plan is
+  data, never code.
 - **Health probe** — `health()` and `is_configured()` let a consuming app show its own
   status page; the caller applies its own role check.
 - **Cost control and audit** — an optional monthly USD budget per interface and per

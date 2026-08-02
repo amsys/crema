@@ -178,10 +178,24 @@ the `System Manager` role or the `Crema User` role.
 | `name` | yes | The document to read and propose a diff for. |
 | `instruction` | yes | |
 
+### `POST /api/method/crema.api.dry_run_automation`
+
+System Manager only. Previews a Crema Automation Task — reads its source, plans, and
+extracts — and stops before any write. Backs the **Dry Run** button; see
+[automation.md](automation.md#dry-run).
+
+| Parameter | Required | Notes |
+|---|---|---|
+| `task` | yes | The Crema Automation Task name. |
+
+Returns `{action, used_stored_plan, plan, rows, row_count, note}`, or
+`{action: "Report Only", report}`. Limited to 20 calls per hour per client IP, and
+uses the same 417 error shape as the endpoints above.
+
 ### Rate limits
 
-Two limits apply to all three endpoints together: 60 calls per hour per client IP,
-and 60 calls per hour per session user. A user's budget is shared across all three.
+Two limits apply to the three endpoints above together: 60 calls per hour per client
+IP, and 60 calls per hour per session user. A user's budget is shared across all three.
 These limits do not apply to a Python caller running in-process (bench console, a
 background job).
 

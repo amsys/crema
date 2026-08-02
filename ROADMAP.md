@@ -157,15 +157,18 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   crema has no equivalent.
 
 - **Layer 1 evasion resistance.** `security.scan` is ordered-list, first-match-wins
-  regex over ~20 literal English phrasings, run once after NFKC normalization. It
-  catches textbook injection phrasing and stops there — a homoglyph, a spaced-out
-  word, or a paraphrase currently reaches layer 2 alone. Ideas below, ordered by value
-  per unit of false-positive risk added; none of this is implemented yet.
+  regex over ~20 literal English phrasings, run once over `_canon`'s output. It
+  catches textbook injection phrasing and stops there — a spaced-out word or a
+  paraphrase currently reaches layer 2 alone. Item 1 below has shipped; items 2-7 have
+  not, and are ordered by value per unit of false-positive risk added.
 
-  1. **Homoglyph folding.** NFKC does not fold a Cyrillic `о` to a Latin `o`, so
-     `іgnore prevіous іnstructions` passes every pattern unchanged. Add a Unicode
-     TR39 confusables-skeleton pass alongside the existing NFKC step — `scan()`'s own
-     docstring already names this as the known remaining gap.
+  1. **Homoglyph folding — shipped, partially.** `_canon` runs `ftfy` → NFKC →
+     `anyascii` → lowercase, so `іgnore prevіous іnstructions` (Cyrillic
+     byelorussian-i), a ZWNJ-split word, and a mojibake'd phrase are all caught now.
+     `anyascii` transliterates phonetically, though, so it only folds a look-alike
+     whose sound matches the letter it resembles: Cyrillic es → `s` not `c`, er → `r`
+     not `p`, ha → `kh` not `x`, u → `u` not `y`. **What remains** is a Unicode TR39
+     confusables-skeleton pass to close that residue.
   2. **Separator squeezing.** `i g n o r e`, `ig-nore`, `i.g.n.o.r.e`, and
      `ignore***previous` all defeat a literal pattern. Re-run the pattern loop over a
      second copy of the text with runs of whitespace/punctuation between letters

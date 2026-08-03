@@ -29,14 +29,14 @@ def execute() -> None:
 
 
 def _restamp_sources() -> None:
-    """Re-stamp the source rows' grid cells for the new columns.
+    """Clear the per-run cap and the two checks on a URL row.
 
-    The Details column became four: Filters, Records Per Run, Only Changed, Attachments.
-    An existing row still holds the old combined summary in `source_note` ("no filters ·
-    50/run · only changed") and, on a URL row, a records-per-run cap it never used — both
-    of which the grid would now display as fact. These are display-only values that
-    CremaAutomationSource.validate regenerates on the next save; this only stops the grid
-    lying in the meantime.
+    The Details column became several of its own, and a URL row still holds a
+    records-per-run cap it never used — which the grid would now display as fact. These are
+    display-only values that CremaAutomationSource.validate regenerates on the next save;
+    this only stops the grid lying in the meantime. (The same pass used to re-stamp a
+    `source_note` column; that field has since been folded into `source_label`, and
+    validate regenerates that one too.)
     """
     source = frappe.qb.DocType("Crema Automation Source")
     (
@@ -44,13 +44,6 @@ def _restamp_sources() -> None:
         .set(source.source_limit, 0)
         .set(source.incremental, 0)
         .set(source.read_attachments, 0)
-        .set(source.source_note, "")
         .where(source.source_type != "Document Query")
         .run()
     )
-
-    for row in frappe.get_all(
-        "Crema Automation Source", filters={"source_type": "Document Query"}, pluck="name"
-    ):
-        doc = frappe.get_doc("Crema Automation Source", row)
-        frappe.db.set_value("Crema Automation Source", row, "source_note", doc._note(), update_modified=False)

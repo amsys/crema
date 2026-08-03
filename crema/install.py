@@ -195,6 +195,9 @@ def sync_example_task() -> None:
     admin who deletes or renames it must not have it come back on the next migrate, and an
     admin who edits it must not have the edit overwritten.
 
+    The recipe is one field now — the Incoming Email trigger — so what is left here is the
+    instruction, and the one filter that trigger does not preset.
+
     Deliberately `No Changes`: an example that shipped enabled, or pointed at a Purchase
     Invoice, would either write records nobody asked for or assume ERPNext is installed.
     It reads, reports, and waits to be pointed somewhere.
@@ -213,16 +216,17 @@ def sync_example_task() -> None:
         {
             "task_name": _EXAMPLE_TASK_NAME,
             "enabled": 0,
-            # On Update, not After Insert: frappe's inbound mail inserts the Communication
-            # and only then attaches the files to it (frappe/email/receive.py), so a task
-            # triggered on the insert would find no attachments.
-            "trigger": "Document Event",
-            "event": "On Update",
+            # The Incoming Email trigger fills in the event and the Communication source
+            # row itself (CremaAutomationTask._apply_email_trigger).
+            "trigger": "Incoming Email",
             "interface": "extraction",
             "instruction": _EXAMPLE_TASK_INSTRUCTION,
             "action": "No Changes",
         }
     )
+    # _apply_email_trigger only seeds a Communication row when there is not one already,
+    # so supplying it here is how the example adds the one filter the trigger does not
+    # preset: an invoice arrives as a file, so messages carrying none are ignored.
     doc.append(
         "sources",
         {

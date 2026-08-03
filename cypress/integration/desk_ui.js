@@ -559,11 +559,11 @@ context("Crema Settings", () => {
 	// sets grid.df.cannot_add_rows / cannot_delete_rows). Counted live rather than
 	// hardcoded, since the app-registered half varies per site.
 	//
-	// get_interfaces() is the narrower list the automation task's Use Case picker
-	// shows — interfaces.selectable(), i.e. names() minus interfaces.INTERNAL. The
-	// grid still carries a row for each of those two, so it is a superset by exactly
-	// that count.
-	const INTERNAL_INTERFACE_COUNT = 2;
+	// get_interfaces() is the narrower list the automation task's AI Profile picker
+	// shows — interfaces.selectable(), i.e. names() minus interfaces.INTERNAL and
+	// minus interfaces.NOT_FOR_TASKS. The grid still carries a row for each of those
+	// four, so it is a superset by exactly that count.
+	const UNSELECTABLE_INTERFACE_COUNT = 4;
 
 	it("shows the full set of model assignment rows with no add/delete affordance", () => {
 		cy.window()
@@ -571,7 +571,7 @@ context("Crema Settings", () => {
 			.then((selectable) => {
 				cy.get('[data-fieldname="assignments"] .grid-row').should(
 					"have.length",
-					selectable.length + INTERNAL_INTERFACE_COUNT
+					selectable.length + UNSELECTABLE_INTERFACE_COUNT
 				);
 			});
 		cy.get('[data-fieldname="assignments"]').within(() => {

@@ -17,6 +17,7 @@
   "section_basic",
   "task_name",
   "enabled",
+  "section_trigger",
   "trigger",
   "column_break_task",
   "schedule_preset",
@@ -63,17 +64,21 @@
    "label": "Enabled"
   },
   {
+   "fieldname": "section_trigger",
+   "fieldtype": "Section Break"
+  },
+  {
    "fieldname": "column_break_task",
    "fieldtype": "Column Break"
   },
   {
    "default": "Schedule",
-   "description": "<b>Schedule</b> — run at set times. <b>Document Event</b> — run each time a record is created, changed, or submitted. Document Event needs a Document Query source, and reads only the record that changed from it. <b>Webhook</b> — run only when another system calls the address below.",
+   "description": "<b>Schedule</b> — run at set times. <b>Document Event</b> — run each time a record is created, changed, or submitted. Document Event needs a Document Query source, and reads only the record that changed from it. <b>Incoming Email</b> — run when a message arrives in a Frappe inbox; Crema adds the source row for you. <b>Webhook</b> — run only when another system calls the address below.",
    "fieldname": "trigger",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Trigger",
-   "options": "Schedule\nDocument Event\nWebhook",
+   "options": "Schedule\nDocument Event\nIncoming Email\nWebhook",
    "reqd": 1
   },
   {
@@ -131,13 +136,12 @@
    "options": "Crema Automation Source"
   },
   {
-   "default": "Skip and Continue",
+   "default": "0",
    "depends_on": "eval:(doc.sources || []).length > 1",
-   "description": "What to do when one source cannot be read, for example a web address that is down. <b>Skip and Continue</b> — run with the sources that did work, and note the failure. <b>Fail the Run</b> — stop and write nothing. Either way, a run where every source failed counts as failed. The sources are read in the order shown, but that order changes nothing.",
+   "description": "Stop the whole run when one source cannot be read, for example a web address that is down. Leave this off to run with the sources that did work and note the failure. Either way, a run where every source failed counts as failed.",
    "fieldname": "on_source_error",
-   "fieldtype": "Select",
-   "label": "If a Source Fails",
-   "options": "Skip and Continue\nFail the Run"
+   "fieldtype": "Check",
+   "label": "Stop if a Source Fails"
   },
   {
    "fieldname": "section_llm",
@@ -145,11 +149,11 @@
    "label": "Instruction"
   },
   {
-   "description": "Which use case this task runs as. The use case decides the AI provider, the model, the spending limit, and the account the task acts as. Set them up in Crema Settings.",
+   "description": "Which AI profile this task runs as. The profile decides the AI provider, the model, the spending limit, and the account the task acts as. Set them up in Crema Settings.",
    "fieldname": "interface",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Use Case",
+   "label": "AI Profile",
    "reqd": 1
   },
   {

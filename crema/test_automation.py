@@ -1060,8 +1060,8 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         with patch("crema.automation._read_documents", side_effect=one_source_is_down):
             status, _ = _run(task.name, [_todo_rows(marker)])
 
-        # Skip and Continue is the default, and one failure out of two sources does not
-        # trip the all-sources-failed rescue.
+        # Stop if a Source Fails is off by default, and one failure out of two sources
+        # does not trip the all-sources-failed rescue.
         self.assertEqual(status, "Success", _last_error(task))
         self.assertIsNotNone(_last_read_of(todo_row))
         self.assertIsNone(_last_read_of(note_row))
@@ -1133,7 +1133,7 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
 
     def test_fail_the_run_refuses_to_work_with_the_sources_that_did_answer(self):
         name = self._todo("alpha")
-        task = self._mixed_task(on_source_error="Fail the Run", plan_json=frappe.as_json(_update_plan()))
+        task = self._mixed_task(on_source_error=1, plan_json=frappe.as_json(_update_plan()))
 
         status, ask_json = _run(
             task.name,
@@ -1281,6 +1281,54 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         finally:
             frappe.local.crema_in_automation = False
         enqueue.assert_not_called()
+
+    def test_incoming_email_seeds_the_communication_source_and_forces_on_update(self):
+        """The trigger is sugar over Document Event: it materialises the row and the event
+        a mail-watching task always needs, so everything downstream sees a plain Document
+        Query. On Update, not After Insert — frappe attaches a message's files after the
+        insert, so an After Insert task would read none of them."""
+        task = _make_task(sources=[], trigger="Incoming Email", action="No Changes")
+
+        self.assertEqual(task.event, "On Update")
+        self.assertEqual(len(task.sources), 1)
+        source = task.sources[0]
+        self.assertEqual(source.source_type, "Document Query")
+        self.assertEqual(source.source_doctype, "Communication")
+        self.assertEqual(frappe.parse_json(source.source_filters), [["sent_or_received", "=", "Received"]])
+        self.assertTrue(source.read_attachments)
+        self.assertEqual(source.source_limit, 5)
+
+    def test_incoming_email_does_not_seed_a_second_row_on_every_save(self):
+        task = _make_task(sources=[], trigger="Incoming Email", action="No Changes")
+        task.instruction = "Something else entirely."
+        task.save(ignore_permissions=True)
+
+        self.assertEqual(len(task.sources), 1)
+
+    def test_incoming_email_keeps_a_communication_source_the_author_supplied(self):
+        """The seed is a default, not an override — the filters an author sets survive."""
+        filters = frappe.as_json([["sent_or_received", "=", "Received"], ["has_attachment", "=", 1]])
+        task = _make_task(
+            sources=[_query_source(source_doctype="Communication", source_filters=filters)],
+            trigger="Incoming Email",
+            action="No Changes",
+        )
+
+        self.assertEqual(len(task.sources), 1)
+        self.assertEqual(len(frappe.parse_json(task.sources[0].source_filters)), 2)
+
+    def test_incoming_email_task_is_wired_into_the_event_map(self):
+        self._reset_event_cache()
+        self.addCleanup(self._reset_event_cache)
+        task = _make_task(sources=[], trigger="Incoming Email", action="No Changes")
+
+        self.assertIn(task.name, automation._event_tasks().get(("Communication", "on_update"), ()))
+
+    def test_incoming_email_task_is_not_enqueued_by_the_cron_tick(self):
+        task = _make_task(sources=[], trigger="Incoming Email", action="No Changes", schedule="* * * * *")
+        with patch("crema.automation.enqueue_task") as enqueue:
+            automation.tick()
+        self.assertNotIn(task.name, [call.args[0] for call in enqueue.call_args_list])
 
     # --- the event map's cache -------------------------------------------
 

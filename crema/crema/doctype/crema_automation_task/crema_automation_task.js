@@ -169,10 +169,10 @@ function crema_render_row_filters(frm, row) {
 	});
 }
 
-// The read-only grid columns. Mirrors CremaAutomationSource._label/_note so the grid
-// updates as the row is edited instead of only after the save; the server stamps the same
-// strings in validate() and is the source of truth. Deliberately untranslated on both
-// sides, so the two never disagree over a saved value.
+// The read-only grid columns. Mirrors CremaAutomationSource._label so the grid updates as
+// the row is edited instead of only after the save; the server stamps the same string in
+// validate() and is the source of truth. Deliberately untranslated on both sides, so the
+// two never disagree over a saved value.
 //
 // The query-only cells are cleared on a URL row for the same reason the server clears
 // them: a grid column's depends_on mutates the shared docfield, so it cannot hide one
@@ -189,15 +189,13 @@ function crema_stamp_row(frm, row) {
 		count = 0;
 	}
 
+	const heading = query
+		? row.source_doctype || ""
+		: (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "");
+
 	set(
 		"source_label",
-		query
-			? row.source_doctype || ""
-			: (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "")
-	);
-	set(
-		"source_note",
-		query ? (count === 0 ? "no filters" : count === 1 ? "1 filter" : `${count} filters`) : ""
+		query && count ? `${heading} · ${count} filter${count > 1 ? "s" : ""}` : heading
 	);
 	if (!query) {
 		set("source_limit", 0);
@@ -242,7 +240,7 @@ frappe.ui.form.on("Crema Automation Task", {
 		});
 	},
 
-	// "If a Source Fails" only means something once there are two sources, and its
+	// "Stop if a Source Fails" only means something once there are two sources, and its
 	// depends_on is not re-evaluated when a grid row is added — without this it appears
 	// only after the next save or field change.
 	sources_add: (frm) => frm.layout.refresh_dependency(),

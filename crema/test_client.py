@@ -792,7 +792,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
 
     def test_get_interfaces_returns_selectable_interfaces_with_labels(self):
         """interfaces.selectable() (PREDEFINED plus every app-registered interface,
-        minus the two internal-only ones) — the set the Automation Task Use Case
+        minus INTERNAL and NOT_FOR_TASKS) — the set the Automation Task AI Profile
         picker may be assigned to — each paired with its interfaces.LABELS label (or
         its raw key for an app-registered interface with no core label)."""
         from crema.api import get_interfaces
@@ -1113,7 +1113,6 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         return doc.file_url
 
     def test_permitted_file_becomes_content_parts(self):
-
         filename = f"_test_crema_{uuid.uuid4().hex[:8]}.pdf"
         file_url = self._attach_file(_text_pdf_bytes(), filename, is_private=0)
         with patch("crema.client._complete", return_value="ok") as mock_complete:
@@ -1159,7 +1158,6 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         self.assertTrue(any(p.get("type") == "image_url" for p in content))
 
     def test_file_url_and_bytes_tuple_mix_in_one_call(self):
-
         filename = f"_test_crema_{uuid.uuid4().hex[:8]}.pdf"
         file_url = self._attach_file(_text_pdf_bytes(), filename, is_private=0)
         with patch("crema.client._complete", return_value="ok") as mock_complete:

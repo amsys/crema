@@ -1,0 +1,23 @@
+/* Copyright (c) 2026, Crema and contributors
+ * For license information, please see license.txt
+ *
+ * Two corrections to frappe's desk defaults on the Crema Automation Task form. Nothing
+ * here is styling for its own sake — both rules fix something the form otherwise states
+ * wrongly. Keep this file that small.
+ */
+
+/* Sources are read in row order, but the order changes nothing: each row is read
+ * independently and the blocks are concatenated. A numbered column implies a sequence
+ * that does not exist. The row is still click-to-expand — only the digit is hidden. */
+[data-fieldname="sources"] .grid-row .row-index span {
+	visibility: hidden;
+}
+
+/* frappe caps a control in a full-width column at 50% (desk/form.scss's
+ * .form-column.col-sm-12 > form > .input-max-width). That is right for a Data field and
+ * wrong for this one: the options are sentences, and it sits under a full-width grid.
+ * The selector deliberately repeats frappe's own shape plus one step, so it wins on
+ * specificity rather than on stylesheet order or !important. */
+.layout-main .form-column.col-sm-12 > form > [data-fieldname="on_source_error"].input-max-width {
+	max-width: 100%;
+}

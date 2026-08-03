@@ -225,7 +225,7 @@ error log.
   write. Any user who can edit a field on `source_doctype` can therefore put text in
   front of a model that runs as the interface's isolation user — usually more
   privileged than the writer. The task cannot write outside `target_doctype`, and
-  `Update Source Records` cannot touch a record outside the batch it read. But the
+  `Update the Records It Read` cannot touch a record outside the batch it read. But the
   *values* the model chooses for the other records in that batch can be steered this
   way. Point a task at a doctype whose content you trust as much as its target.
 - The scan is tuned for prompts, not for arbitrary document text, so it has a
@@ -238,7 +238,10 @@ error log.
 - `ocr()`, `extract()`, and `transcribe()` read a private File straight off disk.
   They do not check whether the isolation user could read that File document through
   Frappe's own permission check. The `ask(files=[...])` path does run this check
-  correctly. This is a known gap, not yet fixed.
+  correctly. This is a known gap, not yet fixed. An automation source with
+  **Attachments** on reaches the same code, but only for files attached to a record the
+  query already returned, and it lists those files with a permission-checked query — so
+  the fence there is the record, not the file.
 - The scan folds many, but not all, look-alike letters. It changes each letter to the
   Latin letters that give its sound, not to the Latin letter it looks like. The two
   agree for most look-alikes, but not for all of them: the Cyrillic letter "es" looks

@@ -25,7 +25,7 @@ required_apps = ["frappe"]
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/crema/css/crema.css"
+app_include_css = "crema.bundle.css"
 app_include_js = "crema.bundle.js"
 
 # include js, css files in header of web template
@@ -91,8 +91,14 @@ after_install = "crema.install.after_install"
 # Re-run the interface + dashboard seeding on every migrate so a name added to
 # interfaces.PREDEFINED later, an interface a newly installed app registers through the
 # crema_interfaces hook, or a Number Card an admin deleted, shows up again without a
-# manual step.
-after_migrate = ["crema.install.sync_interfaces", "crema.install.sync_dashboard"]
+# manual step. sync_interface_options keeps the Crema Automation Task interface picker's
+# meta options in sync with the same set.
+after_migrate = [
+    "crema.install.sync_interfaces",
+    "crema.install.sync_dashboard",
+    "crema.install.sync_interface_options",
+    "crema.install.sync_example_task",
+]
 
 # Uninstallation
 # ------------

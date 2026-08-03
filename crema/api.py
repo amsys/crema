@@ -43,11 +43,6 @@ __all__ = [
     "transform_api",
 ]
 
-# Interfaces that only crema itself may drive. `security` is the layer-2 classifier —
-# exposing it over HTTP hands a caller a jailbreak-calibration oracle; `advanced_ocr`
-# is an internal escalation target reached through ocr(), never addressed directly.
-_INTERNAL_INTERFACES = frozenset({"security", "advanced_ocr"})
-
 _USER_RL_LIMIT = 60
 _USER_RL_SECONDS = 3600
 
@@ -633,7 +628,7 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
     changes what shape the model is asked to answer in.
     """
     frappe.only_for(("System Manager", "Crema User"))
-    if interface in _INTERNAL_INTERFACES:
+    if interface in interfaces.INTERNAL:
         frappe.throw(f"'{interface}' is an internal crema interface and cannot be called over HTTP")
     _check_user_rate_limit()
 
@@ -707,12 +702,14 @@ def check_provider(provider: str) -> dict[str, Any]:
 
 
 @frappe.whitelist()
-def get_interfaces() -> list[str]:
-    """Feeds the Interface Autocomplete on Crema Automation Task — PREDEFINED plus
-    every app-registered interface, same source Crema Settings' assignments reconcile
-    to (interfaces.names())."""
+def get_interfaces() -> list[dict[str, str]]:
+    """Relabels the Use Case picker on Crema Automation Task: {"value", "label"} pairs for
+    every selectable interface. The values themselves are already in the doctype's meta
+    (install.sync_interface_options) — this exists only because a frappe Select option
+    string cannot carry a label separate from its value. Labels come from interfaces.LABELS,
+    which is core-only, so an app-registered interface shows its raw key."""
     frappe.only_for("System Manager")
-    return interfaces.names()
+    return [{"value": name, "label": interfaces.LABELS.get(name, name)} for name in interfaces.selectable()]
 
 
 @frappe.whitelist()
@@ -753,6 +750,37 @@ def run_automation_now(task: str) -> str:
     from crema import automation
 
     return automation.enqueue_task(task)
+
+
+@frappe.whitelist()
+@rate_limit(limit=60, seconds=3600)
+def trigger_automation(task: str, payload: str | None = None) -> str:
+    """Start a Crema Automation Task from outside the site. Returns the job id.
+
+    Authentication is frappe's own — an API key and secret in the Authorization header,
+    nothing crema-specific. The fence is frappe's permission engine: the caller needs read
+    access to this task document, which an ordinary role grants, so an integration never
+    needs System Manager (which run_automation_now does require, since it can start *any*
+    task including one that was never meant to be reachable from outside).
+
+    Only a task whose Trigger is Webhook can be started this way, and only while it is
+    enabled — a scheduled task is not remotely pokeable by anyone who can merely read it.
+
+    `payload` is optional text read as one more source. It is truncated here and scanned by
+    layer 1 downstream like any other content.
+    """
+    doc = frappe.get_doc("Crema Automation Task", task)
+    doc.check_permission("read")
+
+    if doc.trigger != "Webhook":
+        frappe.throw(_("'{0}' is not a Webhook task.").format(task), frappe.PermissionError)
+    if not doc.enabled:
+        frappe.throw(_("'{0}' is switched off.").format(task), frappe.PermissionError)
+
+    from crema import automation
+
+    payload = (payload or "")[: automation._WEBHOOK_PAYLOAD_CHARS] or None
+    return automation.enqueue_task(task, payload=payload)
 
 
 @frappe.whitelist()

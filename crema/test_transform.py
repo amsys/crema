@@ -13,13 +13,10 @@ from unittest.mock import patch
 
 import frappe
 from crema.api import _filter_diff, transform, transform_api
-from crema.test_api import TEST_PLAIN_USER
-from crema.test_client import (
+from crema.test_fixtures import (
     TEST_ISOLATION_USER,
+    TEST_PLAIN_USER,
     CremaFixtureTestCase,
-    _ensure_interface,
-    _ensure_provider,
-    _ensure_user,
 )
 from frappe.tests import IntegrationTestCase
 
@@ -63,15 +60,7 @@ class IntegrationTestCremaTransform(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("transform")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
+        cls.ensure_fixtures("transform")
 
     def _make_contact(self) -> str:
         """Role "All" can only read a Contact it owns (if_owner=1) — stamp the isolation
@@ -126,16 +115,7 @@ class IntegrationTestCremaTransformApi(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_user(TEST_PLAIN_USER)
-        _ensure_provider()
-        _ensure_interface("transform")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
+        cls.ensure_fixtures("transform", users=(TEST_PLAIN_USER,))
 
     def tearDown(self) -> None:
         frappe.local.response.pop("http_status_code", None)

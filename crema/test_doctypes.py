@@ -12,9 +12,11 @@ from unittest.mock import patch
 import frappe
 from crema import cache, client, interfaces, log
 from crema.crema.doctype.crema_provider.crema_provider import PRESETS, _is_local_or_private, get_presets
-from crema.test_client import (
+from crema.test_fixtures import (
     TEST_ISOLATION_USER,
+    TEST_PLAIN_USER,
     TEST_PROVIDER,
+    CremaFixtureTestCase,
     _clear_defaults,
     _ensure_provider,
     _ensure_user,
@@ -51,11 +53,7 @@ class UnitTestIsLocalOrPrivate(UnitTestCase):
         self.assertFalse(_is_local_or_private(""))
 
 
-class IntegrationTestCremaProvider(IntegrationTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
-
+class IntegrationTestCremaProvider(CremaFixtureTestCase):
     def test_enabled_public_provider_without_api_key_is_rejected(self):
         doc = frappe.new_doc("Crema Provider")
         doc.provider_name = f"_test_crema_provider_{uuid.uuid4().hex[:8]}"
@@ -96,9 +94,6 @@ class IntegrationTestCremaProvider(IntegrationTestCase):
         self.assertIn("Ollama", PRESETS)
 
     def test_get_presets_rejects_non_system_manager(self):
-        from crema.test_api import TEST_PLAIN_USER
-        from crema.test_client import _ensure_user
-
         _ensure_user(TEST_PLAIN_USER)
         frappe.set_user(TEST_PLAIN_USER)
         with self.assertRaises(frappe.PermissionError):
@@ -154,8 +149,6 @@ class IntegrationTestCremaProvider(IntegrationTestCase):
 
     def test_create_from_template_rejects_non_system_manager(self):
         from crema.crema.doctype.crema_provider.crema_provider import create_from_template
-        from crema.test_api import TEST_PLAIN_USER
-        from crema.test_client import _ensure_user
 
         _ensure_user(TEST_PLAIN_USER)
         frappe.set_user(TEST_PLAIN_USER)
@@ -192,6 +185,31 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
 
+    def test_internal_interface_is_rejected_by_the_select_options(self):
+        """interfaces.selectable() (names() minus INTERNAL) is stamped onto the field's
+        Select options by install.sync_interface_options — and frappe validates Select
+        options server-side on every save (_validate_selects in
+        frappe/model/base_document.py, which runs AFTER CremaAutomationTask.validate).
+        So this is enforced by frappe itself, not by our own controller: a task can no
+        longer be saved on "security" at all, even though CremaAutomationTask.validate's
+        own membership check (see test_unknown_interface_name_is_rejected) would let it
+        through, since "security" is a real interfaces.names() member. Call
+        sync_interface_options() explicitly so the Property Setter is guaranteed to
+        exist regardless of test run order."""
+        from crema.install import sync_interface_options
+
+        sync_interface_options()
+
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.append("sources", {"source_type": "URL", "source_url": "https://example.invalid/source"})
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.target_doctype = "ToDo"
+        doc.interface = "security"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
     def test_a_task_with_no_source_at_all_is_rejected(self):
         doc = frappe.new_doc("Crema Automation Task")
         doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
@@ -211,7 +229,7 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         doc.schedule = "0 3 * * *"
         doc.instruction = "do something"
         doc.interface = "simple"
-        doc.action = "Update Source Records"
+        doc.action = "Update the Records It Read"
         doc.append("sources", {"source_type": "Document Query", "source_doctype": "ToDo"})
         doc.append("sources", {"source_type": "Document Query", "source_doctype": "Note"})
         with self.assertRaises(frappe.ValidationError):
@@ -222,27 +240,157 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         doc.insert(ignore_permissions=True)
         self.assertEqual(doc.target_doctype, "ToDo")  # taken from the one query source
 
-    def test_a_crema_doctype_is_refused_as_a_source(self):
+    def test_a_url_row_clears_the_cells_that_only_a_query_uses(self):
+        """Records Per Run, Only Changed and Attachments are grid columns now. A grid
+        column's depends_on mutates the shared docfield, so it cannot hide one row's cell
+        without hiding every row's — the values themselves have to be honest."""
         doc = frappe.new_doc("Crema Automation Task")
         doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
         doc.schedule = "0 3 * * *"
         doc.instruction = "do something"
         doc.interface = "simple"
-        doc.action = "Report Only"
-        doc.append("sources", {"source_type": "Document Query", "source_doctype": "Crema Log"})
+        doc.action = "No Changes"
+        doc.append(
+            "sources",
+            {
+                "source_type": "URL",
+                "source_url": "https://example.invalid/x",
+                "source_limit": 50,
+                "incremental": 1,
+                "read_attachments": 1,
+            },
+        )
+        doc.insert(ignore_permissions=True)
+
+        row = doc.sources[0]
+        self.assertEqual(row.source_limit, 0)
+        self.assertFalse(row.incremental)
+        self.assertFalse(row.read_attachments)
+        self.assertEqual(row.source_note, "")
+
+    def test_a_query_row_summarises_only_its_filters(self):
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.interface = "simple"
+        doc.action = "No Changes"
+        doc.append(
+            "sources",
+            {
+                "source_type": "Document Query",
+                "source_doctype": "ToDo",
+                "source_filters": frappe.as_json([["status", "=", "Open"]]),
+            },
+        )
+        doc.insert(ignore_permissions=True)
+
+        self.assertEqual(doc.sources[0].source_note, "1 filter")
+
+    @staticmethod
+    def _task_with_source(**source) -> frappe.Document:
+        """An otherwise-valid task carrying one source row, unsaved — so a test can name
+        just the field it is about."""
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.interface = "simple"
+        doc.action = "No Changes"
+        doc.append("sources", source)
+        return doc
+
+    def test_a_crema_doctype_is_refused_as_a_source(self):
+        doc = self._task_with_source(source_type="Document Query", source_doctype="Crema Log")
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
 
+    # --- Crema Automation Source's own per-row rules -----------------------
 
-class IntegrationTestCremaInstall(IntegrationTestCase):
+    def test_a_document_query_without_a_record_type_is_rejected(self):
+        doc = self._task_with_source(source_type="Document Query")
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_filters_that_are_not_json_are_rejected(self):
+        doc = self._task_with_source(
+            source_type="Document Query", source_doctype="ToDo", source_filters="{not json"
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_filters_that_are_json_but_not_a_list_or_object_are_rejected(self):
+        """Valid JSON, wrong shape — frappe.get_all would raise on it much later."""
+        doc = self._task_with_source(
+            source_type="Document Query", source_doctype="ToDo", source_filters='"a string"'
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_filters_naming_a_field_that_does_not_exist_are_rejected(self):
+        """The trial query is the cheapest way to reject a bad fieldname now, with
+        frappe's own message, instead of at 3am in last_error."""
+        doc = self._task_with_source(
+            source_type="Document Query",
+            source_doctype="ToDo",
+            source_filters=frappe.as_json([["_not_a_real_field", "=", 1]]),
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_a_blank_source_limit_takes_the_default(self):
+        doc = self._task_with_source(source_type="Document Query", source_doctype="ToDo")
+        doc.insert(ignore_permissions=True)
+        self.assertEqual(doc.sources[0].source_limit, 50)
+
+    def test_an_oversized_source_limit_is_clamped(self):
+        doc = self._task_with_source(source_type="Document Query", source_doctype="ToDo", source_limit=500)
+        doc.insert(ignore_permissions=True)
+        self.assertEqual(doc.sources[0].source_limit, 200)
+
+    # --- CremaAutomationTask's own trigger/action rules --------------------
+
+    def test_a_document_event_trigger_without_an_event_is_rejected(self):
+        doc = self._task_with_source(source_type="Document Query", source_doctype="ToDo")
+        doc.trigger = "Document Event"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_a_document_event_trigger_needs_a_document_query_source(self):
+        """It runs on the record that changed, so a URL source alone cannot serve it."""
+        doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
+        doc.trigger = "Document Event"
+        doc.event = "On Update"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_create_or_update_records_without_a_target_doctype_is_rejected(self):
+        doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
+        doc.action = "Create or Update Records"
+        doc.target_doctype = None
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_a_malformed_notify_to_address_is_rejected(self):
+        doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
+        doc.notify_to = "not-an-email"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_several_well_formed_notify_to_addresses_are_accepted(self):
+        """The negative case alone would also pass if every notify_to were rejected."""
+        doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
+        doc.notify_to = "a@example.com, b@example.com"
+        doc.insert(ignore_permissions=True)  # must not raise
+        self.assertTrue(doc.name)
+
+
+class IntegrationTestCremaInstall(CremaFixtureTestCase):
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
-        # Defaults are shared state on the Crema Settings Single: an earlier test
-        # method in this class (no per-test rollback here — see CremaFixtureTestCase's
-        # docstring in test_client.py) or the real site's own configuration could
-        # otherwise leak a Default Provider/Isolation User into a test asserting
-        # "unconfigured" behavior.
+        # Defaults are shared state on the Crema Settings Single: the real site's own
+        # configuration could otherwise leak a Default Provider/Isolation User into a
+        # test asserting "unconfigured" behavior.
         _clear_defaults()
 
     def test_after_install_creates_the_crema_user_role(self):
@@ -291,6 +439,55 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         for card in _DASHBOARD_CARDS:
             self.assertTrue(frappe.db.exists("Number Card", card["name"]))
 
+    # --- the one-time example task ---------------------------------------
+
+    @staticmethod
+    def _reset_example_seed() -> None:
+        """frappe.db.set_default writes a tabDefaultValue row *and* a defaults-cache
+        entry. The per-test savepoint rolls back the row but never the cache, so both
+        have to be cleared by hand for the seed guard to be observable."""
+        from crema.install import _EXAMPLE_TASK_NAME, _EXAMPLE_TASK_SEEDED
+
+        frappe.db.set_default(_EXAMPLE_TASK_SEEDED, "")
+        frappe.clear_cache()
+        if frappe.db.exists("Crema Automation Task", _EXAMPLE_TASK_NAME):
+            frappe.delete_doc(
+                "Crema Automation Task", _EXAMPLE_TASK_NAME, ignore_permissions=True, force=True
+            )
+
+    def test_sync_example_task_seeds_one_disabled_task(self):
+        from crema.install import _EXAMPLE_TASK_NAME, _EXAMPLE_TASK_SEEDED, sync_example_task
+
+        self._reset_example_seed()
+        self.addCleanup(frappe.clear_cache)
+
+        sync_example_task()
+
+        task = frappe.get_doc("Crema Automation Task", _EXAMPLE_TASK_NAME)
+        self.assertFalse(task.enabled)  # an example that shipped enabled would write records
+        self.assertEqual(task.action, "No Changes")
+        # On Update, not After Insert: inbound mail attaches the files after the insert.
+        self.assertEqual(task.trigger, "Document Event")
+        self.assertEqual(task.event, "On Update")
+        self.assertEqual(len(task.sources), 1)
+        self.assertEqual(task.sources[0].source_doctype, "Communication")
+        self.assertTrue(task.sources[0].read_attachments)
+        self.assertTrue(frappe.db.get_default(_EXAMPLE_TASK_SEEDED))
+
+    def test_a_deleted_example_is_not_resurrected(self):
+        """The guard is a one-time flag, not "does the record exist" — an admin who
+        deletes the example must not get it back on the next migrate."""
+        from crema.install import _EXAMPLE_TASK_NAME, sync_example_task
+
+        self._reset_example_seed()
+        self.addCleanup(frappe.clear_cache)
+        sync_example_task()
+        frappe.delete_doc("Crema Automation Task", _EXAMPLE_TASK_NAME, ignore_permissions=True, force=True)
+
+        sync_example_task()
+
+        self.assertFalse(frappe.db.exists("Crema Automation Task", _EXAMPLE_TASK_NAME))
+
     def test_seeded_blank_row_still_resolves_through_the_fallback_chain(self):
         """A row seeded by sync_interfaces has no provider — client._resolve must treat
         it exactly like "not configured" and keep walking interfaces.FALLBACKS."""
@@ -312,6 +509,23 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
 
         cfg = client._resolve("classification")  # classification -> simple
         self.assertEqual(cfg["interface"], "simple")
+
+    def test_sync_interface_options_stamps_the_select_options_onto_meta(self):
+        """The Property Setter install.sync_interface_options writes is what the
+        Crema Automation Task "Use Case" picker actually reads at runtime — pin that
+        frappe.get_meta sees it, not just that make_property_setter didn't raise.
+        frappe.make_property_setter's own validate() already calls
+        frappe.clear_cache(doctype=...) (see PropertySetter.validate in frappe core),
+        so no explicit clear_cache call is needed here."""
+        from crema.install import sync_interface_options
+
+        sync_interface_options()
+
+        field = frappe.get_meta("Crema Automation Task").get_field("interface")
+        self.assertEqual(field.fieldtype, "Select")
+        self.assertEqual(field.options.split("\n"), ["", *interfaces.selectable()])
+        self.assertNotIn("security", field.options.split("\n"))
+        self.assertNotIn("advanced_ocr", field.options.split("\n"))
 
     def test_ensure_isolation_user_is_idempotent(self):
         """Calling twice must return the same email and not insert a second User
@@ -360,8 +574,6 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         self.assertFalse(
             frappe.get_single("Crema Settings").default_isolation_user
         )  # setUp's _clear_defaults
-        self.addCleanup(self._reset_default_isolation_user)
-
         sync_interfaces()
 
         self.assertEqual(frappe.get_single("Crema Settings").default_isolation_user, _ensure_isolation_user())
@@ -373,16 +585,9 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         settings = frappe.get_single("Crema Settings")
         settings.default_isolation_user = TEST_ISOLATION_USER
         settings.save(ignore_permissions=True)
-        self.addCleanup(self._reset_default_isolation_user)
-
         sync_interfaces()  # must not touch an admin's own choice
 
         self.assertEqual(frappe.get_single("Crema Settings").default_isolation_user, TEST_ISOLATION_USER)
-
-    def _reset_default_isolation_user(self):
-        settings = frappe.get_single("Crema Settings")
-        settings.default_isolation_user = ""
-        settings.save(ignore_permissions=True)
 
     def test_setting_provider_without_isolation_user_is_rejected(self):
         _ensure_provider()
@@ -403,23 +608,11 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         row.model = "test-model"
         row.isolation_user = TEST_ISOLATION_USER
         settings.save(ignore_permissions=True)  # must not raise
-        # Crema Settings is a shared Single (see setUp's own comment above) — leaving
-        # "extraction" configured would leak into every later test's assumption that
-        # it's blank.
-        self.addCleanup(self._reset_extraction_row)
 
         reloaded = next(
             r for r in frappe.get_single("Crema Settings").assignments if r.interface == "extraction"
         )
         self.assertEqual(reloaded.provider, TEST_PROVIDER)
-
-    def _reset_extraction_row(self):
-        settings = frappe.get_single("Crema Settings")
-        row = next(r for r in settings.assignments if r.interface == "extraction")
-        row.provider = ""
-        row.model = ""
-        row.isolation_user = ""
-        settings.save(ignore_permissions=True)
 
     def test_enabling_llm_guard_is_rejected_while_seeded_security_row_has_no_provider(self):
         """Distinct from the equivalent test in test_client.py, which configures
@@ -460,28 +653,11 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         row.isolation_user = TEST_ISOLATION_USER
         row.enable_llm_guard = 1
         settings.save(ignore_permissions=True)  # must not raise
-        # This class is a plain IntegrationTestCase (no per-test rollback — see
-        # setUp's own comment): translation.enable_llm_guard=1 would otherwise leak
-        # into every later test's setUp, which re-saves Crema Settings with defaults
-        # cleared and no configured "security" — exactly the combination this test
-        # just proved is fine, but every OTHER test assumes is not yet set up.
-        self.addCleanup(self._reset_translation_guard)
 
         reloaded = next(
             r for r in frappe.get_single("Crema Settings").assignments if r.interface == "translation"
         )
         self.assertEqual(reloaded.enable_llm_guard, 1)
-
-    def _reset_translation_guard(self):
-        settings = frappe.get_single("Crema Settings")
-        row = next(r for r in settings.assignments if r.interface == "translation")
-        row.enable_llm_guard = 0
-        row.provider = ""
-        row.model = ""
-        row.isolation_user = ""
-        settings.default_provider = ""
-        settings.default_isolation_user = ""
-        settings.save(ignore_permissions=True)
 
     def test_enabling_llm_guard_is_rejected_when_security_provider_is_disabled(self):
         """_apply_security_guard_rules now requires the effective security provider to
@@ -542,7 +718,7 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
         self.assertIn("enabled", str(ctx.exception))
 
 
-class IntegrationTestCremaSettingsReconcile(IntegrationTestCase):
+class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
     """CremaSettings.validate's cross-row rules: the assignments child table always
     matches interfaces.PREDEFINED, in order — add a missing name, drop an unknown
     one, reorder the rest."""

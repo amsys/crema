@@ -15,16 +15,13 @@ from unittest.mock import patch
 import frappe
 from crema.api import extract, extract_api
 from crema.exceptions import CremaBlockedError
-from crema.test_api import TEST_PLAIN_USER
-from crema.test_client import (
-    TEST_ISOLATION_USER,
+from crema.test_fixtures import (
+    TEST_PLAIN_USER,
     CremaFixtureTestCase,
     _clear_defaults,
-    _ensure_interface,
-    _ensure_provider,
-    _ensure_user,
+    _drop_advanced_ocr,
+    _text_pdf_bytes,
 )
-from crema.test_ocr import _drop_advanced_ocr, _text_pdf_bytes
 
 
 def _ocr_result(text: str = "John Doe, Acme Corp, john@acme.example", confidence: float = 0.95) -> str:
@@ -43,16 +40,10 @@ class IntegrationTestCremaExtract(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("ocr")
-        _ensure_interface("extraction")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+        cls.ensure_fixtures("ocr", "extraction")
 
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
         _clear_defaults()  # else the real site's default_provider resolves
         # "advanced_ocr" unexpectedly and desyncs the fixed-length _complete side_effect
         _drop_advanced_ocr()
@@ -216,17 +207,10 @@ class IntegrationTestCremaExtractApi(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_user(TEST_PLAIN_USER)
-        _ensure_provider()
-        _ensure_interface("ocr")
-        _ensure_interface("extraction")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+        cls.ensure_fixtures("ocr", "extraction", users=(TEST_PLAIN_USER,))
 
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
         _clear_defaults()  # else the real site's default_provider resolves
         # "advanced_ocr" unexpectedly and desyncs the fixed-length _complete side_effect
         _drop_advanced_ocr()

@@ -14,14 +14,11 @@ import frappe
 from crema import client
 from crema.api import transcribe
 from crema.exceptions import CremaBudgetError, CremaConfigError
-from crema.test_client import (
-    TEST_ISOLATION_USER,
+from crema.test_fixtures import (
     TEST_PROVIDER,
     CremaFixtureTestCase,
     _clear_defaults,
     _ensure_interface,
-    _ensure_provider,
-    _ensure_user,
 )
 
 _AUDIO_BYTES = b"\x00\x01not really audio, just bytes"
@@ -31,15 +28,10 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("transcribe")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+        cls.ensure_fixtures("transcribe")
 
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
         _clear_defaults()
 
     def test_transcribes_raw_bytes(self):

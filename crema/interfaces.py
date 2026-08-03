@@ -8,6 +8,12 @@ from __future__ import annotations
 
 import frappe
 
+# Interfaces that only crema itself may drive. "security" is the layer-2 classifier —
+# exposing it over HTTP hands a caller a jailbreak-calibration oracle; "advanced_ocr"
+# is an internal escalation target reached through ocr(), never addressed directly.
+# Also not selectable for an automation task — a task should never be run as either.
+INTERNAL = frozenset({"security", "advanced_ocr"})
+
 PREDEFINED = [
     "simple",
     "translation",
@@ -132,3 +138,14 @@ def fallback_for(name: str) -> str | None:
     if name in FALLBACKS:
         return FALLBACKS[name]
     return app_interfaces().get(name, {}).get("fallback")
+
+
+def selectable() -> list[str]:
+    """Interfaces an automation task may be assigned to: names() minus the two internal
+    ones (the LLM guard and the OCR escalation target), which a task should never be run
+    as. This is more than a picker narrowing: install.sync_interface_options() stamps
+    this list onto the "interface" field's Select options via a Property Setter, and
+    frappe validates Select options server-side on every save — stricter than
+    CremaAutomationTask.validate's own names() membership check. A task can no longer
+    be saved with interface set to "security" or "advanced_ocr" at all."""
+    return [name for name in names() if name not in INTERNAL]

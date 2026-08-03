@@ -5,16 +5,20 @@ from __future__ import annotations
 import re
 
 import frappe
+from crema import interfaces
 from frappe.utils import validate_email_address
 
 
 def after_install() -> None:
     """Idempotently create the 'Crema User' role, then seed interfaces (which also
-    seeds the default isolation user — see sync_interfaces) and the workspace's usage
+    seeds the default isolation user — see sync_interfaces), the Crema Automation Task
+    interface picker's options (sync_interface_options), and the workspace's usage
     dashboard."""
     _ensure_crema_user_role()
     sync_interfaces()
+    sync_interface_options()
     sync_dashboard()
+    sync_example_task()
 
 
 def _ensure_crema_user_role() -> None:
@@ -89,6 +93,33 @@ def sync_interfaces() -> None:
     settings.save(ignore_permissions=True)
 
 
+def sync_interface_options() -> None:
+    """The interface list is fixed at install/migrate time — it changes only when an
+    app registers its own through crema_interfaces, or a name is added to PREDEFINED —
+    so it belongs in the doctype's meta, not in a per-request fetch. Meta-backed
+    options are also what makes the list-view filter on this field usable; frappe
+    builds that control from meta. Re-run on every migrate (hooks.after_migrate), same
+    as sync_interfaces. Safe to re-run with no guard of our own: PropertySetter
+    autonames deterministically and its validate() deletes the prior row when is_new(),
+    so each run replaces rather than duplicates, and it clears the doctype cache itself.
+    This has teeth: frappe validates Select options server-side on every save, so a
+    site with an existing task whose interface is "security" or "advanced_ocr" would
+    find that task unsavable after this runs — verified to affect zero records on the
+    developer's own site, but a fresh site should not assume the same.
+    """
+    frappe.make_property_setter(
+        {
+            "doctype": "Crema Automation Task",
+            "fieldname": "interface",
+            "property": "options",
+            # Leading blank line is frappe's convention for a blank first Select option.
+            "value": "\n" + "\n".join(interfaces.selectable()),
+            "property_type": "Text",
+        },
+        is_system_generated=True,
+    )
+
+
 _DASHBOARD_CARDS = [
     {"name": "Calls", "function": "Count", "filters_json": "[]"},
     {
@@ -145,3 +176,64 @@ def sync_dashboard() -> None:
         )
         doc.name = card["name"]
         doc.insert(ignore_permissions=True)
+
+
+_EXAMPLE_TASK_NAME = "Example — invoice from email"
+_EXAMPLE_TASK_SEEDED = "crema_example_task_seeded"
+
+_EXAMPLE_TASK_INSTRUCTION = """Each record below is an email that arrived in an inbox, \
+followed by the text of any file attached to it. For every attachment that is a supplier \
+invoice, pull out the supplier name, the invoice number, the invoice date, the due date, \
+the currency, the net amount, the tax amount and the total. Ignore attachments that are \
+not invoices. Say which emails you skipped and why."""
+
+
+def sync_example_task() -> None:
+    """Seed one disabled Crema Automation Task showing the emailed-invoice recipe.
+
+    Seeded once ever, tracked by a frappe default rather than by the record existing: an
+    admin who deletes or renames it must not have it come back on the next migrate, and an
+    admin who edits it must not have the edit overwritten.
+
+    Deliberately `No Changes`: an example that shipped enabled, or pointed at a Purchase
+    Invoice, would either write records nobody asked for or assume ERPNext is installed.
+    It reads, reports, and waits to be pointed somewhere.
+    """
+    if frappe.db.get_default(_EXAMPLE_TASK_SEEDED):
+        return
+    # Set first: a failure below (no Communication doctype, a validation change) must not
+    # make every subsequent migrate try again and fail again.
+    frappe.db.set_default(_EXAMPLE_TASK_SEEDED, "1")
+
+    if frappe.db.exists("Crema Automation Task", _EXAMPLE_TASK_NAME):
+        return
+
+    doc = frappe.new_doc("Crema Automation Task")
+    doc.update(
+        {
+            "task_name": _EXAMPLE_TASK_NAME,
+            "enabled": 0,
+            # On Update, not After Insert: frappe's inbound mail inserts the Communication
+            # and only then attaches the files to it (frappe/email/receive.py), so a task
+            # triggered on the insert would find no attachments.
+            "trigger": "Document Event",
+            "event": "On Update",
+            "interface": "extraction",
+            "instruction": _EXAMPLE_TASK_INSTRUCTION,
+            "action": "No Changes",
+        }
+    )
+    doc.append(
+        "sources",
+        {
+            "source_type": "Document Query",
+            "source_doctype": "Communication",
+            "source_filters": frappe.as_json(
+                [["sent_or_received", "=", "Received"], ["has_attachment", "=", 1]]
+            ),
+            "source_limit": 5,
+            "incremental": 1,
+            "read_attachments": 1,
+        },
+    )
+    doc.insert(ignore_permissions=True)

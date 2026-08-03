@@ -97,10 +97,13 @@ monthly budget, or any other failure surfaces as a message — never a silent no
   file (how many is the model's own call); `transform()` proposes a diff for an
   existing document. Neither writes anything; the caller applies the result.
 - **Automation** — a task reads one or more sources — any mix of URLs and
-  permission-fenced queries over your own records — self-plans once, and then either
-  upserts records, writes values back onto the records it read, or just reports. It runs on a cron schedule or on a document
-  event, and a Dry Run button shows what it would do before it does it. The plan is
-  data, never code.
+  permission-fenced queries over your own records, optionally including the files
+  attached to each record (so an invoice that arrives by email can be read into a
+  record) — self-plans once, and then either creates or updates records, writes values
+  back onto the records it read, or changes nothing. Any task can email what it did. It
+  runs on a cron schedule, on a document event, or on an authenticated webhook call, and
+  a Dry Run button shows what it would do before it does it. The plan is data, never
+  code.
 - **Health probe** — `health()` and `is_configured()` let a consuming app show its own
   status page; the caller applies its own role check.
 - **Cost control and audit** — an optional monthly budget per interface and per

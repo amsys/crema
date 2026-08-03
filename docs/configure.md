@@ -93,7 +93,9 @@ remove the sandbox.
 2. Pick a **Model**. This column stays empty until this row has its own provider; the
    model list comes live from that provider.
 3. Click the row's **Edit** icon to set **Runs As**, if this interface needs a different
-   account from the default. A row that sets a Provider without its own Runs As user
+   account from the default. One automation task can also set its own **Runs As**, which
+   wins over this one — use that when two tasks share a use case but must read as
+   different accounts. A row that sets a Provider without its own Runs As user
    still uses the Default Runs-As User.
 4. Click **Save** (the normal form save — this is one document, Crema Settings).
 
@@ -119,7 +121,7 @@ orange 80–99%, red at 100% or over. See [security.md](security.md#budgets).
 | `provider` | Link | Blank uses Crema Settings' Default Provider; if that's blank too, the interface falls back per the chain below. |
 | `model` | Autocomplete | Blank uses the Default Model. Fetched from this row's own provider once one is set, or from the Default Provider if this row leaves Provider blank too. |
 | `usage` | Data | Read-only, never saved. Painted live from this month's Crema Log spend each time the page loads. |
-| `isolation_user` | Link (User) | Label **Runs As**. Not `Administrator`. Not a `System Manager`. Not a disabled user. Blank uses the Default Runs-As User. An effective provider (this row's or the default's) always needs an effective Runs As user (this row's or the default's). |
+| `isolation_user` | Link (User) | Label **Runs As**. Not `Administrator`. Not a `System Manager`. Not a disabled user. Blank uses the Default Runs-As User. An effective provider (this row's or the default's) always needs an effective Runs As user (this row's or the default's). A single automation task can override this — see [automation.md](automation.md). |
 | `monthly_budget_usd` | Currency | 0 (default) means "use the Default Monthly Budget"; 0 there too means unlimited. See [security.md](security.md#budgets). |
 | `temperature` | Float | Label **Creativity**. 0 by default. |
 | `max_tokens` | Int | Label **Longest Answer**. Caps the response length. 0 (default) leaves the provider's own default untouched. |
@@ -159,6 +161,9 @@ provider call, until the TTL expires.
 | `transform` | Transform | Propose a diff for an ERP document | `complex` |
 | `view` | View | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
 | `transcribe` | Transcribe | Speech-to-text via `crema.transcribe()` | none — a transcription call cannot fall back to a chat model |
+
+The Crema Automation Task Use Case dropdown offers ten of these — every one except
+`security` and `advanced_ocr`, which a task must never run as.
 
 If an interface has no provider of its own, the system tries Crema Settings' Default
 Provider first. Only if that is also blank does it try the next interface in its

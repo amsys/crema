@@ -15,213 +15,28 @@ from crema import cache, client, interfaces, sandbox
 from crema import log as crema_log
 from crema.api import ask, get_usage
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
-from frappe.tests import IntegrationTestCase, UnitTestCase
-
-TEST_PROVIDER = "_Test Crema Provider"
-TEST_ISOLATION_USER = "_test_crema_isolation@example.com"
-TEST_SANDBOX_USER = "_test_crema_sandbox_user@example.com"
-TEST_SANDBOX_VICTIM = "_test_crema_sandbox_victim@example.com"
+from crema.test_fixtures import (
+    _CREATED,
+    TEST_ISOLATION_USER,
+    TEST_PROVIDER,
+    TEST_SANDBOX_USER,
+    TEST_SANDBOX_VICTIM,
+    CremaFixtureTestCase,
+    _assignment_row_name,
+    _clear_defaults,
+    _ensure_interface,
+    _ensure_provider,
+    _ensure_user,
+    _png_bytes,
+    _text_pdf_bytes,
+)
+from frappe.tests import UnitTestCase
 
 # A real module attribute frappe.get_attr can resolve — see
 # UnitTestCremaAppInterfaces.test_app_interfaces_resolves_a_dotted_path_string.
+# Deliberately NOT in test_fixtures: test_app_interfaces_resolves_a_dotted_path_string
+# names it by the literal string "crema.test_client._DOTTED_TARGET".
 _DOTTED_TARGET = {"_test_app_iface": {"prompt": "app prompt", "fallback": "simple"}}
-
-# ---------------------------------------------------------------------------
-# fixture tracking — undoes what setUpClass commits outside the per-test rollback
-# ---------------------------------------------------------------------------
-#
-# IntegrationTestCase rolls back each *test*, but every setUpClass here calls
-# frappe.db.commit() (isolation() needs the row visible in a real transaction, not
-# just the test's uncommitted one). That commit survives past the test class, so
-# repeated suite runs leave rows behind on whatever site the suite is pointed at —
-# see CLAUDE.md's `bench --site fcr.local run-tests --app crema`. Track exactly what
-# each helper touches and undo it in CremaFixtureTestCase.tearDownClass.
-
-_CREATED: list[tuple[str, str]] = []
-_MODIFIED: list[tuple[str, str, dict]] = []
-_ROLES_GRANTED: list[tuple[str, list[str]]] = []
-
-
-def cleanup_fixtures() -> None:
-    for user, roles in reversed(_ROLES_GRANTED):
-        if frappe.db.exists("User", user):
-            frappe.get_doc("User", user).remove_roles(*roles)
-    _ROLES_GRANTED.clear()
-
-    for doctype, name, old_values in reversed(_MODIFIED):
-        if frappe.db.exists(doctype, name):
-            frappe.db.set_value(doctype, name, old_values, update_modified=False)
-    _MODIFIED.clear()
-
-    for doctype, name in reversed(_CREATED):
-        if frappe.db.exists(doctype, name):
-            frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
-    _CREATED.clear()
-
-    # _MODIFIED's frappe.db.set_value calls above touch "Crema Model Assignment" child
-    # rows directly, which invalidates only that child doctype's own cache
-    # (frappe.database.set_value clears by dt+dn) — NOT the "Crema Settings" parent
-    # Single's document cache, and not crema's own crema:iface: redis cache either.
-    # Both must be cleared explicitly or a later test reads stale assignment data.
-    frappe.clear_document_cache("Crema Settings")
-    cache.clear_interfaces()
-
-    frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-
-class CremaFixtureTestCase(IntegrationTestCase):
-    """Base for classes whose setUpClass calls _ensure_user/_ensure_provider/
-    _ensure_interface (or inserts a fixture doc directly) and commits it.
-
-    setUpClass's frappe.db.commit() ends that transaction for real, so undoing it in
-    tearDownClass needs a real commit too -- frappe.db.rollback() can't touch data an
-    earlier commit already made permanent. But a commit there would also permanently
-    persist anything any test method in the class wrote and never explicitly deleted
-    (there is no other per-test rollback in this frappe version — see
-    IntegrationTestCase.setUpClass: the only rollback it registers is one
-    addClassCleanup(_rollback_db) for the whole class). Wrap every test method in its
-    own savepoint so its writes never survive past its own tearDown, leaving
-    tearDownClass's commit to persist only what cleanup_fixtures() itself restores.
-    """
-
-    _SAVEPOINT = "crema_fixture_test"
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.db.savepoint(self._SAVEPOINT)
-
-    def tearDown(self) -> None:
-        frappe.db.rollback(save_point=self._SAVEPOINT)
-        # A test that saved Crema Settings mid-test (e.g. via _ensure_interface) left
-        # frappe's own document cache (get_cached_doc) holding the now-rolled-back
-        # state — a DB rollback doesn't touch redis. Left stale, the next test's first
-        # client._resolve() reads a config that no longer exists in the DB.
-        frappe.clear_document_cache("Crema Settings")
-        cache.clear_interfaces()
-        super().tearDown()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cleanup_fixtures()
-        super().tearDownClass()
-
-
-def _ensure_user(email: str, roles: list[str] | None = None) -> str:
-    if frappe.db.exists("User", email):
-        doc = frappe.get_doc("User", email)
-        existing_roles = {r.role for r in doc.get("roles")}
-        new_roles = [r for r in (roles or []) if r not in existing_roles]
-    else:
-        doc = frappe.new_doc("User")
-        doc.email = email
-        doc.first_name = email.split("@")[0]
-        doc.send_welcome_email = 0
-        doc.enabled = 1
-        doc.insert(ignore_permissions=True)
-        _CREATED.append(("User", doc.name))
-        new_roles = list(roles or [])
-    for role in new_roles:
-        doc.add_roles(role)
-    if new_roles:
-        _ROLES_GRANTED.append((doc.name, new_roles))
-    return doc.name
-
-
-def _ensure_provider() -> str:
-    if frappe.db.exists("Crema Provider", TEST_PROVIDER):
-        return TEST_PROVIDER
-    doc = frappe.new_doc("Crema Provider")
-    doc.provider_name = TEST_PROVIDER
-    doc.base_url = "http://localhost:11434/v1"  # local/private -> no api_key required
-    doc.enabled = 1
-    doc.timeout_seconds = 5
-    doc.insert(ignore_permissions=True)
-    _CREATED.append(("Crema Provider", doc.name))
-    return doc.name
-
-
-_ASSIGNMENT_FIXTURE_FIELDS = (
-    "provider",
-    "model",
-    "isolation_user",
-    "system_prompt",
-    "enable_prompt_scan",
-    "enable_llm_guard",
-    "output_trap",
-    "cache_ttl",
-    "monthly_budget_usd",
-)
-
-
-def _ensure_interface(
-    name: str,
-    *,
-    cache_ttl: int = 0,
-    enable_prompt_scan: bool = True,
-    isolation_user: str = TEST_ISOLATION_USER,
-    monthly_budget_usd: float = 0,
-    model: str = "test-model",
-    output_trap: str = "Off",
-) -> str:
-    """Configure the Crema Model Assignment row for a PREDEFINED interface name on
-    the single, global Crema Settings doc.
-
-    Crema Settings is a Single: every interfaces.PREDEFINED name already has a row
-    after install/migrate (CremaSettings.validate reconciles the child table to
-    exactly that set), so — unlike the old per-document Crema Interface fixture —
-    this always updates an existing row, never inserts a new one. Snapshots the
-    row's prior field values into _MODIFIED so cleanup_fixtures() can restore them
-    once the calling test class is done, exactly like a modified Crema Interface
-    document used to be restored.
-    """
-    if name not in interfaces.PREDEFINED:
-        raise ValueError(f"'{name}' is not a predefined interface name")
-
-    settings = frappe.get_single("Crema Settings")
-    row = next(r for r in settings.assignments if r.interface == name)
-    _MODIFIED.append(
-        ("Crema Model Assignment", row.name, {f: row.get(f) for f in _ASSIGNMENT_FIXTURE_FIELDS})
-    )
-
-    row.provider = TEST_PROVIDER
-    row.model = model
-    row.isolation_user = isolation_user
-    row.system_prompt = f"test system prompt for {name}"
-    row.enable_prompt_scan = 1 if enable_prompt_scan else 0
-    row.enable_llm_guard = 0
-    row.output_trap = output_trap
-    row.cache_ttl = cache_ttl
-    row.monthly_budget_usd = monthly_budget_usd
-    settings.save(ignore_permissions=True)
-    return name
-
-
-def _clear_defaults() -> None:
-    """Blank Crema Settings' Default Provider/Model/Isolation User.
-
-    A resolution test that expects a blank row to fall back (interfaces.FALLBACKS) or
-    fail (CremaConfigError) is testing "not configured" — but the real site this suite
-    runs against (see CLAUDE.md: `bench --site fcr.local run-tests`) may already have
-    these set, and so may an earlier test in the same run. Call this from `setUp`, not
-    `setUpClass`: CremaFixtureTestCase's per-test savepoint (or, for a plain
-    IntegrationTestCase, its single class-level rollback) then undoes it same as any
-    other test mutation.
-    """
-    settings = frappe.get_single("Crema Settings")
-    settings.default_provider = ""
-    settings.default_model = ""
-    settings.default_isolation_user = ""
-    settings.default_monthly_budget_usd = 0
-    settings.save(ignore_permissions=True)
-
-
-def _assignment_row_name(interface: str) -> str:
-    """The Crema Model Assignment child row name for `interface` — for tests that
-    need to bypass Document validation via a raw frappe.db.set_value, the way the old
-    orphan-provider test bypassed Crema Interface's own Link validation."""
-    return frappe.db.get_value(
-        "Crema Model Assignment", {"parent": "Crema Settings", "interface": interface}, "name"
-    )
 
 
 class UnitTestCremaAppInterfaces(UnitTestCase):
@@ -337,7 +152,6 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
         _clear_defaults()
 
     # --- fallback walk ---------------------------------------------------
@@ -973,17 +787,20 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             status = check_provider(TEST_PROVIDER)
         self.assertEqual(status, {"ok": True, "reachable": True, "detail": "1 models"})
 
-    # --- get_interfaces is System-Manager-only, returns interfaces.names() ------
+    # --- get_interfaces is System-Manager-only, returns {value, label} pairs for
+    # interfaces.selectable() ------
 
-    def test_get_interfaces_returns_the_full_interface_name_set(self):
-        """PREDEFINED plus every app-registered interface (interfaces.names()) — the
-        same set CremaSettings reconciles its assignments grid to, so the Automation
-        Task autocomplete this feeds can name any row that actually exists. Asserting
-        PREDEFINED alone would break on any site where an installed app registers
-        crema_interfaces."""
+    def test_get_interfaces_returns_selectable_interfaces_with_labels(self):
+        """interfaces.selectable() (PREDEFINED plus every app-registered interface,
+        minus the two internal-only ones) — the set the Automation Task Use Case
+        picker may be assigned to — each paired with its interfaces.LABELS label (or
+        its raw key for an app-registered interface with no core label)."""
         from crema.api import get_interfaces
 
-        self.assertEqual(get_interfaces(), interfaces.names())
+        expected = [
+            {"value": name, "label": interfaces.LABELS.get(name, name)} for name in interfaces.selectable()
+        ]
+        self.assertEqual(get_interfaces(), expected)
 
     def test_get_interfaces_rejects_non_system_manager(self):
         from crema.api import get_interfaces
@@ -1230,10 +1047,6 @@ class IntegrationTestCremaSandbox(CremaFixtureTestCase):
             _CREATED.append(("User Permission", perm.name))
         frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
-
     def test_isolation_fences_get_list(self):
         with sandbox.isolation(TEST_SANDBOX_USER):
             names = {
@@ -1291,15 +1104,7 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("simple")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
+        cls.ensure_fixtures("simple")
 
     def _attach_file(self, content: bytes | str, filename: str, *, is_private: int) -> str:
         doc = frappe.get_doc(
@@ -1308,7 +1113,6 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         return doc.file_url
 
     def test_permitted_file_becomes_content_parts(self):
-        from crema.test_ocr import _text_pdf_bytes
 
         filename = f"_test_crema_{uuid.uuid4().hex[:8]}.pdf"
         file_url = self._attach_file(_text_pdf_bytes(), filename, is_private=0)
@@ -1345,7 +1149,6 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         """A caller can pass (bytes, mime) directly — content it already holds and has
         permission-checked itself (a bot photo with no Frappe File behind it at all),
         not just a File URL. No File doctype record exists in this test at all."""
-        from crema.test_ocr import _png_bytes
 
         with patch("crema.client._complete", return_value="ok") as mock_complete:
             ask("simple", "describe this", files=[(_png_bytes(), "image/png")])
@@ -1356,7 +1159,6 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         self.assertTrue(any(p.get("type") == "image_url" for p in content))
 
     def test_file_url_and_bytes_tuple_mix_in_one_call(self):
-        from crema.test_ocr import _png_bytes, _text_pdf_bytes
 
         filename = f"_test_crema_{uuid.uuid4().hex[:8]}.pdf"
         file_url = self._attach_file(_text_pdf_bytes(), filename, is_private=0)
@@ -1376,15 +1178,7 @@ class IntegrationTestCremaHistory(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("simple")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
+        cls.ensure_fixtures("simple")
 
     def test_history_lands_between_system_and_user_turns(self):
         history = [
@@ -1436,10 +1230,6 @@ class IntegrationTestCremaLlmGuard(CremaFixtureTestCase):
         row.enable_llm_guard = 1
         settings.save(ignore_permissions=True)
         frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
 
     def test_malicious_risk_blocks_before_the_real_completion(self):
         guard_response = '{"intent": "exfiltrate secrets", "risk": "malicious"}'
@@ -1621,14 +1411,10 @@ class IntegrationTestCremaOutputTrap(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+        cls.ensure_fixtures()
 
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
         frappe.local.crema_trap = None
 
     @staticmethod

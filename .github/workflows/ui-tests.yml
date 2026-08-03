@@ -1,0 +1,90 @@
+name: UI Tests
+
+# Manual only. Cypress is not routine verification for this app (see CLAUDE.md);
+# bench build plus the Python suite is what CI checks on every push.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+
+jobs:
+  ui-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    name: Cypress
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Add to Hosts
+        run: echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+
+      - name: Install MariaDB Client
+        run: |
+          sudo apt update
+          sudo apt-get install mariadb-client
+
+      - name: Setup
+        run: |
+          pip install frappe-bench
+          bench init --skip-redis-config-generation --skip-assets --frappe-branch version-16 --python "$(which python)" ~/frappe-bench
+
+      - name: Install
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench set-config -g db_host 127.0.0.1
+          bench get-app crema $GITHUB_WORKSPACE
+          bench setup requirements --dev
+          bench new-site --db-root-password root --admin-password admin test_site
+          bench --site test_site install-app crema
+          bench build --app crema
+        env:
+          CI: 'Yes'
+
+      - name: Run UI Tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          bench start &>> ~/frappe-bench/bench_start.log &
+          # run-ui-tests overrides cypress.config.js's baseUrl with the site's own URL.
+          bench --site test_site run-ui-tests crema --headless
+        env:
+          TYPE: ui
+
+      - name: Show bench output
+        if: ${{ always() }}
+        run: cat ~/frappe-bench/bench_start.log || true

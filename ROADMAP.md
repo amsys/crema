@@ -79,7 +79,7 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   and lets a human apply: `transform()` returns a diff the desk dialog applies into an
   open form, `extract()` returns records the caller creates under its own permissions.
   Automation is the one surface that writes unattended, so a task is either fully
-  trusted (`Upsert Records`) or writes nothing at all (`Report Only`) — there is no
+  trusted (`Create or Update Records`) or writes nothing at all (`No Changes`) — there is no
   middle setting, which is exactly where anything touching money sits. The shape: a
   fourth action that runs the pipeline to the end of EXTRACT and parks the rows instead
   of upserting them, plus an approve-or-discard step that replays `_upsert` on rows
@@ -95,7 +95,7 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   record travels to the model without its own line items — a Sales Invoice with no item
   rows, a BOM with no components, a Purchase Receipt with no received quantities, a
   Stock Reconciliation with no per-item differences. That silently blocks the stock and
-  manufacturing reports a `Report Only` task looks made for: flag receipts whose
+  manufacturing reports a `No Changes` task looks made for: flag receipts whose
   received quantity keeps landing short of what was ordered (the shrinkage /
   short-shipment check), audit BOMs for components that are disabled, mis-priced, or in
   the wrong UOM, summarise which items and warehouses keep losing stock across stock
@@ -105,7 +105,7 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   Password fields stay out), and cap the child rows per record so one 500-line invoice
   does not eat the whole `_EXTRACT_CONTENT_CHARS` budget alone. Until then the planner
   and the extractor disagree: `api._meta_summary` shows the planner child-table fields,
-  so an `Update Source Records` plan can name child fields of the very doctype whose
+  so an `Update the Records It Read` plan can name child fields of the very doctype whose
   serialisation omits them — a plan that validates, then extracts nothing.
 - Related-record context for a document query. `_read_documents` reads exactly one
   doctype's own fields, so every reconciliation an ERP wants — an invoice against its

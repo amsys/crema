@@ -53,7 +53,7 @@ function crema_dry_run(frm) {
 }
 
 function crema_show_dry_run(frm, result) {
-	if (result.action === "Report Only") {
+	if (result.action === "No Changes") {
 		frappe.msgprint({
 			title: __("Dry Run"),
 			message: `<pre style="white-space:pre-wrap">${frappe.utils.escape_html(
@@ -73,7 +73,7 @@ function crema_show_dry_run(frm, result) {
 	}
 
 	const verb =
-		frm.doc.action === "Update Source Records"
+		frm.doc.action === "Update the Records It Read"
 			? __("would be updated")
 			: __("would be written");
 	const header = [
@@ -169,12 +169,18 @@ function crema_render_row_filters(frm, row) {
 	});
 }
 
-// The two read-only grid columns. Mirrors CremaAutomationSource._label/_note so the grid
+// The read-only grid columns. Mirrors CremaAutomationSource._label/_note so the grid
 // updates as the row is edited instead of only after the save; the server stamps the same
 // strings in validate() and is the source of truth. Deliberately untranslated on both
 // sides, so the two never disagree over a saved value.
+//
+// The query-only cells are cleared on a URL row for the same reason the server clears
+// them: a grid column's depends_on mutates the shared docfield, so it cannot hide one
+// row's cell without hiding every row's.
 function crema_stamp_row(frm, row) {
 	const query = row.source_type === "Document Query";
+	const set = (fieldname, value) =>
+		frappe.model.set_value(row.doctype, row.name, fieldname, value);
 
 	let count = 0;
 	try {
@@ -182,19 +188,22 @@ function crema_stamp_row(frm, row) {
 	} catch (e) {
 		count = 0;
 	}
-	const parts = [count === 0 ? "no filters" : count === 1 ? "1 filter" : `${count} filters`];
-	parts.push(`${row.source_limit || 50}/run`);
-	if (row.incremental) parts.push("only changed");
 
-	frappe.model.set_value(
-		row.doctype,
-		row.name,
+	set(
 		"source_label",
 		query
 			? row.source_doctype || ""
 			: (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "")
 	);
-	frappe.model.set_value(row.doctype, row.name, "source_note", query ? parts.join(" · ") : "");
+	set(
+		"source_note",
+		query ? (count === 0 ? "no filters" : count === 1 ? "1 filter" : `${count} filters`) : ""
+	);
+	if (!query) {
+		set("source_limit", 0);
+		set("incremental", 0);
+		set("read_attachments", 0);
+	}
 }
 
 frappe.ui.form.on("Crema Automation Source", {
@@ -203,7 +212,6 @@ frappe.ui.form.on("Crema Automation Source", {
 	source_type: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
 	source_url: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
 	source_limit: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
-	incremental: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
 	source_filters(frm, cdt, cdn) {
 		crema_stamp_row(frm, locals[cdt][cdn]);
 		crema_render_row_filters(frm, locals[cdt][cdn]);
@@ -224,13 +232,21 @@ frappe.ui.form.on("Crema Automation Task", {
 		frappe.call({
 			method: "crema.api.get_interfaces",
 			callback(r) {
-				frm.set_df_property("interface", "options", (r.message || []).join("\n"));
+				// The values are already in this field's meta (install.sync_interface_options);
+				// this only swaps in {value, label} objects, since a Select options string
+				// cannot carry a label separate from its value. Degrades to the meta options
+				// on failure, which are the same values without the friendly names.
+				frm.set_df_property("interface", "options", r.message || []);
 			},
-			// Without this the Interface Select is just empty on failure, with nothing to
-			// tell the user why — see crema.bundle.js's crema_show_error.
 			error: crema_show_error,
 		});
 	},
+
+	// "If a Source Fails" only means something once there are two sources, and its
+	// depends_on is not re-evaluated when a grid row is added — without this it appears
+	// only after the next save or field change.
+	sources_add: (frm) => frm.layout.refresh_dependency(),
+	sources_remove: (frm) => frm.layout.refresh_dependency(),
 
 	refresh(frm) {
 		crema_render_status(frm);

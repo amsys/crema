@@ -1,7 +1,7 @@
 """Integration tests for crema.api.ask_api — the HTTP entry point into `ask()`.
 
 Mock boundary: unittest.mock.patch("crema.client._complete"). Provider/interface
-scaffolding reuses the helpers from crema.test_client.
+scaffolding reuses the helpers from crema.test_fixtures.
 """
 
 from __future__ import annotations
@@ -15,31 +15,18 @@ from unittest.mock import patch
 import frappe
 from crema.api import ask_api
 from crema.exceptions import CremaBudgetError, CremaConfigError
-from crema.test_client import (
-    TEST_ISOLATION_USER,
+from crema.test_fixtures import (
+    TEST_PLAIN_USER,
     CremaFixtureTestCase,
-    _ensure_interface,
-    _ensure_provider,
     _ensure_user,
 )
-
-TEST_PLAIN_USER = "_test_crema_plain_user@example.com"
 
 
 class IntegrationTestCremaAskApi(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_user(TEST_PLAIN_USER)
-        _ensure_provider()
-        _ensure_interface("simple")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
-
-    def setUp(self) -> None:
-        super().setUp()
-        frappe.set_user("Administrator")
+        cls.ensure_fixtures("simple", users=(TEST_PLAIN_USER,))
 
     def tearDown(self) -> None:
         frappe.local.response.pop("http_status_code", None)
@@ -77,7 +64,12 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
             frappe.local.form_dict,
         )
         frappe.local.request = SimpleNamespace(method="POST")
-        frappe.local.request_ip = f"203.0.113.{uuid.uuid4().int % 250 + 1}"
+        # A fresh IP per run, from a /8 rather than a /24: @rate_limit's counter is keyed
+        # on the IP for the whole hourly window and outlives the test, so with only ~250
+        # addresses to draw from, repeated suite runs inside one hour collide and the
+        # first call in the loop below raises instead of the 61st.
+        octets = uuid.uuid4().int
+        frappe.local.request_ip = f"10.{octets % 256}.{octets // 256 % 256}.{octets // 65536 % 256}"
         frappe.local.form_dict = frappe._dict(cmd="crema.api.ask_api")
         try:
             with patch("crema.client._complete", return_value="ok"):
@@ -256,11 +248,7 @@ class IntegrationTestCremaPackageExports(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("simple")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+        cls.ensure_fixtures("simple")
 
     def test_package_reexports_the_full_public_surface(self):
         import crema

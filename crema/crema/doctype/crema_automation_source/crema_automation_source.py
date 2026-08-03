@@ -2,7 +2,7 @@
 
 Per-row validation only, the same split as Crema Model Assignment: everything that can
 be decided from one source row lives here, and the cross-row rules (at least one source,
-`Update Source Records` needs exactly one Document Query, a Document Event trigger needs
+`Update the Records It Read` needs exactly one Document Query, a Document Event trigger needs
 at least one) live one level up in CremaAutomationTask.validate.
 
 One of these is load-bearing for security, not merely helpful: a `source_doctype` in the
@@ -34,6 +34,13 @@ class CremaAutomationSource(Document):
             self.source_doctype = None
             self.source_filters = None
             self.last_read = None
+            # These four are grid columns now, and a grid cell shows its stored value
+            # whatever the row's type is — a `depends_on` on a grid column mutates the
+            # shared docfield and so cannot hide a cell per row. Clearing them is what
+            # keeps a URL row from claiming a per-run cap it does not have.
+            self.source_limit = 0
+            self.incremental = 0
+            self.read_attachments = 0
 
         self.source_label = self._label()
         self.source_note = self._note()
@@ -79,11 +86,9 @@ class CremaAutomationSource(Document):
         return (self.source_url or "").split("://", 1)[-1]
 
     def _note(self) -> str:
+        """The Filters grid column. The limit and the two checks are grid columns of their
+        own now, so this says only how many conditions the query carries."""
         if self.source_type != "Document Query":
             return ""
         count = len(self.parsed_filters())
-        parts = ["no filters" if not count else "1 filter" if count == 1 else f"{count} filters"]
-        parts.append(f"{cint(self.source_limit) or _DEFAULT_SOURCE_LIMIT}/run")
-        if self.incremental:
-            parts.append("only changed")
-        return " · ".join(parts)
+        return "no filters" if not count else "1 filter" if count == 1 else f"{count} filters"

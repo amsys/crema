@@ -203,9 +203,25 @@ extracts — and stops before any write. Backs the **Dry Run** button; see
 | `task` | yes | The Crema Automation Task name. |
 
 Returns `{action, used_stored_plan, plan, rows, row_count, note, allowed_names}`,
-with `rows` capped at the first 20 — or `{action: "Report Only", report}`, or
+with `rows` capped at the first 20 — or `{action: "No Changes", report}`, or
 `{action, row_count, note}` when the source yields nothing. Limited to 20 calls per
 hour per client IP, and uses the same 417 error shape as the endpoints above.
+
+### `POST /api/method/crema.api.trigger_automation`
+
+Starts one **Crema Automation Task** from outside the site — the Webhook trigger. Unlike
+every other endpoint here, this one is **not** System Manager only: the caller needs read
+access to the task document, which an ordinary role grants.
+
+Sign in with a Frappe API key and secret (`Authorization: token <key>:<secret>`).
+
+| Field | Notes |
+|---|---|
+| `task` | Required. The task name. Refused unless its trigger is `Webhook` and it is on. |
+| `payload` | Optional text, at most 20,000 characters. Read as one more source. |
+
+Returns the id of the queued job. 60 calls per hour per client IP. See
+[automation.md](automation.md).
 
 ### Utility endpoints
 
@@ -213,7 +229,7 @@ All System Manager only, all `POST /api/method/<name>`:
 
 | Endpoint | Purpose |
 |---|---|
-| `crema.api.get_interfaces` | The full interface name list. Feeds the Interface field on Crema Automation Task. |
+| `crema.api.get_interfaces` | Value/label pairs for the Use Case dropdown on Crema Automation Task, one per selectable interface. `Security` and `Advanced OCR` are not included — a task must never run as either. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
 | `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
 | `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers panel's Connection badge. |
 | `crema.api.get_usage` | Month-to-date spend and budget per interface and per provider. Feeds the Usage column. |

@@ -7,6 +7,7 @@
  "istable": 1,
  "field_order": [
   "source_type",
+  "sb_grid_only",
   "source_label",
   "source_note",
   "section_detail",
@@ -16,6 +17,7 @@
   "column_break_detail",
   "source_limit",
   "incremental",
+  "read_attachments",
   "last_read"
  ],
  "fields": [
@@ -31,7 +33,12 @@
    "reqd": 1
   },
   {
-   "columns": 4,
+   "fieldname": "sb_grid_only",
+   "fieldtype": "Section Break",
+   "hidden": 1
+  },
+  {
+   "columns": 3,
    "description": "What this source reads. Filled in for you from the settings below.",
    "fieldname": "source_label",
    "fieldtype": "Data",
@@ -40,12 +47,12 @@
    "read_only": 1
   },
   {
-   "columns": 3,
-   "description": "A summary of this source's settings. Filled in for you.",
+   "columns": 2,
+   "description": "How many of the conditions below this source uses. Filled in for you.",
    "fieldname": "source_note",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Details",
+   "label": "Filters",
    "read_only": 1
   },
   {
@@ -84,20 +91,33 @@
    "fieldtype": "Column Break"
   },
   {
+   "columns": 1,
    "default": "50",
    "depends_on": "eval:doc.source_type==\"Document Query\"",
    "description": "How many records to read at most in one run. If more records match, this source picks up where it stopped on the next run — nothing is skipped.",
    "fieldname": "source_limit",
    "fieldtype": "Int",
+   "in_list_view": 1,
    "label": "Records Per Run"
   },
   {
+   "columns": 1,
    "default": "1",
-   "depends_on": "eval:doc.source_type==\"Document Query\" && parent.trigger==\"Schedule\"",
+   "depends_on": "eval:doc.source_type==\"Document Query\" && parent.trigger!=\"Document Event\"",
    "description": "Read only records that changed since this source was last read. Keep this on: with it off, every run sends every matching record to the AI again and you pay for all of them again.",
    "fieldname": "incremental",
    "fieldtype": "Check",
-   "label": "Only Changed Records"
+   "in_list_view": 1,
+   "label": "Only Changed"
+  },
+  {
+   "columns": 1,
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Also read the files attached to each record, such as a PDF invoice that arrived by email. Crema reads PDFs and pictures only, at most five per record, and each one costs an AI call.",
+   "fieldname": "read_attachments",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Attachments"
   },
   {
    "depends_on": "eval:doc.source_type==\"Document Query\"",

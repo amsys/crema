@@ -21,14 +21,17 @@ Security posture — the reason this module is longer than "just call the LLM":
 
 The three actions differ only in what stage 4 does with the extracted rows:
 
-* `Upsert Records` — find-or-create in `target_doctype`.
-* `Update Source Records` — update, never create, and only records whose `name` the
+* `Create or Update Records` — find-or-create in `target_doctype`.
+* `Update the Records It Read` — update, never create, and only records whose `name` the
   source query actually returned (`allowed_names`). `name` is usable as a *match* field
   but is never written: `doc.update({"name": ...})` mutates `self.name`, and
   `BaseDocument.db_update` would then write this document's values onto whatever row
   the model named, with no permission check on that row.
-* `Report Only` — no plan at all, and no writes. The plan machinery exists to map LLM
+* `No Changes` — no plan at all, and no writes. The plan machinery exists to map LLM
   output safely onto database fields; with nothing written there is nothing to validate.
+
+Emailing the result is orthogonal to all three: any task with `notify_to` set mails what
+the run did (a count for the write actions, the answer itself for `No Changes`).
 
 Document-query content is user-editable, so it is a live injection channel — layer 1
 still sees it (it travels in the *prompt* half of `api.ask_json`, and `security.scan`
@@ -39,6 +42,7 @@ out the whole run — and five such runs auto-disable the task.
 
 from __future__ import annotations
 
+import mimetypes
 import re
 from datetime import datetime
 from typing import Any
@@ -59,6 +63,10 @@ _ERROR_MAX_CHARS = 2000
 _RESULT_MAX_CHARS = 20_000
 _FETCH_TIMEOUT = 60
 _SOURCE_LIMIT_DEFAULT = 50
+# One OCR call per attachment, billed and logged like any other. A record with a dozen
+# scans attached would otherwise quietly multiply the cost of one run by twelve.
+_ATTACHMENT_MAX_PER_RECORD = 5
+_WEBHOOK_PAYLOAD_CHARS = 20_000
 
 _EVENT_METHODS = {
     "After Insert": "after_insert",
@@ -115,7 +123,7 @@ def tick() -> None:
     now = now_datetime()
     for task in frappe.get_all(
         "Crema Automation Task",
-        filters={"enabled": 1, "trigger": ("!=", "Document Event")},
+        filters={"enabled": 1, "trigger": "Schedule"},
         fields=["name", "schedule", "last_run", "creation"],
     ):
         try:
@@ -132,20 +140,30 @@ def cleanup_logs() -> None:
     frappe.db.delete("Crema Log", {"creation": ("<", add_days(now_datetime(), -retention_days))})
 
 
-def enqueue_task(task: str, doc_doctype: str | None = None, doc_name: str | None = None) -> str:
+def enqueue_task(
+    task: str, doc_doctype: str | None = None, doc_name: str | None = None, payload: str | None = None
+) -> str:
     """Queue one run of `task`. Deduplicated — a task already queued or running is not
     queued twice. An event-triggered run is deduplicated per *document*, so re-saving one
-    record debounces while two different records both run. Returns the job id."""
+    record debounces while two different records both run. Returns the job id.
+
+    `enqueue_after_commit` matters for the event path: the handler fires inside the
+    transaction that is still writing the record (and, for an inbound email, has not yet
+    saved its attachments), so a worker that started immediately would read a row that
+    does not exist yet.
+    """
     job_id = f"crema-task-{task}-{doc_name}" if doc_name else f"crema-task-{task}"
     job = frappe.enqueue(
         "crema.automation.run_task",
         task=task,
         doc_doctype=doc_doctype,
         doc_name=doc_name,
+        payload=payload,
         queue="long",
         timeout=1800,
         job_id=job_id,
         deduplicate=True,
+        enqueue_after_commit=True,
     )
     return getattr(job, "id", None) or job_id
 
@@ -227,10 +245,13 @@ def _fetch_event_tasks() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def run_task(task: str, doc_doctype: str | None = None, doc_name: str | None = None) -> str:
+def run_task(
+    task: str, doc_doctype: str | None = None, doc_name: str | None = None, payload: str | None = None
+) -> str:
     """Run one automation task end to end. `doc_doctype`/`doc_name` are set by an event
     trigger and narrow the matching document-query source to that one record; any other
-    source is still read in full. Returns the recorded status."""
+    source is still read in full. `payload` is set by a webhook trigger and is read as one
+    more source. Returns the recorded status."""
     doc = frappe.get_doc("Crema Automation Task", task)
 
     # Captured before the read, and used as the new watermark for any source that did not
@@ -252,11 +273,18 @@ def run_task(task: str, doc_doctype: str | None = None, doc_name: str | None = N
         # auto-disable never fired while tick() re-enqueued the task every 15 minutes.
         return _record(doc, "Failed", f"interface unresolvable — {_describe(exc)}")
 
+    # A copy, not a mutation: _resolve's dict may be shared, and everything downstream —
+    # the sandbox, _read_documents' "skip my own writes" filter, _ocr's file loading —
+    # reads the isolation user from cfg, so the task's own Runs As has to land here.
+    cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
+
     # The guard must cover every write this run makes, including _record's own db_set.
     frappe.local.crema_in_automation = True
     try:
         with sandbox.isolation(cfg["isolation_user"]):
-            status, error, plan, result, watermarks = _run_inside(doc, cfg, started, doc_doctype, doc_name)
+            status, error, plan, result, watermarks = _run_inside(
+                doc, cfg, started, doc_doctype, doc_name, payload
+            )
 
         # Outside the sandbox on purpose: db_set stamps modified_by with the session user,
         # and the task document's own audit trail belongs to the scheduler, not to the
@@ -279,12 +307,14 @@ def run_task(task: str, doc_doctype: str | None = None, doc_name: str | None = N
 
 
 def _run_inside(
-    doc, cfg: dict, started, doc_doctype: str | None, doc_name: str | None
+    doc, cfg: dict, started, doc_doctype: str | None, doc_name: str | None, payload: str | None = None
 ) -> tuple[str, str, dict | None, str, dict[str, Any]]:
     """Everything that runs as the isolation user. Returns
     (status, error, plan_to_store, result, watermarks)."""
     try:
-        content, allowed_names, note, watermarks = _read_source(doc, cfg, started, doc_doctype, doc_name)
+        content, allowed_names, note, watermarks = _read_source(
+            doc, cfg, started, doc_doctype, doc_name, payload=payload
+        )
     except Exception as exc:
         return "Failed", f"source read failed — {_describe(exc)}", None, "", {}
 
@@ -295,7 +325,7 @@ def _run_inside(
         # by the scan must still advance, or the backlog behind it is never read.
         return "Success", "", None, note or "no new records", watermarks
 
-    if doc.action == "Report Only":
+    if doc.action == "No Changes":
         try:
             report = api.ask(doc.interface, doc.instruction, context=content)
         except Exception as exc:
@@ -364,10 +394,12 @@ def _record(doc, status: str, error: str, result: str = "") -> str:
 
 
 def _notify(doc, status: str, result: str) -> None:
-    """Email a Report Only result. Outside the sandbox on purpose: the recipient list is
+    """Email what the run did — the answer itself for a No Changes task, the record counts
+    for one that writes. Reporting is independent of the action: a task that writes may
+    still say so. Outside the sandbox on purpose: the recipient list is
     System-Manager-entered and sending mail is a system capability, not a document
     permission — the same reasoning the URL fetch used to carry."""
-    if doc.action != "Report Only" or status == "Failed" or not doc.notify_to or not result:
+    if status == "Failed" or not doc.notify_to or not result:
         return
     try:
         frappe.sendmail(
@@ -391,23 +423,40 @@ def _describe(exc: Exception) -> str:
 
 
 def _read_source(
-    doc, cfg: dict, started, doc_doctype: str | None, doc_name: str | None, preview: bool = False
+    doc,
+    cfg: dict,
+    started,
+    doc_doctype: str | None,
+    doc_name: str | None,
+    preview: bool = False,
+    payload: str | None = None,
 ) -> tuple[str, set[str] | None, str, dict[str, Any]]:
     """Read every source row of this task, as one labelled text. Returns
     (content, allowed_names, note, watermarks).
 
     `allowed_names` is None when no document query contributed, and otherwise the exact
-    set of record names the queries returned — it is what fences `Update Source Records`
+    set of record names the queries returned — it is what fences `Update the Records It Read`
     (which validate() holds to a single query source, so the set is one query's).
 
     `watermarks` is {source row name: read up to}, applied by run_task only if the run as
     a whole succeeded. A source that raised is absent from it, so it is re-read next time.
 
+    A webhook `payload` counts as one more source while the task's Use Webhook Data box is
+    on: it gets its own share of the budget and its own labelled block, and layer 1 scans it
+    exactly like any other content. With the box off it is dropped here, which is what keeps
+    the budget split, the labelled block and the all-sources-failed rescue below in step.
+
     Each source gets an equal share of the content budget: without that, one chatty source
     truncates the rest away and the run silently ignores them.
     """
-    budget = _EXTRACT_CONTENT_CHARS // max(len(doc.sources), 1)
+    if not doc.read_webhook_payload:
+        payload = None
+
+    budget = _EXTRACT_CONTENT_CHARS // max(len(doc.sources) + (1 if payload else 0), 1)
     blocks, allowed_names, notes, watermarks, failures = [], None, [], {}, []
+
+    if payload:
+        blocks.append(f"=== Source: webhook payload ===\n{payload[:budget]}")
 
     for source in doc.sources:
         try:
@@ -434,7 +483,7 @@ def _read_source(
         if read_up_to:
             watermarks[source.name] = read_up_to
 
-    if failures and len(failures) == len(doc.sources):
+    if failures and len(failures) == len(doc.sources) and not payload:
         raise AutomationError("; ".join(failures))
 
     return "\n\n".join(blocks), allowed_names, "; ".join(notes + failures), watermarks
@@ -482,7 +531,7 @@ def _read_documents(
         filters.append(["name", "=", doc_name])
     elif incremental and source.last_read:
         filters.append(["modified", ">", source.last_read])
-        # This task's own writes bump `modified`. Without this an Update Source Records
+        # This task's own writes bump `modified`. Without this an update-source task
         # task re-reads — and re-bills for — everything it just wrote, every tick,
         # forever. A later human edit sets modified_by back to the human, so the record
         # legitimately comes back.
@@ -515,10 +564,59 @@ def _read_documents(
         kept = [row for row in rows if not security.scan(frappe.as_json(row))]
         dropped = len(rows) - len(kept)
 
-    note = f"{dropped} skipped by the security scan" if dropped else ""
+    notes = [f"{dropped} skipped by the security scan"] if dropped else []
     if not kept:
-        return "", set(), note, read_up_to
-    return frappe.as_json(kept)[:budget], {row["name"] for row in kept}, note, read_up_to
+        return "", set(), "; ".join(notes), read_up_to
+
+    text = frappe.as_json(kept)
+    if source.read_attachments:
+        attachments, attachment_note = _read_attachments(source.source_doctype, kept)
+        text = f"{text}\n{attachments}" if attachments else text
+        if attachment_note:
+            notes.append(attachment_note)
+
+    return text[:budget], {row["name"] for row in kept}, "; ".join(notes), read_up_to
+
+
+def _read_attachments(doctype: str, rows: list) -> tuple[str, str]:
+    """OCR the files attached to each record and return them as labelled text blocks.
+
+    Attachments are a universal frappe concept — the sidebar, a drag-drop and an inbound
+    email all produce the same File rows — so this is not an email feature. It is what
+    makes "an invoice arrives by mail, read it into a record" reachable without code: an
+    Email Account writes one Communication per message and attaches its files to it.
+
+    frappe.get_list, not frappe.desk.form.load.get_attachments: that helper uses get_all,
+    which ignores permissions, and everything inside sandbox.isolation goes through the
+    permission engine. Note the separate, already-documented limit that _ocr._load_bytes
+    reads a File's bytes off disk without its own permission check — this listing is the
+    fence, so it must be the permission-aware one.
+    """
+    blocks, failures = [], []
+    for row in rows:
+        files = frappe.get_list(
+            "File",
+            filters={"attached_to_doctype": doctype, "attached_to_name": row["name"]},
+            fields=["file_name", "file_url"],
+            order_by="creation asc",
+            limit=_ATTACHMENT_MAX_PER_RECORD,
+        )
+        for file in files:
+            mime = mimetypes.guess_type(file.file_name or "")[0] or ""
+            # _ocr.prep_parts returns [] for anything that is not a PDF or an image, and
+            # ocr() would still bill a provider call for the empty result.
+            if mime != "application/pdf" and not mime.startswith("image/"):
+                continue
+            try:
+                text = api.ocr(file.file_url)["text"]
+            except Exception as exc:
+                failures.append(f"{file.file_name} — {_describe(exc)}")
+                continue
+            if text:
+                blocks.append(f"-- attachment {file.file_name} on {row['name']} --\n{text}")
+
+    note = f"{len(failures)} attachment(s) unreadable: {'; '.join(failures)}" if failures else ""
+    return "\n\n".join(blocks), note
 
 
 def _fetch(url: str) -> str:
@@ -565,7 +663,7 @@ def _make_plan(doc, content: str, failure: str | None = None) -> dict:
 
 
 def _plan_rules(doc) -> str:
-    if doc.action == "Update Source Records":
+    if doc.action == "Update the Records It Read":
         return f"{_PLAN_RULES}\n{_UPDATE_SOURCE_RULE}"
     return _PLAN_RULES
 
@@ -667,7 +765,7 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
 def _execute(doc, plan: dict, content: str, allowed_names: set[str] | None) -> str:
     """Run stage 4 and return a human-readable count for `last_result`."""
     mapping = plan["map"]
-    if doc.action != "Update Source Records":
+    if doc.action != "Update the Records It Read":
         return _summary(_upsert(mapping, _extract(doc, plan, content)))
 
     # Checked before the extraction call, so a plan of the wrong shape costs nothing.
@@ -714,7 +812,7 @@ def _upsert(
     """Find-or-create one record per row, then (optionally) upsert one child row from the
     same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts.
 
-    `create=False` and `allowed_names` are the `Update Source Records` fences: never
+    `create=False` and `allowed_names` are the `Update the Records It Read` fences: never
     create, and never touch a record the source query did not return.
     """
     doctype = mapping["doctype"]
@@ -781,13 +879,14 @@ def dry_run(task: str) -> dict[str, Any]:
     """
     doc = frappe.get_doc("Crema Automation Task", task)
     cfg = client._resolve(doc.interface)
+    cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
 
     with sandbox.isolation(cfg["isolation_user"]):
         content, allowed_names, note, _ = _read_source(doc, cfg, now_datetime(), None, None, preview=True)
         if not content.strip():
             return {"action": doc.action, "row_count": 0, "note": note or "no records matched"}
 
-        if doc.action == "Report Only":
+        if doc.action == "No Changes":
             return {"action": doc.action, "report": api.ask(doc.interface, doc.instruction, context=content)}
 
         stored = _stored_plan(doc)

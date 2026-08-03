@@ -35,8 +35,10 @@ onto **Crema Settings**, with no provider assigned yet. The row set is not fixed
 is the predefined interfaces plus any interface another installed app registers
 through the `crema_interfaces` hook (see [configure.md](configure.md)). `bench
 migrate` re-runs this seeding step, so a name added by a future version of Crema, or
-by a newly installed app, appears without a manual step. The install step also
-creates the three Number Cards the Crema workspace shows (calls, cost, blocked).
+by a newly installed app, appears without a manual step. It also re-stamps the
+options of the Use Case dropdown on Crema Automation Task, so a name added there
+shows up in that dropdown too. The install step also creates the three Number Cards
+the Crema workspace shows (calls, cost, blocked).
 
 The install step also creates one Frappe user, `crema@<site>` — enabled, no password
 (it can never log in), holding only the `Crema User` role. If the site name is not a

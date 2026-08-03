@@ -1,8 +1,8 @@
 """Integration tests for crema._ocr — zero live network calls.
 
-Mock boundary: unittest.mock.patch("crema.client._complete"). PDF fixtures are tiny
-documents generated in-test with pymupdf; provider/interface scaffolding reuses the
-helpers from crema.test_client.
+Mock boundary: unittest.mock.patch("crema.client._complete"). The tiny pymupdf/PIL
+documents these tests run on, and the provider/interface scaffolding, both come from
+crema.test_fixtures.
 """
 
 from __future__ import annotations
@@ -18,32 +18,18 @@ import frappe
 from crema import _ocr, cache
 from crema._json import strip_fence
 from crema.api import ocr
-from crema.test_client import (
+from crema.test_fixtures import (
     TEST_ISOLATION_USER,
     TEST_PROVIDER,
     CremaFixtureTestCase,
     _clear_defaults,
+    _drop_advanced_ocr,
     _ensure_interface,
-    _ensure_provider,
-    _ensure_user,
+    _png_bytes,
+    _scanned_pdf_bytes,
+    _text_pdf_bytes,
 )
 from frappe.tests import UnitTestCase
-
-
-def _text_pdf_bytes() -> bytes:
-    doc = pymupdf.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "Hello world. " * 20)  # well over _TEXT_PDF_MIN_CHARS
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
-def _png_bytes(size: tuple[int, int] = (64, 64)) -> bytes:
-    img = PILImage.new("RGB", size, color="red")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
 
 
 class UnitTestCremaOcrHelpers(UnitTestCase):
@@ -112,38 +98,14 @@ class UnitTestCremaOcrHelpers(UnitTestCase):
         self.assertEqual(strip_fence('{"a": 1}'), '{"a": 1}')
 
 
-def _scanned_pdf_bytes() -> bytes:
-    doc = pymupdf.open()
-    page = doc.new_page()
-    page.draw_rect(pymupdf.Rect(50, 50, 200, 200))  # a shape, no text -> "scanned"
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
-def _drop_advanced_ocr() -> None:
-    """Also used as the "make sure advanced_ocr is NOT configured" setUp fixture, so it
-    must clear the resolved-config cache unconditionally: client._resolve_one caches to
-    redis with no TTL (client.py:60), and a per-test DB savepoint rollback undoes a
-    previous test's _ensure_interface("advanced_ocr") row change but not that cache
-    entry — leaving a stale "advanced_ocr is configured" cache hit for this test to
-    trip over."""
-    cache.clear_interfaces()
-
-
 class IntegrationTestCremaOcr(CremaFixtureTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        frappe.set_user("Administrator")
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        _ensure_interface("ocr")
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+        cls.ensure_fixtures("ocr")
 
     def setUp(self) -> None:
         super().setUp()
-        frappe.set_user("Administrator")
         _clear_defaults()  # else the real site's default_provider could resolve
         # "advanced_ocr" out from under test_low_confidence_no_advanced_ocr_returns_as_is
         _drop_advanced_ocr()  # every test starts with a known, uncached-stale state

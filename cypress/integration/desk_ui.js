@@ -558,13 +558,20 @@ context("Crema Settings", () => {
 	// hook), seeded at install/migrate, none addable or removable (crema_settings.js
 	// sets grid.df.cannot_add_rows / cannot_delete_rows). Counted live rather than
 	// hardcoded, since the app-registered half varies per site.
+	//
+	// get_interfaces() is the narrower list the automation task's Use Case picker
+	// shows — interfaces.selectable(), i.e. names() minus interfaces.INTERNAL. The
+	// grid still carries a row for each of those two, so it is a superset by exactly
+	// that count.
+	const INTERNAL_INTERFACE_COUNT = 2;
+
 	it("shows the full set of model assignment rows with no add/delete affordance", () => {
 		cy.window()
 			.then((win) => win.frappe.xcall("crema.api.get_interfaces"))
-			.then((names) => {
+			.then((selectable) => {
 				cy.get('[data-fieldname="assignments"] .grid-row').should(
 					"have.length",
-					names.length
+					selectable.length + INTERNAL_INTERFACE_COUNT
 				);
 			});
 		cy.get('[data-fieldname="assignments"]').within(() => {

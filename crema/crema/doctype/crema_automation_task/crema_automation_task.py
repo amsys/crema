@@ -1,7 +1,7 @@
 """Crema Automation Task controller.
 
 `validate` is where the *authoring-time* fences live. The load-bearing one for security is
-that `Update Source Records` is refused unless the task has exactly one Document Query
+that `Update the Records It Read` is refused unless the task has exactly one Document Query
 source. Without a source doctype, `validate` would leave `target_doctype` blank, and a
 blank `target_doctype` makes `automation._validate_plan`'s doctype check a no-op — a
 self-written plan could then name any doctype the isolation user can reach, with no
@@ -20,11 +20,13 @@ failure that would otherwise only appear at 3am in `last_error`.
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import quote
 
 from croniter import croniter
 
 import frappe
 from crema import client, interfaces, sandbox
+from crema.crema.doctype.crema_model_assignment.crema_model_assignment import validate_isolation_user
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import now_datetime, split_emails, validate_email_address
@@ -56,11 +58,16 @@ class CremaAutomationTask(Document):
     def validate(self) -> None:
         self._apply_schedule_preset()
 
-        if self.trigger != "Document Event" and not croniter.is_valid(self.schedule or ""):
+        if self.trigger == "Schedule" and not croniter.is_valid(self.schedule or ""):
             frappe.throw(f"'{self.schedule}' is not a valid cron expression.")
 
         if self.interface not in interfaces.names():
             frappe.throw(f"'{self.interface}' is not a known crema interface.")
+
+        # Same fencing rules as a Crema Model Assignment row's own Runs As, reused rather
+        # than restated: an override that could be Administrator or a System Manager would
+        # dissolve the sandbox exactly as the per-interface one would.
+        validate_isolation_user(self.run_as, _("Runs As"))
 
         # Frappe does NOT call a child row's own controller validate() as part of a parent
         # save — Document._validate() only runs generic field-level checks on children,
@@ -70,6 +77,7 @@ class CremaAutomationTask(Document):
         for source in self.sources:
             source.validate()
 
+        self._validate_sources()
         self._validate_action()
         self._validate_trigger()
 
@@ -98,11 +106,21 @@ class CremaAutomationTask(Document):
 
     @property
     def next_run(self) -> datetime | None:
-        if not self.enabled or self.trigger == "Document Event":
+        if not self.enabled or self.trigger != "Schedule":
             return None
         if not croniter.is_valid(self.schedule or ""):
             return None
         return croniter(self.schedule, self.last_run or now_datetime()).get_next(datetime)
+
+    @property
+    def webhook_endpoint(self) -> str:
+        return f"/api/method/crema.api.trigger_automation?task={quote(self.name or '')}"
+
+    def isolation_user(self, cfg: dict) -> str:
+        """The account this task acts as: its own Runs As when set, otherwise the one the
+        use case resolved to. One place, so the sandbox, the save-time readability warning
+        and the incremental 'skip my own writes' filter can never disagree."""
+        return self.run_as or cfg["isolation_user"]
 
     @property
     def plan_target_doctype(self) -> str | None:
@@ -166,24 +184,40 @@ class CremaAutomationTask(Document):
             return True
         return _sources_signature(self) != _sources_signature(before)
 
+    def _validate_sources(self) -> None:
+        """A task reads something, unless a webhook hands it the something — and it only
+        does that while Use Webhook Data is on, so with the box off a source row is required
+        again. The field's `mandatory_depends_on` says the same thing to the form, but
+        frappe evaluates that client-side only — this is the fence, that is the hint."""
+        if not self.sources and not (self.trigger == "Webhook" and self.read_webhook_payload):
+            frappe.throw(
+                _(
+                    "Add at least one source. Only a Webhook task that uses webhook data may "
+                    "have none, because the system calling it sends what to read."
+                )
+            )
+
     def _validate_action(self) -> None:
-        if self.action == "Update Source Records":
+        # Any action may email its result, so the recipients are checked for all of them.
+        for address in split_emails(self.notify_to or ""):
+            validate_email_address(address, throw=True)
+
+        if self.action == "Update the Records It Read":
             # See the module docstring — this is the fence, not a convenience check.
             queries = self.query_sources()
             if len(queries) != 1:
                 frappe.throw(
                     _(
-                        "Update Source Records needs exactly one Document Query source — it writes "
-                        "back to the records it read, and cannot do that for two record types at once."
+                        "Update the Records It Read needs exactly one Document Query source — it "
+                        "writes back to the records it read, and cannot do that for two record "
+                        "types at once."
                     )
                 )
             self.target_doctype = queries[0].source_doctype
-        elif self.action == "Report Only":
+        elif self.action == "No Changes":
             self.target_doctype = None
-            for address in split_emails(self.notify_to or ""):
-                validate_email_address(address, throw=True)
         elif not self.target_doctype:
-            frappe.throw(_("Upsert Records needs a Target DocType."))
+            frappe.throw(_("Create or Update Records needs a Record Type to Write."))
 
     def _validate_trigger(self) -> None:
         if self.trigger != "Document Event":
@@ -199,7 +233,7 @@ class CremaAutomationTask(Document):
             )
 
     def _warn_unreadable_sources(self) -> None:
-        """Warn — never block — when the interface's isolation user cannot read what this
+        """Warn — never block — when the account this task runs as cannot read what this
         task is pointed at. The interface may legitimately be unconfigured while the task
         is being authored, so an unresolvable one is Crema Settings' problem, not this
         form's. Blocking here would also make an unrelated Crema Settings change able to
@@ -210,7 +244,7 @@ class CremaAutomationTask(Document):
         if not doctypes:
             return
         try:
-            isolation_user = client._resolve(self.interface)["isolation_user"]
+            isolation_user = self.isolation_user(client._resolve(self.interface))
             with sandbox.isolation(isolation_user):
                 unreadable = [dt for dt in doctypes if not frappe.has_permission(dt, "read")]
         except Exception:

@@ -26,7 +26,7 @@ context("Crema Automation Task form", () => {
 				],
 				interface: "complex",
 				instruction: "Set a priority on every open item.",
-				action: "Update Source Records",
+				action: "Update the Records It Read",
 			},
 			true
 		);
@@ -34,7 +34,13 @@ context("Crema Automation Task form", () => {
 
 	beforeEach(() => {
 		cy.intercept("POST", "/api/method/crema.api.get_interfaces", {
-			body: { message: ["simple", "complex", "extraction"] },
+			body: {
+				message: [
+					{ value: "simple", label: "Default" },
+					{ value: "complex", label: "Complex" },
+					{ value: "extraction", label: "Extraction" },
+				],
+			},
 		}).as("interfaces");
 	});
 
@@ -52,7 +58,7 @@ context("Crema Automation Task form", () => {
 		cy.intercept("POST", "/api/method/crema.api.dry_run_automation", {
 			body: {
 				message: {
-					action: "Update Source Records",
+					action: "Update the Records It Read",
 					used_stored_plan: false,
 					row_count: 2,
 					rows: [
@@ -96,6 +102,30 @@ context("Crema Automation Task form", () => {
 		cy.get(".modal-body").should("contain.text", "prompt injection");
 	});
 
+	it("shows each source's settings as separate grid columns", () => {
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+
+		// The old single "Details" column is four now, so the limit and the two checks can
+		// be read — and changed — without opening the row.
+		cy.get('[data-fieldname="sources"] .grid-heading-row').as("head");
+		cy.get("@head").should("contain.text", "Filters");
+		cy.get("@head").should("contain.text", "Records Per Run");
+		cy.get("@head").should("contain.text", "Only Changed");
+		cy.get("@head").should("contain.text", "Attachments");
+	});
+
+	it("reveals 'If a Source Fails' as soon as a second source row exists", () => {
+		// depends_on is not re-evaluated when a grid row is added, so without the
+		// sources_add handler this only appears after the next save.
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get('[data-fieldname="on_source_error"]').should("not.be.visible");
+		cy.get('[data-fieldname="sources"] .grid-add-row').click();
+		cy.get('[data-fieldname="on_source_error"]').should("be.visible");
+	});
+
 	it("summarises each source in the grid", () => {
 		cy.visit(`/app/crema-automation-task/${TASK}`);
 		cy.wait("@interfaces");
@@ -104,6 +134,8 @@ context("Crema Automation Task form", () => {
 		cy.get("@row").should("contain.text", "Document Query");
 		cy.get("@row").should("contain.text", "ToDo");
 		cy.get("@row").should("contain.text", "no filters");
+		// The limit is its own cell now, not part of a "· 50/run ·" summary string.
+		cy.get("@row").find('[data-fieldname="source_limit"]').should("contain.text", "50");
 	});
 
 	it("opens a filter builder from the source row's filters table", () => {

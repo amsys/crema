@@ -2,6 +2,7 @@
 
 > A hardened LLM interface and security layer for Frappe apps — not a chatbot.
 
+[![CI](https://github.com/amsys/crema/actions/workflows/ci.yml/badge.svg)](https://github.com/amsys/crema/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Frappe](https://img.shields.io/badge/frappe-v16-3B82F6)
 ![Python](https://img.shields.io/badge/python-3.14-yellow)

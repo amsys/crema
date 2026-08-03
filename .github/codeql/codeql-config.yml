@@ -1,0 +1,5 @@
+name: "crema CodeQL config"
+
+paths-ignore:
+  - crema/public/dist
+  - node_modules

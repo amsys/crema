@@ -241,7 +241,7 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         self.assertEqual(doc.target_doctype, "ToDo")  # taken from the one query source
 
     def test_a_url_row_clears_the_cells_that_only_a_query_uses(self):
-        """Records Per Run, Only Changed and Attachments are grid columns now. A grid
+        """Per Run, Changed and Files are grid columns now. A grid
         column's depends_on mutates the shared docfield, so it cannot hide one row's cell
         without hiding every row's — the values themselves have to be honest."""
         doc = frappe.new_doc("Crema Automation Task")
@@ -266,9 +266,10 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         self.assertEqual(row.source_limit, 0)
         self.assertFalse(row.incremental)
         self.assertFalse(row.read_attachments)
-        self.assertEqual(row.source_note, "")
+        # A URL row carries no filter count, so What is the address alone.
+        self.assertEqual(row.source_label, "example.invalid/x")
 
-    def test_a_query_row_summarises_only_its_filters(self):
+    def test_a_query_row_label_carries_its_filter_count(self):
         doc = frappe.new_doc("Crema Automation Task")
         doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
         doc.schedule = "0 3 * * *"
@@ -285,7 +286,7 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         )
         doc.insert(ignore_permissions=True)
 
-        self.assertEqual(doc.sources[0].source_note, "1 filter")
+        self.assertEqual(doc.sources[0].source_label, "ToDo · 1 filter")
 
     @staticmethod
     def _task_with_source(**source) -> frappe.Document:
@@ -466,8 +467,9 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         task = frappe.get_doc("Crema Automation Task", _EXAMPLE_TASK_NAME)
         self.assertFalse(task.enabled)  # an example that shipped enabled would write records
         self.assertEqual(task.action, "No Changes")
-        # On Update, not After Insert: inbound mail attaches the files after the insert.
-        self.assertEqual(task.trigger, "Document Event")
+        # The trigger is the whole recipe now, and it forces On Update rather than
+        # After Insert: inbound mail attaches the files after the insert.
+        self.assertEqual(task.trigger, "Incoming Email")
         self.assertEqual(task.event, "On Update")
         self.assertEqual(len(task.sources), 1)
         self.assertEqual(task.sources[0].source_doctype, "Communication")
@@ -512,7 +514,7 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
 
     def test_sync_interface_options_stamps_the_select_options_onto_meta(self):
         """The Property Setter install.sync_interface_options writes is what the
-        Crema Automation Task "Use Case" picker actually reads at runtime — pin that
+        Crema Automation Task "AI Profile" picker actually reads at runtime — pin that
         frappe.get_meta sees it, not just that make_property_setter didn't raise.
         frappe.make_property_setter's own validate() already calls
         frappe.clear_cache(doctype=...) (see PropertySetter.validate in frappe core),
@@ -524,8 +526,8 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         field = frappe.get_meta("Crema Automation Task").get_field("interface")
         self.assertEqual(field.fieldtype, "Select")
         self.assertEqual(field.options.split("\n"), ["", *interfaces.selectable()])
-        self.assertNotIn("security", field.options.split("\n"))
-        self.assertNotIn("advanced_ocr", field.options.split("\n"))
+        for excluded in ("security", "advanced_ocr", "view", "transform"):
+            self.assertNotIn(excluded, field.options.split("\n"))
 
     def test_ensure_isolation_user_is_idempotent(self):
         """Calling twice must return the same email and not insert a second User

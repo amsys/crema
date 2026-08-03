@@ -45,6 +45,10 @@ _SCHEDULE_PRESETS = {
 # sources are compared separately — see _sources_signature.
 _PLAN_INPUTS = ("instruction", "target_doctype", "action")
 
+# What an Incoming Email task watches. Frappe writes one of these per received message,
+# whichever inbox it arrived in, and attaches the message's files to it.
+_EMAIL_DOCTYPE = "Communication"
+
 
 def _sources_signature(doc) -> list[tuple[str, str]]:
     """What a plan was written against: which sources, in order, and what each points at.
@@ -68,6 +72,10 @@ class CremaAutomationTask(Document):
         # than restated: an override that could be Administrator or a System Manager would
         # dissolve the sandbox exactly as the per-interface one would.
         validate_isolation_user(self.run_as, _("Runs As"))
+
+        # Before the child loop below: the row this may add has to be stamped and
+        # trial-queried like any other.
+        self._apply_email_trigger()
 
         # Frappe does NOT call a child row's own controller validate() as part of a parent
         # save — Document._validate() only runs generic field-level checks on children,
@@ -219,8 +227,40 @@ class CremaAutomationTask(Document):
         elif not self.target_doctype:
             frappe.throw(_("Create or Update Records needs a Record Type to Write."))
 
+    def _apply_email_trigger(self) -> None:
+        """Incoming Email is sugar over Document Event, materialised into the ordinary
+        model: it fills in the event and the source row a mail-watching task always needs,
+        and everything downstream then sees a plain Document Query on Communication. The
+        seeded row is a normal row — visible, editable, deletable — and switching the
+        trigger away leaves it alone.
+
+        On Update, not After Insert: frappe's inbound mail inserts the Communication and
+        only then attaches the files to it (frappe/email/receive.py InboundMail.process),
+        so a task triggered on the insert would find no attachments.
+        """
+        if self.trigger != "Incoming Email":
+            return
+
+        self.event = "On Update"
+        if any(row.source_doctype == _EMAIL_DOCTYPE for row in self.query_sources()):
+            return
+
+        self.append(
+            "sources",
+            {
+                "source_type": "Document Query",
+                "source_doctype": _EMAIL_DOCTYPE,
+                "source_filters": frappe.as_json([["sent_or_received", "=", "Received"]]),
+                # Every attachment is a separate billed OCR call, so a mail task reads a
+                # small batch by default.
+                "source_limit": 5,
+                "incremental": 1,
+                "read_attachments": 1,
+            },
+        )
+
     def _validate_trigger(self) -> None:
-        if self.trigger != "Document Event":
+        if self.trigger not in ("Document Event", "Incoming Email"):
             return
         if not self.event:
             frappe.throw(_("A Document Event trigger needs an Event."))

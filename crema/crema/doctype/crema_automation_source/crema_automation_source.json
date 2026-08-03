@@ -9,7 +9,6 @@
   "source_type",
   "sb_grid_only",
   "source_label",
-  "source_note",
   "section_detail",
   "source_url",
   "source_doctype",
@@ -38,21 +37,12 @@
    "hidden": 1
   },
   {
-   "columns": 3,
-   "description": "What this source reads. Filled in for you from the settings below.",
+   "columns": 5,
+   "description": "What this source reads, and how many conditions narrow it down. Filled in for you from the settings below.",
    "fieldname": "source_label",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "What",
-   "read_only": 1
-  },
-  {
-   "columns": 2,
-   "description": "How many of the conditions below this source uses. Filled in for you.",
-   "fieldname": "source_note",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Filters",
    "read_only": 1
   },
   {
@@ -98,17 +88,17 @@
    "fieldname": "source_limit",
    "fieldtype": "Int",
    "in_list_view": 1,
-   "label": "Records Per Run"
+   "label": "Per Run"
   },
   {
    "columns": 1,
    "default": "1",
-   "depends_on": "eval:doc.source_type==\"Document Query\" && parent.trigger!=\"Document Event\"",
+   "depends_on": "eval:doc.source_type==\"Document Query\" && parent.trigger!=\"Document Event\" && parent.trigger!=\"Incoming Email\"",
    "description": "Read only records that changed since this source was last read. Keep this on: with it off, every run sends every matching record to the AI again and you pay for all of them again.",
    "fieldname": "incremental",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Only Changed"
+   "label": "Changed"
   },
   {
    "columns": 1,
@@ -117,7 +107,7 @@
    "fieldname": "read_attachments",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Attachments"
+   "label": "Files"
   },
   {
    "depends_on": "eval:doc.source_type==\"Document Query\"",

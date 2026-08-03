@@ -162,8 +162,9 @@ provider call, until the TTL expires.
 | `view` | View | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
 | `transcribe` | Transcribe | Speech-to-text via `crema.transcribe()` | none — a transcription call cannot fall back to a chat model |
 
-The Crema Automation Task Use Case dropdown offers ten of these — every one except
-`security` and `advanced_ocr`, which a task must never run as.
+The Crema Automation Task **AI Profile** dropdown offers eight of these. It leaves out
+`security` and `advanced_ocr`, which a task must never run as, and `view` and `transform`,
+whose answers only the desk UI that asked for them can apply.
 
 If an interface has no provider of its own, the system tries Crema Settings' Default
 Provider first. Only if that is also blank does it try the next interface in its

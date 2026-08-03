@@ -9,10 +9,14 @@ One of these is load-bearing for security, not merely helpful: a `source_doctype
 Crema module is refused, so a task can never read — or be triggered by — crema's own
 audit rows.
 
-`source_label` and `source_note` are stamped here rather than derived at render time
-because a grid column has to be a real field. They are display only; nothing in
-automation.py reads them for behaviour. crema_automation_task.js stamps the same two
-strings on change so the grid updates before the save.
+`source_label` is stamped here rather than derived at render time because a grid column
+has to be a real field. It is the "What" column, and it carries the filter count too
+("Communication · 2 filters") — a filter count is not worth a column of its own in a grid
+with ten to share. crema_automation_task.js stamps the same string on change so the grid
+updates before the save.
+
+`source_label` is display only. automation.py needs the same source named without the
+filter count — in a prompt header, in a failure line — and calls heading() for that.
 """
 
 from __future__ import annotations
@@ -43,7 +47,6 @@ class CremaAutomationSource(Document):
             self.read_attachments = 0
 
         self.source_label = self._label()
-        self.source_note = self._note()
 
     def _validate_query(self) -> None:
         if not self.source_doctype:
@@ -79,16 +82,21 @@ class CremaAutomationSource(Document):
             frappe.throw(_("Which Records must be a JSON list or object."))
         return filters
 
-    def _label(self) -> str:
+    def heading(self) -> str:
+        """This source named plainly — no filter count. automation._read_source puts it in
+        the `=== Source: ... ===` header the model reads, and in the run's own failure and
+        note lines, where "· 2 filters" would be noise."""
         if self.source_type == "Document Query":
             return self.source_doctype or ""
-        # The scheme is noise in a 4-column grid cell and every URL here has one.
+        # The scheme is noise in a grid cell and every URL here has one.
         return (self.source_url or "").split("://", 1)[-1]
 
-    def _note(self) -> str:
-        """The Filters grid column. The limit and the two checks are grid columns of their
-        own now, so this says only how many conditions the query carries."""
+    def _label(self) -> str:
+        """The What grid column: heading(), plus the filter count when there is one."""
+        heading = self.heading()
         if self.source_type != "Document Query":
-            return ""
+            return heading
         count = len(self.parsed_filters())
-        return "no filters" if not count else "1 filter" if count == 1 else f"{count} filters"
+        if not count:
+            return heading
+        return f"{heading} · {count} filter" + ("s" if count > 1 else "")

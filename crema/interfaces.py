@@ -14,6 +14,12 @@ import frappe
 # Also not selectable for an automation task — a task should never be run as either.
 INTERNAL = frozenset({"security", "advanced_ocr"})
 
+# Selectable everywhere else, but never by an automation task: both emit an output shape
+# their caller parses itself — a desk list-view spec, and a single-document diff — and an
+# automation task owns its own plan instead, so neither prompt can be applied to a run.
+# Not INTERNAL: the desk UI drives "view", and transform_api drives "transform".
+NOT_FOR_TASKS = frozenset({"view", "transform"})
+
 PREDEFINED = [
     "simple",
     "translation",
@@ -141,11 +147,12 @@ def fallback_for(name: str) -> str | None:
 
 
 def selectable() -> list[str]:
-    """Interfaces an automation task may be assigned to: names() minus the two internal
-    ones (the LLM guard and the OCR escalation target), which a task should never be run
-    as. This is more than a picker narrowing: install.sync_interface_options() stamps
-    this list onto the "interface" field's Select options via a Property Setter, and
-    frappe validates Select options server-side on every save — stricter than
-    CremaAutomationTask.validate's own names() membership check. A task can no longer
-    be saved with interface set to "security" or "advanced_ocr" at all."""
-    return [name for name in names() if name not in INTERNAL]
+    """Interfaces an automation task may be assigned to: names() minus INTERNAL (the LLM
+    guard and the OCR escalation target) and minus NOT_FOR_TASKS (the two whose output
+    shape only their own caller can apply). This is more than a picker narrowing:
+    install.sync_interface_options() stamps this list onto the "interface" field's Select
+    options via a Property Setter, and frappe validates Select options server-side on
+    every save — stricter than CremaAutomationTask.validate's own names() membership
+    check. A task can no longer be saved with interface set to any of the four at all."""
+    excluded = INTERNAL | NOT_FOR_TASKS
+    return [name for name in names() if name not in excluded]

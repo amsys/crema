@@ -13,21 +13,9 @@ re-read (and re-bill for) its whole backlog on the first run after this patch.
 
 import frappe
 from frappe.model.document import bulk_insert
-from frappe.utils import cint, now
+from frappe.utils import now
 
 _COLUMNS = ("source_type", "source_url", "source_doctype", "source_filters", "source_limit", "incremental")
-
-
-def _note(task) -> str:
-    try:
-        count = len(frappe.parse_json(task.source_filters or "[]"))
-    except Exception:
-        count = 0
-    parts = ["no filters" if not count else "1 filter" if count == 1 else f"{count} filters"]
-    parts.append(f"{cint(task.source_limit) or 50}/run")
-    if task.incremental:
-        parts.append("only changed")
-    return " · ".join(parts)
 
 
 def execute():
@@ -66,12 +54,11 @@ def execute():
                 "source_limit": task.source_limit,
                 "incremental": task.incremental,
                 "last_read": task.last_run if is_query else None,
-                # Same two strings CremaAutomationSource.validate stamps, so the grid reads
-                # right before anyone re-saves the task.
+                # The same string CremaAutomationSource.validate stamps, minus the filter
+                # count it appends, so the grid reads right before anyone re-saves the task.
                 "source_label": (task.source_doctype or "")
                 if is_query
                 else (task.source_url or "").split("://", 1)[-1],
-                "source_note": _note(task) if is_query else "",
                 "owner": "Administrator",
                 "modified_by": "Administrator",
                 "creation": stamp,

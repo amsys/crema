@@ -214,12 +214,14 @@ def _event_tasks() -> dict[tuple[str, str], tuple[str, ...]]:
 
 def _fetch_event_tasks() -> list[dict]:
     """One (task, source_doctype, event) row per document-query source of an enabled event
-    task — a task watching two doctypes is listed under both."""
+    task — a task watching two doctypes is listed under both. Incoming Email is a Document
+    Event trigger with the Communication source and On Update filled in for you (see
+    CremaAutomationTask._apply_email_trigger), so it is picked up here the same way."""
     events = {
         task["name"]: task["event"]
         for task in frappe.get_all(
             "Crema Automation Task",
-            filters={"enabled": 1, "trigger": "Document Event"},
+            filters={"enabled": 1, "trigger": ("in", ("Document Event", "Incoming Email"))},
             fields=["name", "event"],
         )
     }
@@ -469,17 +471,17 @@ def _read_source(
                 narrow = doc_name if source.source_doctype == doc_doctype else None
                 text, names, note, read_up_to = _read_documents(source, cfg, started, narrow, budget, preview)
         except Exception as exc:
-            failures.append(f"{source.source_label or source.source_type} failed — {_describe(exc)}")
-            if doc.on_source_error == "Fail the Run":
+            failures.append(f"{source.heading() or source.source_type} failed — {_describe(exc)}")
+            if doc.on_source_error:
                 raise
             continue
 
         if text:
-            blocks.append(f"=== Source: {source.source_label} ===\n{text}")
+            blocks.append(f"=== Source: {source.heading()} ===\n{text}")
         if names is not None:
             allowed_names = names if allowed_names is None else allowed_names | names
         if note:
-            notes.append(f"{source.source_label}: {note}")
+            notes.append(f"{source.heading()}: {note}")
         if read_up_to:
             watermarks[source.name] = read_up_to
 

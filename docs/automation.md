@@ -8,7 +8,7 @@ Build a task from three choices:
 
 | Choice | Options |
 |---|---|
-| **Trigger** — when it runs | `Schedule` (a cron expression), `Document Event`, or `Webhook` |
+| **Trigger** — when it runs | `Schedule` (a cron expression), `Document Event`, `Incoming Email`, or `Webhook` |
 | **Sources** — what it reads | One or more rows: `URL`, or `Document Query` (records on this site). A task can mix them. A Webhook task can also read what the caller sends. |
 | **Action** — what it does | `Create or Update Records`, `Update the Records It Read`, or `No Changes` |
 
@@ -21,16 +21,16 @@ address in **Email Report To** and it applies to whichever action you picked.
 |---|---|---|
 | `task_name` | Data | Required. Unique. |
 | `enabled` | Check | Off by default. |
-| `trigger` | Select | Label **Trigger**. `Schedule`, `Document Event`, or `Webhook`. |
+| `trigger` | Select | Label **Trigger**. `Schedule`, `Document Event`, `Incoming Email`, or `Webhook`. |
 | `schedule_preset` | Select | Label **How Often**. A common schedule, or `Custom`. The preset rewrites `schedule` on every save — pick `Custom`, or leave the preset empty, to keep a cron expression you wrote yourself. |
 | `schedule` | Data | Label **Custom Schedule (cron)**. The cron expression. The preset fills it in. |
-| `event` | Select | For a Document Event trigger: `After Insert`, `On Update`, or `On Submit`. |
+| `event` | Select | For a Document Event trigger: `After Insert`, `On Update`, or `On Submit`. An Incoming Email trigger sets it to `On Update` for you. |
 | `webhook_endpoint` | Data (read-only) | Label **Endpoint**. For a Webhook trigger. The address to call. |
 | `read_webhook_payload` | Check | Label **Use Webhook Data**. On by default. For a Webhook trigger. Reads what the caller sends as one more source. |
 | `sources` | Table (Crema Automation Source) | Label **Sources**. Required, except for a Webhook task that uses webhook data. One row per thing this task reads. See the field list below. |
-| `on_source_error` | Select | Label **If a Source Fails**. `Skip and Continue` (default) or `Fail the Run`. Shown when a task has more than one source. |
-| `interface` | Select | Label **Use Case**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Security` and `Advanced OCR` are not offered — a task must never run as either. |
-| `run_as` | Link (User) | Label **Runs As**. The account this task acts as. Empty uses the account set for the use case. Not `Administrator`, not a System Manager, not a disabled user. |
+| `on_source_error` | Check | Label **Stop if a Source Fails**. Off by default. Shown when a task has more than one source. |
+| `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Security`, `Advanced OCR`, `View` and `Transform` are not offered — a task must never run as any of them. |
+| `run_as` | Link (User) | Label **Runs As**. The account this task acts as. Empty uses the account set for the AI profile. Not `Administrator`, not a System Manager, not a disabled user. |
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
 | `action` | Select | `Create or Update Records`, `Update the Records It Read`, or `No Changes`. |
 | `target_doctype` | Link (DocType) | Label **Record Type to Write**. For `Create or Update Records`. The only doctype this task can write to. |
@@ -49,16 +49,16 @@ address in **Email Report To** and it applies to whichever action you picked.
 
 ## Crema Automation Source fields
 
-One row per source, in the **Sources** table. The grid shows six columns — **Type**,
-**What** (the record type, or the address), **Filters**, **Records Per Run**, **Only
-Changed** and **Attachments** — and the rest opens with the row's edit button. Change
-**Records Per Run**, **Only Changed** and **Attachments** in the grid itself.
+One row per source, in the **Sources** table. The grid shows five columns — **Type**,
+**What** (the record type or the address, with the number of filters after it), **Per
+Run**, **Changed** and **Files** — and the rest opens with the row's edit button. Change
+**Per Run**, **Changed** and **Files** in the grid itself.
 
 The rows are read in the order shown, but the order changes nothing: each row is read on
 its own and the results are joined. The grid is deliberately not numbered.
 
-**Records Per Run**, **Only Changed** and **Attachments** apply to a Document Query only.
-A URL row shows them empty, and clears them when you save.
+**Per Run**, **Changed** and **Files** apply to a Document Query only. A URL row shows
+them empty, and clears them when you save.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -66,12 +66,11 @@ A URL row shows them empty, and clears them when you save.
 | `source_url` | Data | For a URL source. The only address this source reads. Only a System Manager can set it. |
 | `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. |
 | `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. |
-| `source_limit` | Int | Label **Records Per Run**. Most records to read in one run. 50 by default, 200 maximum. |
-| `incremental` | Check | Label **Only Changed**. Read only records changed since this source was last read. On by default. Has no effect on a Document Event run, which always reads the one record that triggered it. |
-| `read_attachments` | Check | Label **Attachments**. Also read the files attached to each record. See [Attachments](#attachments) below. |
+| `source_limit` | Int | Label **Per Run**. Most records to read in one run. 50 by default, 200 maximum. |
+| `incremental` | Check | Label **Changed**. Read only records changed since this source was last read. On by default. Has no effect on a Document Event run, which always reads the one record that triggered it. |
+| `read_attachments` | Check | Label **Files**. Also read the files attached to each record. See [Attachments](#attachments) below. |
 | `last_read` | Datetime (read-only) | Label **Read Up To**. How far this source has been read. Clear it to read everything again. |
-| `source_label` | Data (read-only) | Label **What**. Filled in for you. A grid column only — it does not appear when you open the row. |
-| `source_note` | Data (read-only) | Label **Filters**. Filled in for you. A grid column only — it does not appear when you open the row. |
+| `source_label` | Data (read-only) | Label **What**. Filled in for you: the record type or the address, and the number of filters (`Communication · 2 filters`). A grid column only — it does not appear when you open the row. |
 
 The result of the last run shows as a coloured indicator next to the task name at the
 top of the form. Open **Last Run** for the times, the result, and any error. Open
@@ -82,7 +81,7 @@ in a row also shows a warning across the top of the form.
 
 1. Open the **Crema Automation Task** list and create a new one.
 2. Pick a trigger, a source, and an action. The form shows only the fields that apply.
-3. Write the `instruction` and pick an `interface`.
+3. Write the `instruction` and pick an **AI Profile**.
 4. Save the document.
 5. Click **Dry Run**. Do this before you enable the task — see below.
 6. Set `enabled`, then save again.
@@ -125,11 +124,11 @@ get 30,000 characters each. A source that reads more than its share is cut short
 webhook data takes a share of its own, and only while the box is on.
 
 When a source cannot be read — a web address that is down, a query that errors — the
-task follows **If a Source Fails**:
+task follows **Stop if a Source Fails**:
 
-* `Skip and Continue` (default) runs with the sources that did answer, and adds the
-  failure to `last_result`.
-* `Fail the Run` stops. Nothing is written.
+* Off (default) runs with the sources that did answer, and adds the failure to
+  `last_result`.
+* On stops the run. Nothing is written.
 
 A run where *every* source failed is `Failed` either way.
 
@@ -151,7 +150,7 @@ read, so the model never sees it. The query also skips fields above permission l
 password fields.
 
 The query reads the record's own fields only. It does not read child tables (the
-item lines of an invoice, for example) or comments. Switch on **Attachments** to also read
+item lines of an invoice, for example) or comments. Switch on **Files** to also read
 the files attached to each record.
 
 When the interface's `enable_prompt_scan` is on, the run also scans each record on
@@ -162,7 +161,7 @@ A run whose sources produce no text at all stops before any LLM call, records
 `Success`, and stores `no new records` in `last_result`. A quiet night costs nothing, and does not
 count toward the five failures.
 
-Keep `incremental` on when the source feeds a task that processes changes. A run then
+Keep **Changed** on when the source feeds a task that processes changes. A run then
 reads only records changed since **Read Up To** (`last_read`), the watermark this
 source keeps for itself. It skips records whose last change came from
 the account the task runs as — the task's own writes, and the writes of any other task
@@ -185,7 +184,7 @@ nothing moves it backwards.
 
 ### Attachments
 
-Switch on **Attachments** and the source also reads the files attached to each record it
+Switch on **Files** and the source also reads the files attached to each record it
 reads. Crema reads PDFs and pictures through the OCR pipeline, and adds the text under the
 record it belongs to:
 
@@ -260,6 +259,25 @@ record against a reference URL. This trigger needs at least one Document Query s
 
 A task never triggers itself: while a task runs, no document it writes starts another
 task run.
+
+### Incoming Email
+
+The task runs when a message arrives in a Frappe inbox. This is a Document Event trigger
+with the parts filled in for you: Crema sets `event` to `On Update` and adds one Document
+Query source on **Communication**, filtered to `sent_or_received` `=` `Received`, with
+**Files** on and **Per Run** set to 5.
+
+Crema does not collect mail. Frappe does that already: an **Email Account** with
+**Enable Incoming** on writes one **Communication** per message, and attaches each file of
+the message to that Communication. This trigger watches those Communications.
+
+The seeded source row is an ordinary row. Open it and add `has_attachment` `=` `1` to skip
+messages that carry no file, or `email_account` to watch one inbox out of several. Delete
+it and Crema adds it back on the next save. Change the trigger to something else and the
+row stays as it is.
+
+`On Update`, not `After Insert`, is why the trigger exists: Frappe saves the message first
+and attaches the files a moment later, so a task triggered on the insert finds no files.
 
 ### Webhook
 
@@ -350,7 +368,7 @@ your site has.
    holidays page.
 4. Set `instruction` to `Parse public holidays, update Holiday List 2026`.
 5. Keep `action` as `Create or Update Records` and set `target_doctype` to `Holiday List`.
-6. Pick the `extraction` interface, save, then click **Dry Run**.
+6. Pick the `extraction` AI profile, save, then click **Dry Run**.
 
 ### Sort your own records
 
@@ -361,7 +379,7 @@ your site has.
 4. Click the filter table and add `status` `=` `Open`.
 5. Set `instruction` to `Set priority from how urgent the description sounds`.
 6. Set `action` to `Update the Records It Read`.
-7. Pick an interface, save, then click **Dry Run**.
+7. Pick an AI profile, save, then click **Dry Run**.
 
 ### Email a daily summary
 
@@ -377,15 +395,12 @@ run — that is the point of a daily summary.
 ### Turn an incoming email into a lead
 
 1. Create a task named `Email to Lead`.
-2. Set `trigger` to `Document Event` and `event` to `After Insert`.
-3. Add a source row, set its `source_type` to `Document Query`, and set
-   `source_doctype` to `Communication`.
-4. Click the filter table and add `sent_or_received` `=` `Received`.
-5. Set `instruction` to `Take the sender's name, company, and email address`.
-6. Keep `action` as `Create or Update Records` and set `target_doctype` to `Lead`.
-7. Pick the `extraction` interface, save, then click **Dry Run**.
+2. Set `trigger` to `Incoming Email`. Crema adds the Communication source row for you.
+3. Set `instruction` to `Take the sender's name, company, and email address`.
+4. Keep `action` as `Create or Update Records` and set `target_doctype` to `Lead`.
+5. Pick the `extraction` AI profile, save, then click **Dry Run**.
 
-The task reads the text of the message. Switch on **Attachments** to also read the files
+The task reads the text of the message. Switch on **Files** to also read the files
 that came with it — see the next example.
 
 ### Turn an emailed invoice into a record
@@ -398,20 +413,16 @@ the message to that Communication. This task watches those Communications.
 
 1. Set up the Email Account for the inbox the invoices arrive in.
 2. Create a task named `Invoice from email`.
-3. Set `trigger` to `Document Event` and `event` to **`On Update`**. Not `After Insert`:
-   Frappe saves the message first and attaches the files a moment later, so a task
-   triggered on the insert finds no files.
-4. Add a source row, set its `source_type` to `Document Query`, and set `source_doctype`
-   to `Communication`.
-5. Click the filter table and add `sent_or_received` `=` `Received` and `has_attachment`
-   `=` `1`. Add `email_account` too if more than one inbox is in use.
-6. Switch on **Attachments** in the grid, and set **Records Per Run** to a small number
-   such as 5 — every file is a billed OCR call.
-7. Set `instruction` to `Take the supplier, the invoice number, the invoice date, the due
+3. Set `trigger` to `Incoming Email`. Crema adds the Communication source row, switches
+   **Files** on, and sets **Per Run** to 5 — every file is a billed OCR call.
+4. Save, then open the source row and add `has_attachment` `=` `1` to the filters, so the
+   task skips messages that carry no file. Add `email_account` too if more than one inbox
+   is in use.
+5. Set `instruction` to `Take the supplier, the invoice number, the invoice date, the due
    date, the currency, and the total from each invoice. Ignore anything that is not an
    invoice.`
-8. Set `action` to `Create or Update Records` and `target_doctype` to `Purchase Invoice`.
-9. Pick the `extraction` interface, save, then click **Dry Run**.
+6. Set `action` to `Create or Update Records` and `target_doctype` to `Purchase Invoice`.
+7. Pick the `extraction` AI profile, save, then click **Dry Run**.
 
 Set **Runs As** to an account that may read `Communication` and create the record type
 this task writes to, and nothing more.
@@ -455,7 +466,7 @@ type. Edit it or delete it — Crema seeds it once and never puts it back.
 5. Set `instruction` to `Rewrite the description as one clear English sentence. Keep
    every number, size, and part code exactly as it is`.
 6. Set `action` to `Update the Records It Read`.
-7. Pick an interface, save, then click **Dry Run**.
+7. Pick an AI profile, save, then click **Dry Run**.
 
 With `incremental` on, the task cleans new and changed items only. It never re-reads
 an item it cleaned itself.
@@ -473,8 +484,8 @@ an item it cleaned itself.
    Give both prices`.
 
 Both sources reach the model in one request, each under its own heading, so the model
-can compare them. Leave **If a Source Fails** at `Skip and Continue` and the task still
-reports on the day the supplier's page is down — it says so in the result.
+can compare them. Leave **Stop if a Source Fails** off and the task still reports on the
+day the supplier's page is down — it says so in the result.
 
 ### Find duplicate suppliers
 

@@ -106,16 +106,17 @@ context("Crema Automation Task form", () => {
 		cy.visit(`/app/crema-automation-task/${TASK}`);
 		cy.wait("@interfaces");
 
-		// The old single "Details" column is four now, so the limit and the two checks can
-		// be read — and changed — without opening the row.
+		// The old single "Details" column became several, so the limit and the two checks
+		// can be read — and changed — without opening the row. The headers are kept short
+		// on purpose: at one grid column wide, a longer one is truncated to "Attach…".
 		cy.get('[data-fieldname="sources"] .grid-heading-row').as("head");
-		cy.get("@head").should("contain.text", "Filters");
-		cy.get("@head").should("contain.text", "Records Per Run");
-		cy.get("@head").should("contain.text", "Only Changed");
-		cy.get("@head").should("contain.text", "Attachments");
+		cy.get("@head").should("contain.text", "What");
+		cy.get("@head").should("contain.text", "Per Run");
+		cy.get("@head").should("contain.text", "Changed");
+		cy.get("@head").should("contain.text", "Files");
 	});
 
-	it("reveals 'If a Source Fails' as soon as a second source row exists", () => {
+	it("reveals 'Stop if a Source Fails' as soon as a second source row exists", () => {
 		// depends_on is not re-evaluated when a grid row is added, so without the
 		// sources_add handler this only appears after the next save.
 		cy.visit(`/app/crema-automation-task/${TASK}`);
@@ -132,8 +133,8 @@ context("Crema Automation Task form", () => {
 		// What the row reads and how, without opening it.
 		cy.get('[data-fieldname="sources"] .grid-row').first().as("row");
 		cy.get("@row").should("contain.text", "Document Query");
+		// What carries the record type and, when there is one, the filter count.
 		cy.get("@row").should("contain.text", "ToDo");
-		cy.get("@row").should("contain.text", "no filters");
 		// The limit is its own cell now, not part of a "· 50/run ·" summary string.
 		cy.get("@row").find('[data-fieldname="source_limit"]').should("contain.text", "50");
 	});

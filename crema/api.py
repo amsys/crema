@@ -703,7 +703,7 @@ def check_provider(provider: str) -> dict[str, Any]:
 
 @frappe.whitelist()
 def get_interfaces() -> list[dict[str, str]]:
-    """Relabels the Use Case picker on Crema Automation Task: {"value", "label"} pairs for
+    """Relabels the AI Profile picker on Crema Automation Task: {"value", "label"} pairs for
     every selectable interface. The values themselves are already in the doctype's meta
     (install.sync_interface_options) — this exists only because a frappe Select option
     string cannot carry a label separate from its value. Labels come from interfaces.LABELS,

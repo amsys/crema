@@ -229,7 +229,7 @@ All System Manager only, all `POST /api/method/<name>`:
 
 | Endpoint | Purpose |
 |---|---|
-| `crema.api.get_interfaces` | Value/label pairs for the Use Case dropdown on Crema Automation Task, one per selectable interface. `Security` and `Advanced OCR` are not included — a task must never run as either. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
+| `crema.api.get_interfaces` | Value/label pairs for the AI Profile dropdown on Crema Automation Task, one per selectable interface. `Security`, `Advanced OCR`, `View` and `Transform` are not included — a task must never run as any of them. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
 | `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
 | `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers panel's Connection badge. |
 | `crema.api.get_usage` | Month-to-date spend and budget per interface and per provider. Feeds the Usage column. |

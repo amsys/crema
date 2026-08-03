@@ -25,6 +25,7 @@ from croniter import croniter
 
 import frappe
 from crema import client, interfaces, sandbox
+from frappe import _
 from frappe.model.document import Document
 from frappe.utils import now_datetime, split_emails, validate_email_address
 
@@ -171,8 +172,10 @@ class CremaAutomationTask(Document):
             queries = self.query_sources()
             if len(queries) != 1:
                 frappe.throw(
-                    "Update Source Records needs exactly one Document Query source — it writes "
-                    "back to the records it read, and cannot do that for two record types at once."
+                    _(
+                        "Update Source Records needs exactly one Document Query source — it writes "
+                        "back to the records it read, and cannot do that for two record types at once."
+                    )
                 )
             self.target_doctype = queries[0].source_doctype
         elif self.action == "Report Only":
@@ -180,16 +183,19 @@ class CremaAutomationTask(Document):
             for address in split_emails(self.notify_to or ""):
                 validate_email_address(address, throw=True)
         elif not self.target_doctype:
-            frappe.throw("Upsert Records needs a Target DocType.")
+            frappe.throw(_("Upsert Records needs a Target DocType."))
 
     def _validate_trigger(self) -> None:
         if self.trigger != "Document Event":
             return
         if not self.event:
-            frappe.throw("A Document Event trigger needs an Event.")
+            frappe.throw(_("A Document Event trigger needs an Event."))
         if not self.query_sources():
             frappe.throw(
-                "A Document Event trigger needs a Document Query source — it runs on the record that changed."
+                _(
+                    "A Document Event trigger needs a Document Query source — it runs on the record "
+                    "that changed."
+                )
             )
 
     def _warn_unreadable_sources(self) -> None:

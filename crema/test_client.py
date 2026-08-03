@@ -66,7 +66,7 @@ def cleanup_fixtures() -> None:
     frappe.clear_document_cache("Crema Settings")
     cache.clear_interfaces()
 
-    frappe.db.commit()
+    frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
 
 class CremaFixtureTestCase(IntegrationTestCase):
@@ -333,7 +333,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         _ensure_interface("simple", cache_ttl=0)
         _ensure_interface("classification", cache_ttl=5)  # stands in for "cached"
         _ensure_interface("summarization", cache_ttl=0)  # stands in for "nocache"
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -1145,7 +1145,7 @@ class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_user(TEST_SANDBOX_USER, roles=["System Manager"])
         _ensure_provider()
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def _new_row(self, isolation_user: str):
         doc = frappe.new_doc("Crema Model Assignment")
@@ -1228,7 +1228,7 @@ class IntegrationTestCremaSandbox(CremaFixtureTestCase):
             # this before the User it references -- deleting a User first would leave
             # a dangling User Permission (or trip a link-exists check).
             _CREATED.append(("User Permission", perm.name))
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -1295,7 +1295,7 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_provider()
         _ensure_interface("simple")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -1380,7 +1380,7 @@ class IntegrationTestCremaHistory(CremaFixtureTestCase):
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_provider()
         _ensure_interface("simple")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -1435,7 +1435,7 @@ class IntegrationTestCremaLlmGuard(CremaFixtureTestCase):
         row = next(r for r in settings.assignments if r.interface == GUARDED_INTERFACE)
         row.enable_llm_guard = 1
         settings.save(ignore_permissions=True)
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -1624,7 +1624,7 @@ class IntegrationTestCremaOutputTrap(CremaFixtureTestCase):
         frappe.set_user("Administrator")
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_provider()
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()

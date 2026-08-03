@@ -40,7 +40,8 @@ def execute():
             "Crema Automation Source", filters={"parenttype": "Crema Automation Task"}, fields=["parent"]
         )
     }
-    tasks = frappe.db.sql(
+    # _COLUMNS is a module constant of literal column names — no user input reaches this.
+    tasks = frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
         f"select name, last_run, {', '.join(_COLUMNS)} from `tabCrema Automation Task`",
         as_dict=True,
     )

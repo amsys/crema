@@ -18,6 +18,7 @@ strings on change so the grid updates before the save.
 from __future__ import annotations
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint
 
@@ -39,10 +40,12 @@ class CremaAutomationSource(Document):
 
     def _validate_query(self) -> None:
         if not self.source_doctype:
-            frappe.throw("A Document Query source needs a Record Type to Read.")
+            frappe.throw(_("A Document Query source needs a Record Type to Read."))
         if frappe.get_meta(self.source_doctype).module == "Crema":
             frappe.throw(
-                f"'{self.source_doctype}' is a Crema doctype — a task cannot read crema's own records."
+                _("'{0}' is a Crema doctype — a task cannot read crema's own records.").format(
+                    self.source_doctype
+                )
             )
 
         self.source_url = None
@@ -55,7 +58,7 @@ class CremaAutomationSource(Document):
         except frappe.ValidationError:
             raise
         except Exception as exc:
-            frappe.throw(f"Which Records is not usable on {self.source_doctype}: {exc}")
+            frappe.throw(_("Which Records is not usable on {0}: {1}").format(self.source_doctype, str(exc)))
 
     def parsed_filters(self) -> dict | list:
         raw = (self.source_filters or "").strip()
@@ -64,9 +67,9 @@ class CremaAutomationSource(Document):
         try:
             filters = frappe.parse_json(raw)
         except Exception as exc:
-            frappe.throw(f"Which Records is not valid JSON: {exc}")
+            frappe.throw(_("Which Records is not valid JSON: {0}").format(str(exc)))
         if not isinstance(filters, dict | list):
-            frappe.throw("Which Records must be a JSON list or object.")
+            frappe.throw(_("Which Records must be a JSON list or object."))
         return filters
 
     def _label(self) -> str:

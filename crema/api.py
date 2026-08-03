@@ -20,6 +20,7 @@ from crema import cache, client, interfaces, sandbox, security
 from crema import log as _log_mod
 from crema._json import strip_fence
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
+from frappe import _
 from frappe.rate_limiter import rate_limit
 
 __all__ = [
@@ -662,7 +663,7 @@ def extract_api(doctype: str, file_url: str, instruction: str | None = None) -> 
     frappe.only_for(("System Manager", "Crema User"))
     _check_user_rate_limit()
     if not isinstance(file_url, str):
-        frappe.throw("file_url must be a File URL string")
+        frappe.throw(_("file_url must be a File URL string"))
 
     try:
         return extract(doctype, file_url, instruction)

@@ -49,8 +49,15 @@ function crema_schema_prompt(doctype) {
 // in_list_view/title_field/name rule the framework itself builds columns from
 // (list_view.js setup_columns) when no live list view matches.
 function crema_visible_list_fields(doctype) {
-	if (typeof cur_list !== "undefined" && cur_list && cur_list.doctype === doctype && cur_list.columns) {
-		return new Set(cur_list.columns.filter((c) => c.df && c.df.fieldname).map((c) => c.df.fieldname));
+	if (
+		typeof cur_list !== "undefined" &&
+		cur_list &&
+		cur_list.doctype === doctype &&
+		cur_list.columns
+	) {
+		return new Set(
+			cur_list.columns.filter((c) => c.df && c.df.fieldname).map((c) => c.df.fieldname)
+		);
 	}
 	const meta = frappe.get_meta(doctype);
 	const fields = meta.fields.filter((df) => df.in_list_view).map((df) => df.fieldname);
@@ -113,7 +120,10 @@ function crema_show_error(r) {
 	// through, and it renders nothing on its own. So `r` present without a `reason` is
 	// still a silent case and needs a message; `r` absent means frappe already spoke.
 	if (r) {
-		frappe.msgprint({ message: __("Crema could not complete this request."), indicator: "red" });
+		frappe.msgprint({
+			message: __("Crema could not complete this request."),
+			indicator: "red",
+		});
 	}
 }
 
@@ -138,7 +148,9 @@ function crema_diff_table(record) {
 			)
 		)
 		.join("");
-	return `<table class="table table-bordered">${rows || `<tr><td>${__("Nothing found")}</td></tr>`}</table>`;
+	return `<table class="table table-bordered">${
+		rows || `<tr><td>${__("Nothing found")}</td></tr>`
+	}</table>`;
 }
 
 // ---- Path A: file -> new document(s) ------------------------------------------------
@@ -230,7 +242,10 @@ function crema_import_records(doctype, records) {
 		.then((r) => {
 			const file_url = r.message?.file_url;
 			if (!file_url) {
-				frappe.msgprint({ message: __("Could not upload the generated file."), indicator: "red" });
+				frappe.msgprint({
+					message: __("Could not upload the generated file."),
+					indicator: "red",
+				});
 				return;
 			}
 			frappe.new_doc("Data Import", {
@@ -243,15 +258,18 @@ function crema_import_records(doctype, records) {
 		// (crema_show_extract_preview's primary_action closes it before calling this), so
 		// without this the user is just left staring at the list with no explanation.
 		.catch(() => {
-			frappe.msgprint({ message: __("Could not upload the generated file."), indicator: "red" });
+			frappe.msgprint({
+				message: __("Could not upload the generated file."),
+				indicator: "red",
+			});
 		});
 }
 
 function crema_show_extract_preview(doctype, data, dialog) {
 	const records = data.records || [];
-	const header = `<div class="text-muted small">${__("Confidence")}: ${(data.confidence ?? 0).toFixed(
-		2
-	)} — ${frappe.utils.escape_html(data.reason || "")}</div>`;
+	const header = `<div class="text-muted small">${__("Confidence")}: ${(
+		data.confidence ?? 0
+	).toFixed(2)} — ${frappe.utils.escape_html(data.reason || "")}</div>`;
 
 	if (records.length === 0) {
 		dialog.fields_dict.preview.df.hidden = 0;
@@ -316,15 +334,34 @@ const CREMA_VALID_VIEWS = new Set(["List", "Report", "Kanban"]);
 // of" family left out — those only make sense for a tree doctype the model can't know
 // about from the schema prompt alone).
 const CREMA_VALID_OPERATORS = new Set([
-	"=", "!=", "like", "not like", "in", "not in", "is", ">", "<", ">=", "<=", "Between", "Timespan",
+	"=",
+	"!=",
+	"like",
+	"not like",
+	"in",
+	"not in",
+	"is",
+	">",
+	"<",
+	">=",
+	"<=",
+	"Between",
+	"Timespan",
 ]);
 const CREMA_VALID_AGGREGATES = new Set(["count", "sum", "avg"]);
 
 // Fieldtypes worth probing when a text lookup came back empty. Link/Select are in on
 // purpose — "todos for acme" often means a Link value, not a Data field.
 const CREMA_TEXTISH = new Set([
-	"Data", "Small Text", "Text", "Long Text", "Text Editor",
-	"Link", "Dynamic Link", "Select", "Read Only",
+	"Data",
+	"Small Text",
+	"Text",
+	"Long Text",
+	"Text Editor",
+	"Link",
+	"Dynamic Link",
+	"Select",
+	"Read Only",
 ]);
 const CREMA_FALLBACK_FIELD_CAP = 8;
 
@@ -409,8 +446,13 @@ function crema_apply_view_spec(doctype, data) {
 	// change what lands in the address bar. Report/Kanban/group_by keep the route path:
 	// _group_by only round-trips through frappe.route_options (report_view.js).
 	const live = typeof cur_list !== "undefined" && cur_list;
-	const fast = live && live.doctype === doctype && live.view_name === "List" && view === "List" &&
-		live.filter_area && !group_by;
+	const fast =
+		live &&
+		live.doctype === doctype &&
+		live.view_name === "List" &&
+		view === "List" &&
+		live.filter_area &&
+		!group_by;
 
 	if (fast) {
 		crema_seed_list_state(live, doctype, view, state);
@@ -441,7 +483,8 @@ function crema_apply_view_spec(doctype, data) {
 
 	frappe.route_options = filters;
 	if (group_by) frappe.route_options._group_by = JSON.stringify(group_by);
-	frappe.set_route("List", doctype, view)
+	frappe
+		.set_route("List", doctype, view)
 		.then(() => {
 			const seeded = crema_seed_list_state(cur_list, doctype, view, state);
 			// Same stale-filter fence as the fast path, from the other side: before_refresh()
@@ -463,7 +506,12 @@ function crema_apply_view_spec(doctype, data) {
 // {fieldname: [op, value]} -> [[doctype, fieldname, op, value], ...] — same data,
 // the shape frappe.ui.FilterArea.set() (rather than frappe.route_options) expects.
 function crema_filter_rows(doctype, filters) {
-	return Object.entries(filters).map(([fieldname, [op, value]]) => [doctype, fieldname, op, value]);
+	return Object.entries(filters).map(([fieldname, [op, value]]) => [
+		doctype,
+		fieldname,
+		op,
+		value,
+	]);
 }
 
 // Sort/page_length/Report columns have no frappe.route_options path — they can only be
@@ -559,7 +607,12 @@ function crema_widen_if_empty(doctype, filters) {
 			// wins, ties break on candidate order (visible columns first).
 			const needle = term.toLowerCase();
 			const counts = candidates.map(
-				(f) => rows.filter((r) => String(r[f] ?? "").toLowerCase().includes(needle)).length
+				(f) =>
+					rows.filter((r) =>
+						String(r[f] ?? "")
+							.toLowerCase()
+							.includes(needle)
+					).length
 			);
 			const best_i = counts.reduce((best, c, i) => (c > counts[best] ? i : best), 0);
 			if (!counts[best_i]) {
@@ -588,11 +641,17 @@ function crema_widen_if_empty(doctype, filters) {
 					});
 				})
 				.catch(() =>
-					frappe.show_alert({ message: __("Could not search other fields."), indicator: "orange" })
+					frappe.show_alert({
+						message: __("Could not search other fields."),
+						indicator: "orange",
+					})
 				);
 		})
 		.catch(() =>
-			frappe.show_alert({ message: __("Could not search other fields."), indicator: "orange" })
+			frappe.show_alert({
+				message: __("Could not search other fields."),
+				indicator: "orange",
+			})
 		);
 }
 
@@ -661,7 +720,12 @@ function crema_open_dialog(doctype, prefill) {
 			allow_take_photo: false,
 			on_success: (file_doc) => {
 				dialog.fields_dict.upload.$wrapper.hide();
-				crema_extract_into_new_doc(doctype, file_doc.file_url, dialog.get_value("instruction"), dialog);
+				crema_extract_into_new_doc(
+					doctype,
+					file_doc.file_url,
+					dialog.get_value("instruction"),
+					dialog
+				);
 			},
 		});
 		// FileUploader's .file-upload-area is a Vue *scoped* style (min-height: 16rem),
@@ -714,7 +778,9 @@ function crema_open_transform_dialog(frm) {
 						for (const [fieldname, value] of Object.entries(data.set || {})) {
 							frm.set_value(fieldname, value);
 						}
-						for (const [table_fieldname, rows] of Object.entries(data.child_set || {})) {
+						for (const [table_fieldname, rows] of Object.entries(
+							data.child_set || {}
+						)) {
 							(rows || []).forEach((row) =>
 								Object.assign(frm.add_child(table_fieldname), row)
 							);

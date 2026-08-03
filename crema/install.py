@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+
 import frappe
+from frappe.utils import validate_email_address
 
 
 def after_install() -> None:
@@ -29,6 +32,20 @@ def _ensure_crema_user_role() -> None:
 _DEFAULT_ISOLATION_USER_EMAIL_SUFFIX = "crema@"
 
 
+def _isolation_user_email() -> str:
+    """`crema@<site>` when the site name is a usable email domain, else the same name
+    with every character Frappe's email pattern rejects folded to a hyphen and
+    `.localhost` appended. A site created as `mysite` or `test_site` has no dot (and an
+    underscore is not a legal domain character), so the plain form would fail
+    User.validate and take the whole `bench install-app crema` down with it."""
+    site = frappe.local.site
+    email = f"{_DEFAULT_ISOLATION_USER_EMAIL_SUFFIX}{site}"
+    if validate_email_address(email):
+        return email
+    label = re.sub(r"[^a-z0-9-]+", "-", site.lower()).strip("-") or "site"
+    return f"{_DEFAULT_ISOLATION_USER_EMAIL_SUFFIX}{label}.localhost"
+
+
 def _ensure_isolation_user() -> str:
     """Idempotently create a dedicated, fenced isolation user — `crema@<site>` — with
     only the 'Crema User' role and no password (send_welcome_email = 0 and no password
@@ -39,7 +56,7 @@ def _ensure_isolation_user() -> str:
     hand. It stays subject to the same fencing CremaModelAssignment.validate_isolation_user
     enforces on any other isolation user — in particular, it must never be given
     System Manager."""
-    email = f"{_DEFAULT_ISOLATION_USER_EMAIL_SUFFIX}{frappe.local.site}"
+    email = _isolation_user_email()
     if frappe.db.exists("User", email):
         return email
 

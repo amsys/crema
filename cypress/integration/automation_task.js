@@ -61,7 +61,11 @@ context("Crema Automation Task form", () => {
 					],
 					plan: {
 						extract: { prompt: "Copy each name through." },
-						map: { doctype: "ToDo", match_fields: ["name"], field_map: { id: "name" } },
+						map: {
+							doctype: "ToDo",
+							match_fields: ["name"],
+							field_map: { id: "name" },
+						},
 					},
 				},
 			},
@@ -107,7 +111,10 @@ context("Crema Automation Task form", () => {
 		cy.wait("@interfaces");
 		// The widget is rendered by form_render, so the row has to be expanded first.
 		cy.get('[data-fieldname="sources"] .grid-row').first().find(".btn-open-row").click();
-		cy.get('[data-fieldname="source_filters"] table').should("contain.text", "Click to set filters");
+		cy.get('[data-fieldname="source_filters"] table').should(
+			"contain.text",
+			"Click to set filters"
+		);
 		cy.get('[data-fieldname="source_filters"] table').click();
 		cy.get(".modal-title").should("contain.text", "Which Records");
 		cy.get(".modal .filter-area, .modal .fieldname-select-area").should("exist");

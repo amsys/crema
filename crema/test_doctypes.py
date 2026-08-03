@@ -20,6 +20,7 @@ from crema.test_client import (
     _ensure_user,
 )
 from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.utils import validate_email_address
 
 
 class UnitTestIsLocalOrPrivate(UnitTestCase):
@@ -322,6 +323,22 @@ class IntegrationTestCremaInstall(IntegrationTestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(frappe.db.count("User", {"email": first}), 1)
+
+    def test_isolation_user_email_falls_back_on_a_site_name_that_is_not_an_email_domain(self):
+        """A site created as `mysite` or `test_site` is not a legal email domain — no
+        dot, and an underscore is not a domain character — so the plain `crema@<site>`
+        form fails User.validate and takes the whole install down with it."""
+        from crema.install import _isolation_user_email
+
+        with patch.object(frappe.local, "site", "fcr.local"):
+            self.assertEqual(_isolation_user_email(), "crema@fcr.local")
+
+        cases = (("test_site", "crema@test-site.localhost"), ("mysite", "crema@mysite.localhost"))
+        for site, expected in cases:
+            with patch.object(frappe.local, "site", site):
+                email = _isolation_user_email()
+            self.assertEqual(email, expected)
+            self.assertTrue(validate_email_address(email))
 
     def test_ensure_isolation_user_cannot_log_in(self):
         """No password is ever set, welcome-email is off, and the only role granted is

@@ -1,6 +1,7 @@
 // Copyright (c) 2026, Crema and contributors
 // For license information, please see license.txt
 
+/* global crema_fetch_models, crema_new_provider_dialog */
 // Crema Settings — a Single, so it's one ordinary form: Providers (rendered into an
 // HTML field) + Model Assignments (a Table field, one row per crema.interfaces.names()
 // name — core PREDEFINED plus whatever installed apps register through the
@@ -126,7 +127,9 @@ function load_default_models(frm) {
 			unknown
 				? `<span class="text-danger">Model '${frappe.utils.escape_html(
 						model
-				  )}' is not offered by '${frappe.utils.escape_html(frm.doc.default_provider)}'.</span>`
+				  )}' is not offered by '${frappe.utils.escape_html(
+						frm.doc.default_provider
+				  )}'.</span>`
 				: base_description
 		);
 	});
@@ -137,9 +140,9 @@ function render_providers(frm) {
 	$(`<button class="btn btn-default btn-sm">${__("New from Template")}</button>`)
 		.on("click", () => crema_new_provider_dialog(() => frm.reload_doc()))
 		.appendTo($wrapper);
-	const $table = $(`<div class="crema-providers-table" style="margin-top: 8px;"></div>`).appendTo(
-		$wrapper
-	);
+	const $table = $(
+		`<div class="crema-providers-table" style="margin-top: 8px;"></div>`
+	).appendTo($wrapper);
 
 	frappe.db
 		.get_list("Crema Provider", {
@@ -151,20 +154,28 @@ function render_providers(frm) {
 			const rows_html = rows.length
 				? rows
 						.map(
-							(d) => `<tr class="crema-provider-row" data-name="${frappe.utils.escape_html(
+							(
+								d
+							) => `<tr class="crema-provider-row" data-name="${frappe.utils.escape_html(
 								d.name
 							)}">
 								<td>${frappe.utils.escape_html(d.name)}</td>
 								<td>${frappe.utils.escape_html(d.base_url || "")}</td>
 								<td>${
 									d.enabled
-										? `<span class="indicator-pill green">${__("Enabled")}</span>`
-										: `<span class="indicator-pill gray">${__("Disabled")}</span>`
+										? `<span class="indicator-pill green">${__(
+												"Enabled"
+										  )}</span>`
+										: `<span class="indicator-pill gray">${__(
+												"Disabled"
+										  )}</span>`
 								}</td>
 								<td class="crema-provider-conn">${
 									d.enabled
 										? `<span class="text-muted">${__("Checking…")}</span>`
-										: `<span class="indicator-pill gray">${__("Disabled")}</span>`
+										: `<span class="indicator-pill gray">${__(
+												"Disabled"
+										  )}</span>`
 								}</td>
 								<td>${usage_pill(usage_cache.providers[d.name])}</td>
 							</tr>`
@@ -172,9 +183,9 @@ function render_providers(frm) {
 						.join("")
 				: `<tr><td colspan="5" class="text-muted">${__("No AI services yet.")}</td></tr>`;
 			$table.html(`<table class="table table-bordered">
-				<thead><tr><th>${__("Name")}</th><th>${__("Address")}</th><th>${__(
-				"Status"
-			)}</th><th>${__("Connection")}</th><th>${__("Usage")}</th></tr></thead>
+				<thead><tr><th>${__("Name")}</th><th>${__("Address")}</th><th>${__("Status")}</th><th>${__(
+				"Connection"
+			)}</th><th>${__("Usage")}</th></tr></thead>
 				<tbody>${rows_html}</tbody>
 			</table>`);
 			$table.find(".crema-provider-row").on("click", function () {
@@ -185,9 +196,11 @@ function render_providers(frm) {
 			// "Connected" pill (list_models' own cache TTL) is worse than one extra request
 			// per page load, hence the separate uncached endpoint (crema.api.check_provider).
 			rows.filter((d) => d.enabled).forEach((d) => {
-				const $cell = $table.find(`.crema-provider-row[data-name="${frappe.utils.escape_html(
-					d.name
-				)}"] .crema-provider-conn`);
+				const $cell = $table.find(
+					`.crema-provider-row[data-name="${frappe.utils.escape_html(
+						d.name
+					)}"] .crema-provider-conn`
+				);
 				frappe.call({
 					method: "crema.api.check_provider",
 					args: { provider: d.name },
@@ -195,7 +208,9 @@ function render_providers(frm) {
 						const status = r.message || { ok: false, detail: __("No response") };
 						const color = status.ok ? "green" : "red";
 						$cell.html(
-							`<span class="indicator-pill ${color}">${frappe.utils.escape_html(status.detail)}</span>`
+							`<span class="indicator-pill ${color}">${frappe.utils.escape_html(
+								status.detail
+							)}</span>`
 						);
 					},
 					error() {

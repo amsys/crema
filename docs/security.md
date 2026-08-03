@@ -118,7 +118,9 @@ the sandbox. The system also refuses a disabled user. These rules apply equally 
 Crema Settings' `default_isolation_user` and to a Model Assignment row's own
 `isolation_user` override.
 
-The install step creates a default isolation user for you: `crema@<site>`. The
+The install step creates a default isolation user for you: `crema@<site>` (or
+`crema@<site>.localhost` if the site name is not a valid email domain — see
+[install.md](install.md)). The
 account is enabled, holds only the `Crema User` role, and has no password, so it can
 never log in. The install step points `default_isolation_user` at it. It is the
 lowest-privilege account Crema ships. Give it more roles or User Permissions only if

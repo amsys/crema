@@ -1,0 +1,123 @@
+{
+ "actions": [],
+ "creation": "2026-08-03 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "source_type",
+  "source_label",
+  "source_note",
+  "section_detail",
+  "source_url",
+  "source_doctype",
+  "source_filters",
+  "column_break_detail",
+  "source_limit",
+  "incremental",
+  "last_read"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "default": "URL",
+   "description": "Where this source reads from: a web address, or records already on this site. You choose it yourself — the AI never picks a source.",
+   "fieldname": "source_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Type",
+   "options": "URL\nDocument Query",
+   "reqd": 1
+  },
+  {
+   "columns": 4,
+   "description": "What this source reads. Filled in for you from the settings below.",
+   "fieldname": "source_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "What",
+   "read_only": 1
+  },
+  {
+   "columns": 3,
+   "description": "A summary of this source's settings. Filled in for you.",
+   "fieldname": "source_note",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Details",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_detail",
+   "fieldtype": "Section Break"
+  },
+  {
+   "depends_on": "eval:doc.source_type==\"URL\"",
+   "description": "The only address this source ever downloads. You set it here — the AI can never point the task somewhere else.",
+   "fieldname": "source_url",
+   "fieldtype": "Data",
+   "label": "Source URL",
+   "mandatory_depends_on": "eval:doc.source_type==\"URL\""
+  },
+  {
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Which kind of record this source reads. Records are read as the Runs As user set for this use case, so anything that user cannot open is never sent to the AI.",
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Record Type to Read",
+   "link_filters": "[[\"DocType\",\"issingle\",\"=\",0],[\"DocType\",\"istable\",\"=\",0]]",
+   "mandatory_depends_on": "eval:doc.source_type==\"Document Query\"",
+   "options": "DocType"
+  },
+  {
+   "default": "[]",
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Narrow down which records to read. Click the table to change them. You set these — the AI never adds a filter of its own.",
+   "fieldname": "source_filters",
+   "fieldtype": "Code",
+   "label": "Which Records",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "column_break_detail",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "50",
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "How many records to read at most in one run. If more records match, this source picks up where it stopped on the next run — nothing is skipped.",
+   "fieldname": "source_limit",
+   "fieldtype": "Int",
+   "label": "Records Per Run"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.source_type==\"Document Query\" && parent.trigger==\"Schedule\"",
+   "description": "Read only records that changed since this source was last read. Keep this on: with it off, every run sends every matching record to the AI again and you pay for all of them again.",
+   "fieldname": "incremental",
+   "fieldtype": "Check",
+   "label": "Only Changed Records"
+  },
+  {
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "How far this source has been read. Records changed after this time are read on the next run. Clear it to read everything again.",
+   "fieldname": "last_read",
+   "fieldtype": "Datetime",
+   "label": "Read Up To",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-08-03 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Automation Source",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

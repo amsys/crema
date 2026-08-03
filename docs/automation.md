@@ -9,7 +9,7 @@ Build a task from three choices:
 | Choice | Options |
 |---|---|
 | **Trigger** — when it runs | `Schedule` (a cron expression), or `Document Event` |
-| **Source** — what it reads | `URL`, or `Document Query` (records on this site) |
+| **Sources** — what it reads | One or more rows: `URL`, or `Document Query` (records on this site). A task can mix them. |
 | **Action** — what it does | `Upsert Records`, `Update Source Records`, or `Report Only` |
 
 ## Crema Automation Task fields
@@ -22,12 +22,8 @@ Build a task from three choices:
 | `schedule_preset` | Select | Label **How Often**. A common schedule, or `Custom`. The preset rewrites `schedule` on every save — pick `Custom`, or leave the preset empty, to keep a cron expression you wrote yourself. |
 | `schedule` | Data | Label **Custom Schedule (cron)**. The cron expression. The preset fills it in. |
 | `event` | Select | For a Document Event trigger: `After Insert`, `On Update`, or `On Submit`. |
-| `source_type` | Select | `URL` or `Document Query`. |
-| `source_url` | Data | For a URL source. The only URL this task reads. Only a System Manager can set it. |
-| `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. |
-| `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. |
-| `source_limit` | Int | Label **Records Per Run**. Most records to read in one run. 50 by default, 200 maximum. |
-| `incremental` | Check | Label **Only Changed Records**. Read only records changed since the last run. On by default. Has no effect on a Document Event run, which always reads the one record that triggered it. |
+| `sources` | Table (Crema Automation Source) | Label **Sources**. Required. One row per thing this task reads. See the field list below. |
+| `on_source_error` | Select | Label **If a Source Fails**. `Skip and Continue` (default) or `Fail the Run`. Shown when a task has more than one source. |
 | `interface` | Autocomplete | Label **Use Case**. Required. One of the interface names (see [configure.md](configure.md)). |
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
 | `action` | Select | `Upsert Records`, `Update Source Records`, or `Report Only`. |
@@ -45,6 +41,24 @@ Build a task from three choices:
 | `consecutive_failures` | Int (read-only) | The task turns itself off at 5. |
 | `last_error` | Small Text (read-only) | |
 
+## Crema Automation Source fields
+
+One row per source, in the **Sources** table. The grid shows three read-only columns —
+**Type**, **What** (the record type, or the address) and **Details** (a summary such as
+`2 filters · 50/run · only changed`) — and the rest opens with the row's edit button.
+
+| Field | Type | Notes |
+|---|---|---|
+| `source_type` | Select | Label **Type**. `URL` or `Document Query`. |
+| `source_url` | Data | For a URL source. The only address this source reads. Only a System Manager can set it. |
+| `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. |
+| `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. |
+| `source_limit` | Int | Label **Records Per Run**. Most records to read in one run. 50 by default, 200 maximum. |
+| `incremental` | Check | Label **Only Changed Records**. Read only records changed since this source was last read. On by default. Has no effect on a Document Event run, which always reads the one record that triggered it. |
+| `last_read` | Datetime (read-only) | Label **Read Up To**. How far this source has been read. Clear it to read everything again. |
+| `source_label` | Data (read-only) | Label **What**. Filled in for you. |
+| `source_note` | Data (read-only) | Label **Details**. Filled in for you. |
+
 The result of the last run shows as a coloured indicator next to the task name at the
 top of the form. Open **Last Run** for the times, the result, and any error. Open
 **Plan** to read the plan in a table instead of raw JSON. A task that failed three times
@@ -59,11 +73,11 @@ in a row also shows a warning across the top of the form.
 5. Click **Dry Run**. Do this before you enable the task — see below.
 6. Set `enabled`, then save again.
 
-The save checks more than required fields. It refuses a Crema doctype as
-`source_doctype`, trial-runs `source_filters` so a broken filter fails at save time
-rather than at 3am, validates every `notify_to` address, and warns — orange, without
-blocking the save — when the interface's isolation user cannot read
-`source_doctype`.
+The save checks more than required fields. It needs at least one source, refuses a
+Crema doctype as `source_doctype`, trial-runs each row's `source_filters` so a broken
+filter fails at save time rather than at 3am, validates every `notify_to` address, and
+warns — orange, without blocking the save — when the interface's isolation user cannot
+read one of the record types the task is pointed at.
 
 ## Dry Run
 
@@ -83,15 +97,34 @@ path as the scheduler — always a background job, never an inline run — and n
 
 ## Sources
 
+A task reads every row of its **Sources** table on each run, in order, and joins the
+text into one block per source, headed by `=== Source: <what> ===`. The model reads
+them together, so one task can compare a downloaded price list against records on this
+site.
+
+Each source gets an equal share of the 60,000-character content limit — two sources
+get 30,000 characters each. A source that reads more than its share is cut short.
+
+When a source cannot be read — a web address that is down, a query that errors — the
+task follows **If a Source Fails**:
+
+* `Skip and Continue` (default) runs with the sources that did answer, and adds the
+  failure to `last_result`.
+* `Fail the Run` stops. Nothing is written.
+
+A run where *every* source failed is `Failed` either way.
+
+You choose the sources. The model never adds one, and never changes what one reads.
+
 ### URL
 
-The task downloads `source_url` and reduces it to text. HTML is stripped. A PDF goes
+The source downloads `source_url` and reduces it to text. HTML is stripped. A PDF goes
 through the OCR pipeline: embedded text when the PDF has it, vision OCR when it does
 not.
 
 ### Document Query
 
-The task reads records of `source_doctype` that match `source_filters`.
+The source reads records of `source_doctype` that match `source_filters`.
 
 The **isolation user** of the interface reads these records. The query never
 returns a record that user cannot read, so the model never sees it. The query also
@@ -104,12 +137,13 @@ When the interface's `enable_prompt_scan` is on, the run also scans each record 
 its own before the batch goes to the model, and drops any record the scan flags.
 `last_result` counts the drops — `(2 skipped by the security scan)`.
 
-A run that finds no records stops before any LLM call, records `Success`, and
-stores `no new records` in `last_result`. A quiet night costs nothing, and does not
+A run whose sources produce no text at all stops before any LLM call, records
+`Success`, and stores `no new records` in `last_result`. A quiet night costs nothing, and does not
 count toward the five failures.
 
-Keep `incremental` on when the task processes changes. A run then reads only
-records changed since the last run. It skips records whose last change came from
+Keep `incremental` on when the source feeds a task that processes changes. A run then
+reads only records changed since **Read Up To** (`last_read`), the watermark this
+source keeps for itself. It skips records whose last change came from
 the interface's isolation user — the task's own writes, and the writes of any other
 task that shares that isolation user.
 
@@ -119,11 +153,14 @@ you pay for all of them again. Set `source_limit` higher than the number of matc
 records: a snapshot run always reads the oldest matching records first, does not
 continue where the last run stopped, and so never reaches records past the cap.
 
-A run reads at most `source_limit` records, oldest first. A capped **incremental,
-scheduled** run moves its watermark (`last_run`) back to the last record it read, so
-the next run continues the backlog from there. Only that combination rewinds: a
-rewind re-arms the schedule at the next 15-minute tick, which is the point for a
-capped backlog — but it would make any other kind of run repeat, and pay, forever.
+A run reads at most `source_limit` records, oldest first. When a run fills that cap,
+more records may remain: the watermark stops at the last record read, and the next run
+continues the backlog from there. An uncapped run moves the watermark to the moment the
+run started, so a record changed while the run was still working is read next time and
+not skipped. A failed run moves no watermark at all — it reads the same records again.
+
+`last_run` is not a watermark. It is only the point the schedule counts from, and
+nothing moves it backwards.
 
 ## Actions
 
@@ -138,8 +175,10 @@ The task writes new values onto the records the query read. It never creates a
 record. It can only change a record the query returned in the same run — the system
 skips a record the model names but the query did not return.
 
-This action needs a Document Query source. The system sets `target_doctype` to
-`source_doctype` for you.
+This action needs exactly one Document Query source — it writes back to the records it
+read, and cannot do that for two record types at once. The system sets `target_doctype`
+to that source's record type for you. A URL source alongside it is fine: it is reference
+material, and the task still only writes to records the query returned.
 
 ### Report Only
 
@@ -157,9 +196,10 @@ double-queues a task that is already waiting or running.
 
 ### Document Event
 
-The task runs when a record of `source_doctype` is created, updated, or submitted,
-and it runs on that one record — `incremental` has no effect here. This trigger
-needs a Document Query source.
+The task runs when a record of any Document Query source is created, updated, or
+submitted. That source then reads only the record that changed — `incremental` has no
+effect here. Every other source is still read in full, so a task can check the changed
+record against a reference URL. This trigger needs at least one Document Query source.
 
 A task never triggers itself: while a task runs, no document it writes starts another
 task run.
@@ -180,8 +220,9 @@ Every run after the first reuses the stored plan. The system does not plan again
 unless a run fails. After a failure, the system plans once more, with the failure
 message added, then gives up if that also fails.
 
-Change the instruction, the source, the target, or the action, and the system drops
-the stored plan. The system also drops a stored plan that no longer validates —
+Change the instruction, the target, the action, or which sources the task reads, and
+the system drops the stored plan. Changing a source's filters or its records-per-run
+does not: the shape of what it reads is the same, only how much of it. The system also drops a stored plan that no longer validates —
 after a doctype change, for example. The next run writes a new one.
 
 ## Limits
@@ -189,8 +230,8 @@ after a doctype change, for example. The next run writes a new one.
 - The task turns itself off after 5 runs in a row fail.
 - `target_doctype` is the only doctype a task can write to. The plan cannot name a
   different one.
-- Only a System Manager sets `source_url`, `source_doctype`, and `source_filters`.
-  The LLM never supplies a URL, a doctype, or a filter.
+- Only a System Manager sets the source rows. The LLM never supplies a URL, a doctype,
+  or a filter, and never adds a source.
 - A run that fails part way through keeps the records it already wrote. For a record
   without child-table rows, the retry skips it when its values are already correct,
   so the task does not write it twice. The task writes a record with child-table
@@ -199,8 +240,8 @@ after a doctype change, for example. The next run writes a new one.
   object — an extracted value can never smuggle a filter operator into the record
   lookup. On an update, extracted values can never change which record the task
   writes to: the system strips `name` from the values before the update.
-- Content caps: the planner sees the first 8,000 characters of the source, and the
-  extractor the first 60,000. `last_result` holds at most 20,000 characters, and
+- Content caps: the extractor sees at most 60,000 characters, shared equally between
+  the sources, and the planner the first 8,000 of the joined text. `last_result` holds at most 20,000 characters, and
   `last_error` 2,000.
 - A task keeps only the result of its last run. For the record of each LLM call, see
   the Crema Log.
@@ -214,7 +255,8 @@ your site has.
 
 1. Create a task named `Public Holidays 2026`.
 2. Keep `trigger` as `Schedule` and pick the `Daily 03:00` preset.
-3. Keep `source_type` as `URL` and set `source_url` to the holidays page.
+3. Add a source row, keep its `source_type` as `URL`, and set `source_url` to the
+   holidays page.
 4. Set `instruction` to `Parse public holidays, update Holiday List 2026`.
 5. Keep `action` as `Upsert Records` and set `target_doctype` to `Holiday List`.
 6. Pick the `extraction` interface, save, then click **Dry Run**.
@@ -223,7 +265,8 @@ your site has.
 
 1. Create a task named `Triage Open Issues`.
 2. Keep `trigger` as `Schedule` and pick the `Hourly` preset.
-3. Set `source_type` to `Document Query` and `source_doctype` to `Issue`.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Issue`.
 4. Click the filter table and add `status` `=` `Open`.
 5. Set `instruction` to `Set priority from how urgent the description sounds`.
 6. Set `action` to `Update Source Records`.
@@ -232,7 +275,8 @@ your site has.
 ### Email a daily summary
 
 1. Create a task named `Daily Issue Digest`.
-2. Set `source_type` to `Document Query` and `source_doctype` to `Issue`.
+2. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Issue`.
 3. Set `action` to `Report Only` and put your address in `notify_to`.
 4. Set `instruction` to `Summarise these issues in five lines`.
 
@@ -243,7 +287,8 @@ run — that is the point of a daily summary.
 
 1. Create a task named `Email to Lead`.
 2. Set `trigger` to `Document Event` and `event` to `After Insert`.
-3. Set `source_type` to `Document Query` and `source_doctype` to `Communication`.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Communication`.
 4. Click the filter table and add `sent_or_received` `=` `Received`.
 5. Set `instruction` to `Take the sender's name, company, and email address`.
 6. Keep `action` as `Upsert Records` and set `target_doctype` to `Lead`.
@@ -256,7 +301,8 @@ message.
 
 1. Create a task named `Overdue Receivables`.
 2. Keep `trigger` as `Schedule` and pick the `Daily 03:00` preset.
-3. Set `source_type` to `Document Query` and `source_doctype` to `Sales Invoice`.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Sales Invoice`.
 4. Click the filter table and add `status` `=` `Overdue`.
 5. Turn `incremental` off — the report must list all overdue invoices, not only the
    ones that changed since yesterday.
@@ -267,7 +313,8 @@ message.
 
 1. Create a task named `Stalled Work Orders`.
 2. Keep `trigger` as `Schedule` and pick the `Daily 03:00` preset.
-3. Set `source_type` to `Document Query` and `source_doctype` to `Work Order`.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Work Order`.
 4. Click the filter table and add `status` `=` `In Process`.
 5. Turn `incremental` off — a work order can stall without changing.
 6. Set `action` to `Report Only` and put the production planner's address in
@@ -279,7 +326,8 @@ message.
 
 1. Create a task named `Clean Item Descriptions`.
 2. Keep `trigger` as `Schedule` and pick the `Hourly` preset.
-3. Set `source_type` to `Document Query` and `source_doctype` to `Item`.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Item`.
 4. Click the filter table and add `disabled` `=` `0`.
 5. Set `instruction` to `Rewrite the description as one clear English sentence. Keep
    every number, size, and part code exactly as it is`.
@@ -289,11 +337,28 @@ message.
 With `incremental` on, the task cleans new and changed items only. It never re-reads
 an item it cleaned itself.
 
+### Check your records against a published list
+
+1. Create a task named `Check Prices Against Supplier List`.
+2. Keep `trigger` as `Schedule` and pick the `Daily 03:00` preset.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Item Price`.
+4. Add a second source row, keep its `source_type` as `URL`, and set `source_url` to
+   the supplier's published price list.
+5. Set `action` to `Report Only` and put the buyer's address in `notify_to`.
+6. Set `instruction` to `List every item whose price differs from the supplier list.
+   Give both prices`.
+
+Both sources reach the model in one request, each under its own heading, so the model
+can compare them. Leave **If a Source Fails** at `Skip and Continue` and the task still
+reports on the day the supplier's page is down — it says so in the result.
+
 ### Find duplicate suppliers
 
 1. Create a task named `Duplicate Suppliers`.
 2. Keep `trigger` as `Schedule` and pick the `Weekly (Mon 03:00)` preset.
-3. Set `source_type` to `Document Query` and `source_doctype` to `Supplier`.
+3. Add a source row, set its `source_type` to `Document Query`, and set
+   `source_doctype` to `Supplier`.
 4. Turn `incremental` off, and set `source_limit` to `200`.
 5. Set `action` to `Report Only` and put the purchasing team's address in `notify_to`.
 6. Set `instruction` to `Find suppliers that look like the same company entered

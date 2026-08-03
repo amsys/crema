@@ -9,8 +9,11 @@ Security posture — the reason this module is longer than "just call the LLM":
 * Every doctype/fieldname string that came from the LLM is checked against
   `frappe.get_meta` before it reaches the database, both for the parent and for the
   child table.
-* `source_url`, `source_doctype` and `source_filters` are all entered by a System
-  Manager. The LLM cannot supply a URL, a doctype or a filter.
+* A task reads one or more sources — a `Crema Automation Source` child row each, either a
+  URL or a document query, in any mix. Every field on those rows is entered by a System
+  Manager. The LLM cannot supply a URL, a doctype or a filter, and cannot add a source.
+  The rows are read in order and joined into one labelled text; from EXTRACT onwards the
+  pipeline neither knows nor cares how many there were.
 * The whole run — the source read included — happens inside
   `sandbox.isolation(<interface isolation user>)`, and every write is a plain
   `doc.save()`. No `ignore_permissions` anywhere, so the isolation user's roles and
@@ -129,7 +132,7 @@ def cleanup_logs() -> None:
     frappe.db.delete("Crema Log", {"creation": ("<", add_days(now_datetime(), -retention_days))})
 
 
-def enqueue_task(task: str, doc_name: str | None = None) -> str:
+def enqueue_task(task: str, doc_doctype: str | None = None, doc_name: str | None = None) -> str:
     """Queue one run of `task`. Deduplicated — a task already queued or running is not
     queued twice. An event-triggered run is deduplicated per *document*, so re-saving one
     record debounces while two different records both run. Returns the job id."""
@@ -137,6 +140,7 @@ def enqueue_task(task: str, doc_name: str | None = None) -> str:
     job = frappe.enqueue(
         "crema.automation.run_task",
         task=task,
+        doc_doctype=doc_doctype,
         doc_name=doc_name,
         queue="long",
         timeout=1800,
@@ -157,7 +161,7 @@ def on_doc_event(doc, method: str) -> None:
     if getattr(frappe.local, "crema_in_automation", False):
         return
     for task in _event_tasks().get((doc.doctype, method), ()):
-        enqueue_task(task, doc_name=doc.name)
+        enqueue_task(task, doc_doctype=doc.doctype, doc_name=doc.name)
 
 
 def _event_tasks() -> dict[tuple[str, str], tuple[str, ...]]:
@@ -191,11 +195,31 @@ def _event_tasks() -> dict[tuple[str, str], tuple[str, ...]]:
 
 
 def _fetch_event_tasks() -> list[dict]:
-    return frappe.get_all(
-        "Crema Automation Task",
-        filters={"enabled": 1, "trigger": "Document Event"},
-        fields=["name", "source_doctype", "event"],
+    """One (task, source_doctype, event) row per document-query source of an enabled event
+    task — a task watching two doctypes is listed under both."""
+    events = {
+        task["name"]: task["event"]
+        for task in frappe.get_all(
+            "Crema Automation Task",
+            filters={"enabled": 1, "trigger": "Document Event"},
+            fields=["name", "event"],
+        )
+    }
+    if not events:
+        return []
+    rows = frappe.get_all(
+        "Crema Automation Source",
+        filters={
+            "parenttype": "Crema Automation Task",
+            "parent": ("in", list(events)),
+            "source_type": "Document Query",
+        },
+        fields=["parent", "source_doctype"],
     )
+    return [
+        {"name": row["parent"], "source_doctype": row["source_doctype"], "event": events[row["parent"]]}
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -203,17 +227,20 @@ def _fetch_event_tasks() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def run_task(task: str, doc_name: str | None = None) -> str:
-    """Run one automation task end to end. `doc_name` is set by an event trigger and
-    narrows a document-query source to that one record. Returns the recorded status."""
+def run_task(task: str, doc_doctype: str | None = None, doc_name: str | None = None) -> str:
+    """Run one automation task end to end. `doc_doctype`/`doc_name` are set by an event
+    trigger and narrow the matching document-query source to that one record; any other
+    source is still read in full. Returns the recorded status."""
     doc = frappe.get_doc("Crema Automation Task", task)
 
-    # Read the watermark BEFORE stamping it: db_set assigns in memory first, so after the
-    # next line `doc.last_run` is `now` and an incremental filter would match nothing.
-    since = doc.last_run
+    # Captured before the read, and used as the new watermark for any source that did not
+    # fill its batch: a record changed *during* a long run must be read by the next one.
+    started = now_datetime()
 
     # Stamp last_run first and commit: a task that explodes must not hot-loop on tick().
-    doc.db_set("last_run", now_datetime(), update_modified=False)
+    # last_run is the cron cursor only — the incremental watermark is per source, in each
+    # child row's last_read, so a run may not move this one backwards.
+    doc.db_set("last_run", started, update_modified=False)
     frappe.db.commit()
 
     try:
@@ -228,19 +255,20 @@ def run_task(task: str, doc_name: str | None = None) -> str:
     frappe.local.crema_in_automation = True
     try:
         with sandbox.isolation(cfg["isolation_user"]):
-            status, error, plan, result, high_water = _run_inside(doc, cfg, since, doc_name)
+            status, error, plan, result, watermarks = _run_inside(doc, cfg, started, doc_doctype, doc_name)
 
         # Outside the sandbox on purpose: db_set stamps modified_by with the session user,
         # and the task document's own audit trail belongs to the scheduler, not to the
         # interface's isolation user.
         if plan is not None:
             doc.db_set("plan_json", frappe.as_json(plan))
-        if status != "Failed" and high_water:
-            # A capped incremental batch processed the oldest `limit` rows and would
-            # otherwise have its cursor left at `now`, silently starving the backlog.
-            # Rewind to the last row actually handled; the pre-run stamp above still
-            # guards the crash case.
-            doc.db_set("last_run", high_water, update_modified=False)
+        if status != "Failed":
+            # Only now: a run that failed must re-read the same records next time, and a
+            # source that failed while its siblings succeeded is simply absent from here.
+            for source_name, read_up_to in watermarks.items():
+                frappe.db.set_value(
+                    "Crema Automation Source", source_name, "last_read", read_up_to, update_modified=False
+                )
         outcome = _record(doc, status, error, result)
     finally:
         frappe.local.crema_in_automation = False
@@ -249,30 +277,32 @@ def run_task(task: str, doc_name: str | None = None) -> str:
     return outcome
 
 
-def _run_inside(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, str, dict | None, str, Any]:
+def _run_inside(
+    doc, cfg: dict, started, doc_doctype: str | None, doc_name: str | None
+) -> tuple[str, str, dict | None, str, dict[str, Any]]:
     """Everything that runs as the isolation user. Returns
-    (status, error, plan_to_store, result, high_water)."""
+    (status, error, plan_to_store, result, watermarks)."""
     try:
-        content, allowed_names, note, high_water = _read_source(doc, cfg, since, doc_name)
+        content, allowed_names, note, watermarks = _read_source(doc, cfg, started, doc_doctype, doc_name)
     except Exception as exc:
-        return "Failed", f"source read failed — {_describe(exc)}", None, "", None
+        return "Failed", f"source read failed — {_describe(exc)}", None, "", {}
 
     if not content.strip():
         # The normal state of a quiet incremental task. Left to fall through it would
         # cost two LLM calls, record Failed, and auto-disable the task after five quiet
-        # nights. high_water still propagates: a capped batch whose records were all
-        # dropped by the scan must rewind too, or the backlog behind it is never read.
-        return "Success", "", None, note or "no new records", high_water
+        # nights. The watermarks still propagate: a batch whose records were all dropped
+        # by the scan must still advance, or the backlog behind it is never read.
+        return "Success", "", None, note or "no new records", watermarks
 
     if doc.action == "Report Only":
         try:
             report = api.ask(doc.interface, doc.instruction, context=content)
         except Exception as exc:
-            return "Failed", _describe(exc), None, "", None
-        return "Success", "", None, _join_note(report[:_RESULT_MAX_CHARS], note), high_water
+            return "Failed", _describe(exc), None, "", {}
+        return "Success", "", None, _join_note(report[:_RESULT_MAX_CHARS], note), watermarks
 
     status, error, plan, result = _plan_and_execute(doc, content, allowed_names)
-    return status, error, plan, _join_note(result, note), high_water
+    return status, error, plan, _join_note(result, note), watermarks
 
 
 def _join_note(result: str, note: str) -> str:
@@ -359,16 +389,54 @@ def _describe(exc: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_source(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, set[str] | None, str, Any]:
-    """Read whatever this task's source is, as text. Returns
-    (content, allowed_names, note, high_water).
+def _read_source(
+    doc, cfg: dict, started, doc_doctype: str | None, doc_name: str | None, preview: bool = False
+) -> tuple[str, set[str] | None, str, dict[str, Any]]:
+    """Read every source row of this task, as one labelled text. Returns
+    (content, allowed_names, note, watermarks).
 
-    `allowed_names` is None for a URL source and the exact set of record names the query
-    returned for a document source — it is what fences `Update Source Records`.
+    `allowed_names` is None when no document query contributed, and otherwise the exact
+    set of record names the queries returned — it is what fences `Update Source Records`
+    (which validate() holds to a single query source, so the set is one query's).
+
+    `watermarks` is {source row name: read up to}, applied by run_task only if the run as
+    a whole succeeded. A source that raised is absent from it, so it is re-read next time.
+
+    Each source gets an equal share of the content budget: without that, one chatty source
+    truncates the rest away and the run silently ignores them.
     """
-    if doc.source_type != "Document Query":
-        return _fetch(doc.source_url)[:_EXTRACT_CONTENT_CHARS], None, "", None
-    return _read_documents(doc, cfg, since, doc_name)
+    budget = _EXTRACT_CONTENT_CHARS // max(len(doc.sources), 1)
+    blocks, allowed_names, notes, watermarks, failures = [], None, [], {}, []
+
+    for source in doc.sources:
+        try:
+            if source.source_type != "Document Query":
+                text, names, note, read_up_to = _fetch(source.source_url)[:budget], None, "", None
+            else:
+                # An event run reads the one record that changed — but only from the
+                # source that watches its doctype; a second source is reference material
+                # and must still be read in full.
+                narrow = doc_name if source.source_doctype == doc_doctype else None
+                text, names, note, read_up_to = _read_documents(source, cfg, started, narrow, budget, preview)
+        except Exception as exc:
+            failures.append(f"{source.source_label or source.source_type} failed — {_describe(exc)}")
+            if doc.on_source_error == "Fail the Run":
+                raise
+            continue
+
+        if text:
+            blocks.append(f"=== Source: {source.source_label} ===\n{text}")
+        if names is not None:
+            allowed_names = names if allowed_names is None else allowed_names | names
+        if note:
+            notes.append(f"{source.source_label}: {note}")
+        if read_up_to:
+            watermarks[source.name] = read_up_to
+
+    if failures and len(failures) == len(doc.sources):
+        raise AutomationError("; ".join(failures))
+
+    return "\n\n".join(blocks), allowed_names, "; ".join(notes + failures), watermarks
 
 
 def _source_fields(doctype: str) -> list[str]:
@@ -398,13 +466,21 @@ def _normalized_filters(raw: Any) -> list[list]:
     return [list(row) for row in raw or [] if isinstance(row, list | tuple)]
 
 
-def _read_documents(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, set[str], str, Any]:
-    filters = _normalized_filters(frappe.parse_json(doc.source_filters or "[]"))
+def _read_documents(
+    source, cfg: dict, started, doc_name: str | None, budget: int, preview: bool = False
+) -> tuple[str, set[str], str, Any]:
+    filters = _normalized_filters(frappe.parse_json(source.source_filters or "[]"))
+
+    # An event run reads one named record, so it is not a window over time and must never
+    # move this source's watermark. A preview (Dry Run) ignores the watermark in both
+    # directions: run right after a real run it would otherwise read nothing and look
+    # broken, and it must not consume the window the next real run needs.
+    incremental = bool(source.incremental) and not doc_name and not preview
 
     if doc_name:
         filters.append(["name", "=", doc_name])
-    elif doc.incremental and since:
-        filters.append(["modified", ">", since])
+    elif incremental and source.last_read:
+        filters.append(["modified", ">", source.last_read])
         # This task's own writes bump `modified`. Without this an Update Source Records
         # task re-reads — and re-bills for — everything it just wrote, every tick,
         # forever. A later human edit sets modified_by back to the human, so the record
@@ -412,18 +488,23 @@ def _read_documents(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, s
         filters.append(["modified_by", "!=", cfg["isolation_user"]])
 
     # get_list, never get_all: this is the read fence. Oldest first, so a batch capped by
-    # source_limit takes the head of the backlog and run_task rewinds the watermark to
-    # the last row handled — newest-first would starve the tail permanently.
-    limit = cint(doc.source_limit) or _SOURCE_LIMIT_DEFAULT
+    # source_limit takes the head of the backlog and leaves the watermark at the last row
+    # handled — newest-first would starve the tail permanently.
+    limit = cint(source.source_limit) or _SOURCE_LIMIT_DEFAULT
     rows = frappe.get_list(
-        doc.source_doctype,
+        source.source_doctype,
         filters=filters,
-        fields=_source_fields(doc.source_doctype),
+        fields=_source_fields(source.source_doctype),
         limit=limit,
         order_by="modified asc",
     )
+
+    # A capped batch read the head of the backlog only, so the next run resumes at the
+    # last row it actually handled; an uncapped one read everything up to the moment this
+    # run started. `started`, not `now`: a record changed during a long run is not lost.
+    read_up_to = (rows[-1].get("modified") if len(rows) == limit else started) if incremental else None
     if not rows:
-        return "", set(), "", None
+        return "", set(), "", read_up_to
 
     kept, dropped = rows, 0
     if cfg["enable_prompt_scan"]:
@@ -434,16 +515,9 @@ def _read_documents(doc, cfg: dict, since, doc_name: str | None) -> tuple[str, s
         dropped = len(rows) - len(kept)
 
     note = f"{dropped} skipped by the security scan" if dropped else ""
-    # Only a capped incremental batch may move the watermark. tick() walks the cron from
-    # last_run, so a rewind into the past re-arms the schedule at the very next 15-minute
-    # tick — for a capped backlog that is the point (drain at tick pace), but for any
-    # other run — non-incremental, uncapped, or a single-document event run — it re-fires
-    # the task once per tick, and a non-incremental task loops at full LLM cost forever.
-    capped = len(rows) == limit
-    high_water = rows[-1].get("modified") if doc.incremental and not doc_name and capped else None
     if not kept:
-        return "", set(), note, high_water
-    return frappe.as_json(kept)[:_EXTRACT_CONTENT_CHARS], {row["name"] for row in kept}, note, high_water
+        return "", set(), note, read_up_to
+    return frappe.as_json(kept)[:budget], {row["name"] for row in kept}, note, read_up_to
 
 
 def _fetch(url: str) -> str:
@@ -708,9 +782,7 @@ def dry_run(task: str) -> dict[str, Any]:
     cfg = client._resolve(doc.interface)
 
     with sandbox.isolation(cfg["isolation_user"]):
-        # since=None: a dry run right after a real run must not show an empty incremental
-        # window and look broken.
-        content, allowed_names, note, _ = _read_source(doc, cfg, None, None)
+        content, allowed_names, note, _ = _read_source(doc, cfg, now_datetime(), None, None, preview=True)
         if not content.strip():
             return {"action": doc.action, "row_count": 0, "note": note or "no records matched"}
 

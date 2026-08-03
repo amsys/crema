@@ -1,6 +1,7 @@
 // Copyright (c) 2026, Crema and contributors
 // For license information, please see license.txt
 
+/* global crema_show_error, crema_diff_table */
 // crema_show_error and crema_diff_table are defined once in crema.bundle.js
 // (app_include_js, so they're already on window by the time this form script runs).
 //
@@ -31,7 +32,7 @@ function crema_render_status(frm) {
 		frm.doc.consecutive_failures >= 3
 			? __("{0} runs failed in a row. This task turns itself off at 5.", [
 					frm.doc.consecutive_failures,
-				])
+			  ])
 			: "",
 		"red"
 	);
@@ -72,13 +73,17 @@ function crema_show_dry_run(frm, result) {
 	}
 
 	const verb =
-		frm.doc.action === "Update Source Records" ? __("would be updated") : __("would be written");
+		frm.doc.action === "Update Source Records"
+			? __("would be updated")
+			: __("would be written");
 	const header = [
 		`<p>${__("{0} row(s) {1}. Nothing was saved.", [result.row_count, verb])}</p>`,
 		result.used_stored_plan
 			? `<p class="text-muted small">${__("Using the stored plan.")}</p>`
 			: `<p class="text-muted small">${__("A new plan was written and saved.")}</p>`,
-		result.note ? `<p class="text-muted small">${frappe.utils.escape_html(result.note)}</p>` : "",
+		result.note
+			? `<p class="text-muted small">${frappe.utils.escape_html(result.note)}</p>`
+			: "",
 	].join("");
 
 	const rows = (result.rows || []).map((row) => crema_diff_table({ set: row })).join("");
@@ -185,7 +190,9 @@ function crema_stamp_row(frm, row) {
 		row.doctype,
 		row.name,
 		"source_label",
-		query ? row.source_doctype || "" : (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "")
+		query
+			? row.source_doctype || ""
+			: (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "")
 	);
 	frappe.model.set_value(row.doctype, row.name, "source_note", query ? parts.join(" · ") : "");
 }

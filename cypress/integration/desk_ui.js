@@ -107,7 +107,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("sort by name descending");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"sort by name descending"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask");
@@ -136,7 +138,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("sort by name descending");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"sort by name descending"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask");
@@ -159,15 +163,19 @@ context("Crema desk UI", () => {
 			},
 		}).as("ask");
 
-		cy.get(".sort-selector .btn-order").invoke("attr", "data-value").then((before) => {
-			cy.get("[data-crema]").click();
-			cy.get(".modal").within(() => {
-				cy.get(".frappe-control[data-fieldname=instruction] textarea").type("sort somehow");
-				cy.get(".btn-modal-primary").click();
+		cy.get(".sort-selector .btn-order")
+			.invoke("attr", "data-value")
+			.then((before) => {
+				cy.get("[data-crema]").click();
+				cy.get(".modal").within(() => {
+					cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+						"sort somehow"
+					);
+					cy.get(".btn-modal-primary").click();
+				});
+				cy.wait("@ask");
+				cy.get(".sort-selector .btn-order").should("have.attr", "data-value", before);
 			});
-			cy.wait("@ask");
-			cy.get(".sort-selector .btn-order").should("have.attr", "data-value", before);
-		});
 	});
 
 	it("applies page_length as a row limit", () => {
@@ -182,7 +190,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("show me the top 1");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"show me the top 1"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask");
@@ -206,7 +216,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos starting with t");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"todos starting with t"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask");
@@ -219,10 +231,12 @@ context("Crema desk UI", () => {
 		// (mirroring list_view.js's own before_refresh() guard), so "show me everything"
 		// silently answered the *previous* question against a still-filtered list.
 		const ask = (result) =>
-			cy.intercept("POST", "/api/method/crema.api.ask_api", {
-				statusCode: 200,
-				body: { message: { result: JSON.stringify(result) } },
-			}).as("ask");
+			cy
+				.intercept("POST", "/api/method/crema.api.ask_api", {
+					statusCode: 200,
+					body: { message: { result: JSON.stringify(result) } },
+				})
+				.as("ask");
 		const prompt = (text) => {
 			cy.get("[data-crema]").click();
 			cy.get(".modal").within(() => {
@@ -232,7 +246,11 @@ context("Crema desk UI", () => {
 			cy.wait("@ask");
 		};
 
-		ask({ view: "List", filters: { description: ["like", "t%"] }, reason: "todos starting with t" });
+		ask({
+			view: "List",
+			filters: { description: ["like", "t%"] },
+			reason: "todos starting with t",
+		});
 		prompt("todos starting with t");
 		cy.location("search").should("contain", "description");
 
@@ -287,7 +305,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos referencing probe");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"todos referencing probe"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask");
@@ -315,7 +335,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos about zzz-no-such-text");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"todos about zzz-no-such-text"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask");
@@ -351,12 +373,19 @@ context("Crema desk UI", () => {
 		// and the spinner just cleared with nothing shown at all.
 		cy.intercept("POST", "/api/method/crema.api.ask_api", {
 			statusCode: 417,
-			body: { message: { blocked: false, reason: "'simple': monthly budget of $5 already spent." } },
+			body: {
+				message: {
+					blocked: false,
+					reason: "'simple': monthly budget of $5 already spent.",
+				},
+			},
 		}).as("ask_budget");
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos about acme");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"todos about acme"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask_budget");
@@ -372,7 +401,9 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("todos about acme");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"todos about acme"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@ask_empty_417");
@@ -397,10 +428,16 @@ context("Crema desk UI", () => {
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".file-uploader .btn-file-upload").first().selectFile(
-				{ contents: Cypress.Buffer.from("dummy"), fileName: "todos.pdf", mimeType: "application/pdf" },
-				{ action: "drag-drop", force: true }
-			);
+			cy.get(".file-uploader .btn-file-upload")
+				.first()
+				.selectFile(
+					{
+						contents: Cypress.Buffer.from("dummy"),
+						fileName: "todos.pdf",
+						mimeType: "application/pdf",
+					},
+					{ action: "drag-drop", force: true }
+				);
 		});
 		cy.wait("@extract");
 		cy.get(".modal").within(() => {
@@ -428,14 +465,22 @@ context("Crema desk UI", () => {
 				},
 			},
 		}).as("extract");
-		cy.intercept("POST", "/api/method/upload_file", { statusCode: 500, body: {} }).as("upload_fail");
+		cy.intercept("POST", "/api/method/upload_file", { statusCode: 500, body: {} }).as(
+			"upload_fail"
+		);
 
 		cy.get("[data-crema]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".file-uploader .btn-file-upload").first().selectFile(
-				{ contents: Cypress.Buffer.from("dummy"), fileName: "todos.pdf", mimeType: "application/pdf" },
-				{ action: "drag-drop", force: true }
-			);
+			cy.get(".file-uploader .btn-file-upload")
+				.first()
+				.selectFile(
+					{
+						contents: Cypress.Buffer.from("dummy"),
+						fileName: "todos.pdf",
+						mimeType: "application/pdf",
+					},
+					{ action: "drag-drop", force: true }
+				);
 		});
 		cy.wait("@extract");
 		cy.get(".modal").within(() => {
@@ -463,7 +508,9 @@ context("Crema desk UI — form view", () => {
 
 	it("renders a robot button on a saved form and applies a diff without saving", () => {
 		cy.visit("/app/todo/new");
-		cy.get(".form-control[data-fieldname=description] textarea, textarea[data-fieldname=description]")
+		cy.get(
+			".form-control[data-fieldname=description] textarea, textarea[data-fieldname=description]"
+		)
 			.first()
 			.type("a todo to transform");
 		cy.get(".primary-action").contains("Save").click();
@@ -473,12 +520,20 @@ context("Crema desk UI — form view", () => {
 
 		cy.intercept("POST", "/api/method/crema.api.transform_api", {
 			statusCode: 200,
-			body: { message: { set: { description: "Updated by Crema" }, child_set: {}, reason: "updated" } },
+			body: {
+				message: {
+					set: { description: "Updated by Crema" },
+					child_set: {},
+					reason: "updated",
+				},
+			},
 		}).as("transform");
 
 		cy.get("[data-crema-form]").click();
 		cy.get(".modal").within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("mark this urgent");
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"mark this urgent"
+			);
 			cy.get(".btn-modal-primary").click();
 		});
 		cy.wait("@transform");
@@ -507,10 +562,15 @@ context("Crema Settings", () => {
 		cy.window()
 			.then((win) => win.frappe.xcall("crema.api.get_interfaces"))
 			.then((names) => {
-				cy.get('[data-fieldname="assignments"] .grid-row').should("have.length", names.length);
+				cy.get('[data-fieldname="assignments"] .grid-row').should(
+					"have.length",
+					names.length
+				);
 			});
 		cy.get('[data-fieldname="assignments"]').within(() => {
-			cy.get("button, a").contains(/add row|delete/i).should("not.exist");
+			cy.get("button, a")
+				.contains(/add row|delete/i)
+				.should("not.exist");
 		});
 	});
 

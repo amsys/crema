@@ -39,7 +39,10 @@ by a newly installed app, appears without a manual step. The install step also
 creates the three Number Cards the Crema workspace shows (calls, cost, blocked).
 
 The install step also creates one Frappe user, `crema@<site>` — enabled, no password
-(it can never log in), holding only the `Crema User` role. The seeding step sets it
+(it can never log in), holding only the `Crema User` role. If the site name is not a
+valid email domain (for example `mysite`, which has no dot, or `test_site`, which has
+an illegal character), the install step uses `crema@<site>.localhost` instead, with
+each illegal character changed to a hyphen. The seeding step sets it
 as Crema Settings' **Default Runs-As User** unless that field already has a value.
 This is the isolation user every interface uses by default. It exists so that one
 Default Provider in [configure.md](configure.md) makes Crema usable — you do not

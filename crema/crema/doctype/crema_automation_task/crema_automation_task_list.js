@@ -13,6 +13,10 @@ frappe.listview_settings["Crema Automation Task"] = {
 		if (!doc.last_status) {
 			return [__("Never run"), "blue", "last_status,=,"];
 		}
-		return [__(doc.last_status), colors[doc.last_status] || "gray", `last_status,=,${doc.last_status}`];
+		return [
+			__(doc.last_status),
+			colors[doc.last_status] || "gray",
+			`last_status,=,${doc.last_status}`,
+		];
 	},
 };

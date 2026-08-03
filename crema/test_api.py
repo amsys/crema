@@ -35,7 +35,7 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
         _ensure_user(TEST_PLAIN_USER)
         _ensure_provider()
         _ensure_interface("simple")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -260,7 +260,7 @@ class IntegrationTestCremaPackageExports(CremaFixtureTestCase):
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_provider()
         _ensure_interface("simple")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def test_package_reexports_the_full_public_surface(self):
         import crema

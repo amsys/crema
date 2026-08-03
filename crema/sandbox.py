@@ -37,10 +37,13 @@ def isolation(user: str) -> Iterator[None]:
         frappe.local.session.data = old_data
         frappe.local.form_dict = old_form
 
+    # This *is* the isolation sandbox — switching identity is the whole point, and
+    # frappe's own permission engine stays the fence. Audited; see the module docstring
+    # and docs/security.md.
     try:
-        frappe.set_user(user)
+        frappe.set_user(user)  # nosemgrep: frappe-setuser
         _restore()
         yield
     finally:
-        frappe.set_user(old_user)
+        frappe.set_user(old_user)  # nosemgrep: frappe-setuser
         _restore()

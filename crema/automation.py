@@ -241,6 +241,7 @@ def run_task(task: str, doc_doctype: str | None = None, doc_name: str | None = N
     # last_run is the cron cursor only — the incremental watermark is per source, in each
     # child row's last_read, so a run may not move this one backwards.
     doc.db_set("last_run", started, update_modified=False)
+    # nosemgrep: frappe-manual-commit — the cursor must survive a failing run, see above
     frappe.db.commit()
 
     try:

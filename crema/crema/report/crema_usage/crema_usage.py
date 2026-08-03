@@ -10,6 +10,7 @@ known keys. Never interpolate the raw filter value into SQL.
 from __future__ import annotations
 
 import frappe
+from frappe import _
 from frappe.utils import flt
 
 _GROUP_BY_FIELD = {
@@ -24,11 +25,13 @@ def execute(filters: dict | None = None):
     filters = filters or {}
     group_by = filters.get("group_by") or "Interface"
     if group_by not in _GROUP_BY_FIELD:
-        frappe.throw(f"Invalid group_by '{group_by}'")
+        frappe.throw(_("Invalid group_by '{0}'").format(group_by))
     group_field = _GROUP_BY_FIELD[group_by]
 
     where, values = _where(filters)
-    rows = frappe.db.sql(
+    # group_field is never user input: group_by is rejected above unless it is one of
+    # _GROUP_BY_FIELD's four keys, and only the mapped value reaches the query.
+    rows = frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
         f"""
         SELECT
             {group_field} AS group_value,
@@ -83,13 +86,13 @@ def _where(filters: dict) -> tuple[str, dict]:
 
 def _columns(group_by: str) -> list[dict]:
     return [
-        {"label": group_by, "fieldname": "group_value", "fieldtype": "Data", "width": 160},
-        {"label": "Calls", "fieldname": "calls", "fieldtype": "Int", "width": 80},
-        {"label": "Cached", "fieldname": "cached", "fieldtype": "Int", "width": 80},
-        {"label": "Blocked", "fieldname": "blocked", "fieldtype": "Int", "width": 80},
-        {"label": "Errors", "fieldname": "errors", "fieldtype": "Int", "width": 80},
-        {"label": "Prompt Tokens", "fieldname": "prompt_tokens", "fieldtype": "Int", "width": 110},
-        {"label": "Completion Tokens", "fieldname": "completion_tokens", "fieldtype": "Int", "width": 130},
-        {"label": "Cost (USD)", "fieldname": "cost_usd", "fieldtype": "Currency", "width": 100},
-        {"label": "Avg Duration (ms)", "fieldname": "avg_duration_ms", "fieldtype": "Int", "width": 130},
+        {"label": _(group_by), "fieldname": "group_value", "fieldtype": "Data", "width": 160},
+        {"label": _("Calls"), "fieldname": "calls", "fieldtype": "Int", "width": 80},
+        {"label": _("Cached"), "fieldname": "cached", "fieldtype": "Int", "width": 80},
+        {"label": _("Blocked"), "fieldname": "blocked", "fieldtype": "Int", "width": 80},
+        {"label": _("Errors"), "fieldname": "errors", "fieldtype": "Int", "width": 80},
+        {"label": _("Prompt Tokens"), "fieldname": "prompt_tokens", "fieldtype": "Int", "width": 110},
+        {"label": _("Completion Tokens"), "fieldname": "completion_tokens", "fieldtype": "Int", "width": 130},
+        {"label": _("Cost (USD)"), "fieldname": "cost_usd", "fieldtype": "Currency", "width": 100},
+        {"label": _("Avg Duration (ms)"), "fieldname": "avg_duration_ms", "fieldtype": "Int", "width": 130},
     ]

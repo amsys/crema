@@ -139,7 +139,7 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
         _ensure_user(TEST_ISOLATION_USER)
         _ensure_provider()
         _ensure_interface("ocr")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()

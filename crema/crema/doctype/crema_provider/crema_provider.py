@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import frappe
 from crema import cache
+from frappe import _
 from frappe.model.document import Document
 
 # Apply-template presets: label -> base_url. User picks one, pastes their key, enables.
@@ -44,8 +45,10 @@ class CremaProvider(Document):
         if self.enabled and not self.get_password("api_key", raise_exception=False):
             if not _is_local_or_private(self.base_url or ""):
                 frappe.throw(
-                    "API Key is required to enable a provider, unless its Base URL is "
-                    "localhost or a private network address (e.g. a local Ollama instance)."
+                    _(
+                        "API Key is required to enable a provider, unless its Base URL is "
+                        "localhost or a private network address (e.g. a local Ollama instance)."
+                    )
                 )
 
     def on_update(self) -> None:

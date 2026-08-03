@@ -12,6 +12,7 @@ from __future__ import annotations
 import frappe
 from crema import cache, interfaces
 from crema.crema.doctype.crema_model_assignment.crema_model_assignment import validate_isolation_user
+from frappe import _
 from frappe.model.document import Document
 
 
@@ -82,8 +83,9 @@ class CremaSettings(Document):
             if (row.provider or self.default_provider) and not (row.model or self.default_model)
         ]
         if missing:
-            lines = "".join(f"<li>'{name}': no Model set (row or Default Model).</li>" for name in missing)
-            frappe.msgprint(f"<ul>{lines}</ul>", indicator="orange", title="Missing Model")
+            item = _("'{0}': no Model set (row or Default Model).")
+            lines = "".join(f"<li>{item.format(name)}</li>" for name in missing)
+            frappe.msgprint(f"<ul>{lines}</ul>", indicator="orange", title=_("Missing Model"))
 
     def _apply_security_guard_rules(self) -> None:
         by_name = {row.interface: row for row in self.assignments}

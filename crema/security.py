@@ -116,6 +116,8 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
+            # One pattern wrapped across two lines, not two list elements.
+            # nosemgrep: string-concat-in-list
             r"(repeat|print|output|show|display)\s+.{0,20}?\b(everything|all\s+(of\s+)?the\s+text)\s+"
             r"(above|before|preceding)\b",
             re.I | re.S,
@@ -124,6 +126,8 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
+            # One pattern wrapped across two lines, not two list elements.
+            # nosemgrep: string-concat-in-list
             r"(override|bypass|circumvent|disable|ignore)\s+(all\s+|any\s+)?your\s+.{0,20}?\b"
             r"(instructions?|restrictions?|guidelines?|rules?|filters?|safety|programming|training)\b",
             re.I | re.S,

@@ -48,7 +48,7 @@ class IntegrationTestCremaExtract(CremaFixtureTestCase):
         _ensure_provider()
         _ensure_interface("ocr")
         _ensure_interface("extraction")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()
@@ -222,7 +222,7 @@ class IntegrationTestCremaExtractApi(CremaFixtureTestCase):
         _ensure_provider()
         _ensure_interface("ocr")
         _ensure_interface("extraction")
-        frappe.db.commit()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
         super().setUp()

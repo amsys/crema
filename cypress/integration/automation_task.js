@@ -16,10 +16,14 @@ context("Crema Automation Task form", () => {
 				enabled: 0,
 				trigger: "Schedule",
 				schedule_preset: "Daily 03:00",
-				source_type: "Document Query",
-				source_doctype: "ToDo",
-				source_filters: "[]",
-				source_limit: 50,
+				sources: [
+					{
+						source_type: "Document Query",
+						source_doctype: "ToDo",
+						source_filters: "[]",
+						source_limit: 50,
+					},
+				],
 				interface: "complex",
 				instruction: "Set a priority on every open item.",
 				action: "Update Source Records",
@@ -88,12 +92,24 @@ context("Crema Automation Task form", () => {
 		cy.get(".modal-body").should("contain.text", "prompt injection");
 	});
 
-	it("opens a filter builder from the source filters table", () => {
+	it("summarises each source in the grid", () => {
 		cy.visit(`/app/crema-automation-task/${TASK}`);
 		cy.wait("@interfaces");
+		// What the row reads and how, without opening it.
+		cy.get('[data-fieldname="sources"] .grid-row').first().as("row");
+		cy.get("@row").should("contain.text", "Document Query");
+		cy.get("@row").should("contain.text", "ToDo");
+		cy.get("@row").should("contain.text", "no filters");
+	});
+
+	it("opens a filter builder from the source row's filters table", () => {
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+		// The widget is rendered by form_render, so the row has to be expanded first.
+		cy.get('[data-fieldname="sources"] .grid-row').first().find(".btn-open-row").click();
 		cy.get('[data-fieldname="source_filters"] table').should("contain.text", "Click to set filters");
 		cy.get('[data-fieldname="source_filters"] table').click();
-		cy.get(".modal-title").should("contain.text", "Set Source Filters");
+		cy.get(".modal-title").should("contain.text", "Which Records");
 		cy.get(".modal .filter-area, .modal .fieldname-select-area").should("exist");
 	});
 

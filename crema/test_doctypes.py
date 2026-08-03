@@ -170,7 +170,7 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
     def test_invalid_cron_expression_is_rejected(self):
         doc = frappe.new_doc("Crema Automation Task")
         doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
-        doc.source_url = "https://example.invalid/source"
+        doc.append("sources", {"source_type": "URL", "source_url": "https://example.invalid/source"})
         doc.schedule = "not a cron expression"
         doc.instruction = "do something"
         doc.target_doctype = "ToDo"
@@ -183,11 +183,52 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         it's one of interfaces.PREDEFINED."""
         doc = frappe.new_doc("Crema Automation Task")
         doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
-        doc.source_url = "https://example.invalid/source"
+        doc.append("sources", {"source_type": "URL", "source_url": "https://example.invalid/source"})
         doc.schedule = "0 3 * * *"
         doc.instruction = "do something"
         doc.target_doctype = "ToDo"
         doc.interface = "_not_a_real_interface"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_a_task_with_no_source_at_all_is_rejected(self):
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.interface = "simple"
+        doc.target_doctype = "ToDo"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_update_source_records_needs_exactly_one_document_query(self):
+        """Two would leave `allowed_names` — one flat set of record names — fencing a plan
+        that can only name one doctype. A URL source alongside is fine: it is reference
+        material, and the fence is still the one query's result set."""
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.interface = "simple"
+        doc.action = "Update Source Records"
+        doc.append("sources", {"source_type": "Document Query", "source_doctype": "ToDo"})
+        doc.append("sources", {"source_type": "Document Query", "source_doctype": "Note"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+        doc.sources.pop()
+        doc.append("sources", {"source_type": "URL", "source_url": "https://example.invalid/x"})
+        doc.insert(ignore_permissions=True)
+        self.assertEqual(doc.target_doctype, "ToDo")  # taken from the one query source
+
+    def test_a_crema_doctype_is_refused_as_a_source(self):
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.interface = "simple"
+        doc.action = "Report Only"
+        doc.append("sources", {"source_type": "Document Query", "source_doctype": "Crema Log"})
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
 

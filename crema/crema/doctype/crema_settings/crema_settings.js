@@ -1,25 +1,33 @@
 // Copyright (c) 2026, Crema and contributors
 // For license information, please see license.txt
 
-/* global crema_fetch_models, crema_new_provider_dialog */
-// Crema Settings — a Single, so it's one ordinary form: Providers (rendered into an
-// HTML field) + Model Assignments (a Table field, one row per crema.interfaces.names()
-// name — core PREDEFINED plus whatever installed apps register through the
-// crema_interfaces hook; see CremaSettings.validate for the reconcile). No add/delete row
-// affordance: the set is not the user's to edit here. Saving goes through the normal
-// frm.save() -> Document.validate/
-// on_update path, so a real validation error surfaces as a real error, not a discarded one.
+/* global crema_fetch_models, crema_new_provider_dialog, crema_usage_pill */
+// Crema Settings — a Single, so it's one ordinary form: Defaults + Model Assignments (a
+// Table field, one row per crema.interfaces.names() name — core PREDEFINED plus whatever
+// installed apps register through the crema_interfaces hook; see CremaSettings.validate
+// for the reconcile). No add/delete row affordance: the set is not the user's to edit
+// here. Saving goes through the normal frm.save() -> Document.validate/on_update path, so
+// a real validation error surfaces as a real error, not a discarded one.
+//
+// AI services used to be a hand-written table in an HTML field on this form. They are the
+// Crema Provider list view now — a real list, with sorting, filtering and paging for
+// free; see crema_provider_list.js for the two computed columns it kept. This form does
+// not link to it: Providers sits above Settings in the sidebar, which says the same thing
+// without a button that is a no-op for everyone who already has one. The only exception
+// is warn_if_no_providers below — nothing on this page resolves without a provider, so
+// that case is worth interrupting for.
 
-// Usage (spend + budget, per interface and per provider) is fetched once per refresh
-// and stashed here — both the assignments grid formatter and the providers table read
-// from it, rather than each firing their own frappe.call.
+// Usage (spend + budget, per interface) is fetched once per refresh and stashed here, so
+// the assignments grid formatter reads from it instead of firing its own frappe.call.
 let usage_cache = { interfaces: {}, providers: {} };
 
 frappe.ui.form.on("Crema Settings", {
 	refresh(frm) {
-		fetch_usage(frm, () => render_providers(frm));
+		fetch_usage(frm);
 		setup_assignments_grid(frm);
 		load_default_models(frm);
+		warn_if_not_a_crema_user(frm);
+		warn_if_no_providers(frm);
 	},
 	default_provider(frm) {
 		// set_value("default_model", "") fires the default_model trigger below, which
@@ -31,38 +39,69 @@ frappe.ui.form.on("Crema Settings", {
 	},
 });
 
-function fetch_usage(frm, callback) {
+function fetch_usage(frm) {
 	frappe.call({
 		method: "crema.api.get_usage",
 		callback(r) {
 			usage_cache = r.message || { interfaces: {}, providers: {} };
 			frm.get_field("assignments").grid.refresh();
-			callback();
 		},
 		error() {
-			// Deliberately no message here — this only feeds the Usage pills, and
-			// render_providers must still run. Reset to blank rather than leaving a stale
-			// usage_cache from a prior successful load, which would show numbers that no
-			// longer match what's on screen.
+			// Deliberately no message here — this only feeds the Usage pills, and the rest
+			// of the form is perfectly usable without them. Reset to blank rather than
+			// leaving a stale usage_cache from a prior successful load, which would show
+			// numbers that no longer match what's on screen.
 			usage_cache = { interfaces: {}, providers: {} };
-			callback();
 		},
 	});
 }
 
-function usage_pill(usage) {
-	if (!usage) return "";
-	const spend = `$${fmt_usd(usage.spend)}`;
-	if (!usage.budget) return `<span class="indicator-pill gray">${spend}</span>`;
-	const pct = Math.round((usage.spend / usage.budget) * 100);
-	const color = pct >= 100 ? "red" : pct >= 80 ? "orange" : "green";
-	return `<span class="indicator-pill ${color}" title="${spend} of $${fmt_usd(
-		usage.budget
-	)}">${pct}%</span>`;
+// The desk's Ask Crema button (the robot) is gated on Crema User *or* System Manager, so
+// whoever is reading this form can always use Crema — but they may still be missing the
+// role every ordinary user needs. Say exactly that, rather than implying they are locked
+// out, and offer the one-click grant since only a System Manager can reach this form.
+function warn_if_not_a_crema_user(frm) {
+	if (frappe.user_roles.includes("Crema User")) return;
+
+	frm.dashboard.add_comment(
+		__(
+			"You do not have the Crema User role. You can use Crema because you are a System Manager. Other people need this role to see the Ask Crema button."
+		),
+		"yellow",
+		true
+	);
+	frm.add_custom_button(__("Give Me the Crema User Role"), () =>
+		frappe.call({
+			method: "crema.api.grant_crema_role",
+			callback() {
+				frappe.show_alert({
+					message: __("Role added. Reload the page to see the Ask Crema button."),
+					indicator: "green",
+				});
+			},
+		})
+	);
 }
 
-function fmt_usd(value) {
-	return (value || 0).toFixed(2);
+// Every default and every use case on this form resolves through an AI service. With none
+// enabled, the whole page is a set of settings that cannot take effect — so say so, and
+// offer the same template dialog the Providers list offers. Enabled, not merely present:
+// a disabled service resolves no better than a missing one.
+function warn_if_no_providers(frm) {
+	frappe.db.count("Crema Provider", { filters: { enabled: 1 }, limit: 1 }).then((count) => {
+		if (count) return;
+
+		frm.dashboard.add_comment(
+			__(
+				"No AI service is switched on. Add one first — nothing on this page can work until you do."
+			),
+			"red",
+			true
+		);
+		frm.add_custom_button(__("Add an AI Service"), () =>
+			crema_new_provider_dialog(() => frm.reload_doc())
+		);
+	});
 }
 
 function setup_assignments_grid(frm) {
@@ -77,7 +116,7 @@ function setup_assignments_grid(frm) {
 	// Usage is display-only, painted from usage_cache — never persisted, so the
 	// formatter reads live state instead of the (always-blank) stored field value.
 	grid.update_docfield_property("usage", "formatter", (value, df, options, doc) =>
-		usage_pill(usage_cache.interfaces[doc.interface])
+		crema_usage_pill(usage_cache.interfaces[doc.interface])
 	);
 
 	grid.add_custom_button(__("Reset All Use Cases"), () => {
@@ -133,95 +172,6 @@ function load_default_models(frm) {
 				: base_description
 		);
 	});
-}
-
-function render_providers(frm) {
-	const $wrapper = frm.get_field("providers_html").$wrapper.empty();
-	$(`<button class="btn btn-default btn-sm">${__("New from Template")}</button>`)
-		.on("click", () => crema_new_provider_dialog(() => frm.reload_doc()))
-		.appendTo($wrapper);
-	const $table = $(
-		`<div class="crema-providers-table" style="margin-top: 8px;"></div>`
-	).appendTo($wrapper);
-
-	frappe.db
-		.get_list("Crema Provider", {
-			fields: ["name", "base_url", "enabled"],
-			limit_page_length: 0,
-			order_by: "provider_name asc",
-		})
-		.then((rows) => {
-			const rows_html = rows.length
-				? rows
-						.map(
-							(
-								d
-							) => `<tr class="crema-provider-row" data-name="${frappe.utils.escape_html(
-								d.name
-							)}">
-								<td>${frappe.utils.escape_html(d.name)}</td>
-								<td>${frappe.utils.escape_html(d.base_url || "")}</td>
-								<td>${
-									d.enabled
-										? `<span class="indicator-pill green">${__(
-												"Enabled"
-										  )}</span>`
-										: `<span class="indicator-pill gray">${__(
-												"Disabled"
-										  )}</span>`
-								}</td>
-								<td class="crema-provider-conn">${
-									d.enabled
-										? `<span class="text-muted">${__("Checking…")}</span>`
-										: `<span class="indicator-pill gray">${__(
-												"Disabled"
-										  )}</span>`
-								}</td>
-								<td>${usage_pill(usage_cache.providers[d.name])}</td>
-							</tr>`
-						)
-						.join("")
-				: `<tr><td colspan="5" class="text-muted">${__("No AI services yet.")}</td></tr>`;
-			$table.html(`<table class="table table-bordered">
-				<thead><tr><th>${__("Name")}</th><th>${__("Address")}</th><th>${__("Status")}</th><th>${__(
-				"Connection"
-			)}</th><th>${__("Usage")}</th></tr></thead>
-				<tbody>${rows_html}</tbody>
-			</table>`);
-			$table.find(".crema-provider-row").on("click", function () {
-				frappe.set_route("Form", "Crema Provider", $(this).attr("data-name"));
-			});
-
-			// One uncached check_provider call per enabled row, in parallel — an hour-stale
-			// "Connected" pill (list_models' own cache TTL) is worse than one extra request
-			// per page load, hence the separate uncached endpoint (crema.api.check_provider).
-			rows.filter((d) => d.enabled).forEach((d) => {
-				const $cell = $table.find(
-					`.crema-provider-row[data-name="${frappe.utils.escape_html(
-						d.name
-					)}"] .crema-provider-conn`
-				);
-				frappe.call({
-					method: "crema.api.check_provider",
-					args: { provider: d.name },
-					callback(r) {
-						const status = r.message || { ok: false, detail: __("No response") };
-						const color = status.ok ? "green" : "red";
-						$cell.html(
-							`<span class="indicator-pill ${color}">${frappe.utils.escape_html(
-								status.detail
-							)}</span>`
-						);
-					},
-					error() {
-						$cell.html(`<span class="indicator-pill red">${__("Error")}</span>`);
-					},
-				});
-			});
-		})
-		.catch(() => {
-			$table.html(`<div class="text-danger">${__("Could not load the AI services.")}</div>`);
-		});
 }
 
 // ---- Model Assignments grid — provider -> model gating, per row. A blank

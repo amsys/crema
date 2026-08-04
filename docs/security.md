@@ -167,12 +167,29 @@ its `llm_calls` says 2 — both provider calls are billed under it.
 | `prompt_tokens` / `completion_tokens` / `total_tokens` | From the provider's usage response. |
 | `cost_usd` | From litellm's computed cost. 0 if the model isn't in litellm's cost map. |
 
-The log never stores the prompt text, the context text, or document content.
+No field of the log stores the prompt text, the context text, or document content.
 
-On the Crema Log form, `interface`, `user`, `status`, `detail`, `total_tokens`, and
-`cost_usd` are always visible. `model`, `provider`, `prompt_sha`, `duration_ms`,
-`llm_calls`, `prompt_tokens`, and `completion_tokens` are in a **Diagnostics** section.
-Grouping the fields does not change what is stored.
+On the Crema Log form, `interface_label`, `user`, `status`, `detail`, `total_tokens`, and
+`cost_usd` are always visible. `interface`, `model`, `provider`, `prompt_sha`,
+`duration_ms`, `llm_calls`, `prompt_tokens`, and `completion_tokens` are in a
+**Details** section. Grouping the fields does not change what is stored.
+
+### The one exception: developer mode
+
+If the site sets `developer_mode` in `site_config.json`, Crema attaches the full text of
+every provider call — what it sent and what came back — to its log row, as a comment in
+the row's timeline. Provider API keys are removed from that text first, and each side is
+cut at 20000 characters.
+
+This is a debugging aid, and it is off on any site that does not set `developer_mode`.
+Two things to know before you turn it on:
+
+- Anyone who can read a Crema Log row can read its comments. The log is
+  `System Manager` only, so that is the audience.
+- The text is stored in the database. The daily retention job deletes each comment with
+  the log row it belongs to, so the text has the same lifetime as the row.
+
+Do not set `developer_mode` on a production site.
 
 A daily job deletes rows older than `Crema Settings.log_retention_days` (30 by
 default).

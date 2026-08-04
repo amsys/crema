@@ -265,7 +265,8 @@ task run.
 The task runs when a message arrives in a Frappe inbox. This is a Document Event trigger
 with the parts filled in for you: Crema sets `event` to `On Update` and adds one Document
 Query source on **Communication**, filtered to `sent_or_received` `=` `Received`, with
-**Files** on and **Per Run** set to 5.
+**Files** on and **Per Run** set to 5. The source row appears as soon as you select the
+trigger.
 
 Crema does not collect mail. Frappe does that already: an **Email Account** with
 **Enable Incoming** on writes one **Communication** per message, and attaches each file of

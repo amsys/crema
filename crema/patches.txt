@@ -7,3 +7,4 @@ crema.patches.convert_on_source_error_to_check
 # Patches added in this section will be executed after doctypes are migrated
 crema.patches.move_automation_sources_to_child_table
 crema.patches.rename_automation_actions
+crema.patches.backfill_crema_log_interface_label

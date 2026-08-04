@@ -6,8 +6,6 @@
  "engine": "InnoDB",
  "issingle": 1,
  "field_order": [
-  "section_providers",
-  "providers_html",
   "section_defaults",
   "default_provider",
   "default_model",
@@ -20,16 +18,6 @@
   "log_retention_days"
  ],
  "fields": [
-  {
-   "fieldname": "section_providers",
-   "fieldtype": "Section Break",
-   "label": "AI Services"
-  },
-  {
-   "fieldname": "providers_html",
-   "fieldtype": "HTML",
-   "label": "Providers"
-  },
   {
    "fieldname": "section_defaults",
    "fieldtype": "Section Break",

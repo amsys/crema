@@ -221,7 +221,10 @@ frappe.ui.form.on("Crema Automation Source", {
 		const row = locals[cdt][cdn];
 		frappe.model.set_value(row.doctype, row.name, "source_filters", "[]");
 		crema_stamp_row(frm, row);
-		crema_render_row_filters(frm, row);
+		// Which Records depends_on this field, and frappe re-renders a control when its
+		// dependency turns it visible — after this handler. Painting now would be undone,
+		// leaving the raw JSON box on screen, so paint on the next tick instead.
+		setTimeout(() => crema_render_row_filters(frm, row), 0);
 	},
 });
 
@@ -245,6 +248,32 @@ frappe.ui.form.on("Crema Automation Task", {
 	// only after the next save or field change.
 	sources_add: (frm) => frm.layout.refresh_dependency(),
 	sources_remove: (frm) => frm.layout.refresh_dependency(),
+
+	// Mirrors CremaAutomationTask._apply_email_trigger, which appends the same row in
+	// validate(). The server stays the source of truth; doing it here too means the row
+	// the trigger promises shows up when the trigger is picked, instead of the grid
+	// sitting empty — and mandatory — until a save the user cannot make yet. Like the
+	// server, this never removes the row when the trigger changes away.
+	trigger(frm) {
+		if (frm.doc.trigger !== "Incoming Email") return;
+		const seeded = (frm.doc.sources || []).some(
+			(row) => row.source_type === "Document Query" && row.source_doctype === "Communication"
+		);
+		if (seeded) return;
+
+		const row = frm.add_child("sources", {
+			source_type: "Document Query",
+			source_doctype: "Communication",
+			source_filters: JSON.stringify([["sent_or_received", "=", "Received"]]),
+			source_limit: 5,
+			incremental: 1,
+			read_attachments: 1,
+		});
+		crema_stamp_row(frm, row);
+		frm.refresh_field("sources");
+		// add_child does not fire sources_add, and "Stop if a Source Fails" counts rows.
+		frm.layout.refresh_dependency();
+	},
 
 	refresh(frm) {
 		crema_render_status(frm);

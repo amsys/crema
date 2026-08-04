@@ -1,7 +1,16 @@
 {
  "app": "crema",
- "charts": [],
- "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"Crema connects this site to an AI service, with safety checks and a spending limit on every request. Start in Settings to add a service and set your defaults.\",\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Spend\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Blocked\",\"col\":4}},{\"id\":\"crema-config-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Configuration\",\"col\":6}},{\"id\":\"crema-monitor-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Monitoring\",\"col\":6}}]",
+ "charts": [
+  {
+   "chart_name": "Crema Spend",
+   "label": "Crema Spend"
+  },
+  {
+   "chart_name": "Crema Calls by Status",
+   "label": "Crema Calls by Status"
+  }
+ ],
+ "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"Crema connects this site to an AI service, with safety checks and a spending limit on every request. Start in Settings to add a service and set your defaults.\",\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Spend\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Blocked\",\"col\":4}},{\"id\":\"crema-spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-chart-spend\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Crema Spend\",\"col\":6}},{\"id\":\"crema-chart-status\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Crema Calls by Status\",\"col\":6}},{\"id\":\"crema-spacer-2\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-setup-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Setup\",\"col\":4}},{\"id\":\"crema-automation-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Automation\",\"col\":4}},{\"id\":\"crema-activity-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Activity\",\"col\":4}}]",
  "creation": "2026-07-28 00:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -17,10 +26,20 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Setup",
-   "link_count": 3,
+   "link_count": 2,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Providers",
+   "link_count": 0,
+   "link_to": "Crema Provider",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
   },
   {
    "hidden": 0,
@@ -35,12 +54,11 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Providers",
-   "link_count": 0,
-   "link_to": "Crema Provider",
+   "label": "Automation",
+   "link_count": 1,
    "link_type": "DocType",
    "onboard": 0,
-   "type": "Link"
+   "type": "Card Break"
   },
   {
    "hidden": 0,
@@ -82,7 +100,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-08-03 00:00:00.000000",
+ "modified": "2026-08-05 09:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema",

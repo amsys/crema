@@ -431,14 +431,75 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         after = {r.interface for r in frappe.get_single("Crema Settings").assignments}
         self.assertEqual(after, set(interfaces.names()))
 
-    def test_sync_dashboard_creates_the_three_number_cards_and_is_idempotent(self):
-        from crema.install import _DASHBOARD_CARDS, sync_dashboard
+    def test_sync_dashboard_creates_the_cards_and_charts_and_is_idempotent(self):
+        from crema.install import _DASHBOARD_CARDS, _DASHBOARD_CHARTS, sync_dashboard
 
         sync_dashboard()
-        sync_dashboard()  # must not raise on already-existing cards
+        sync_dashboard()  # must not raise on already-existing cards or charts
 
         for card in _DASHBOARD_CARDS:
             self.assertTrue(frappe.db.exists("Number Card", card["name"]))
+        for chart in _DASHBOARD_CHARTS:
+            self.assertTrue(frappe.db.exists("Dashboard Chart", chart["name"]))
+
+    def test_workspace_blocks_point_at_cards_and_charts_that_exist(self):
+        """The workspace body matches card/chart blocks to its own links and charts by
+        *label* (frappe's blocks/block.js make()), and silently renders nothing on a
+        miss — which is how the Setup and Activity cards went invisible once their
+        Card Breaks were relabelled. Nothing here may drift again without failing."""
+        import json
+
+        workspace = frappe.get_doc("Workspace", "Crema")
+        card_labels = {link.label for link in workspace.links if link.type == "Card Break"}
+        chart_labels = {row.label for row in workspace.charts}
+        quick_list_labels = {row.label for row in workspace.quick_lists}
+        number_card_labels = {row.label for row in workspace.number_cards}
+
+        for block in json.loads(workspace.content):
+            data, kind = block.get("data", {}), block.get("type")
+            if kind == "card":
+                self.assertIn(data["card_name"], card_labels)
+            elif kind == "chart":
+                self.assertIn(data["chart_name"], chart_labels)
+            elif kind == "quick_list":
+                self.assertIn(data["quick_list_name"], quick_list_labels)
+            elif kind == "number_card":
+                self.assertIn(data["number_card_name"], number_card_labels)
+
+    def test_workspace_blocks_fill_every_row(self):
+        """Blocks flow into one continuous flex row of 12 columns, so three rules hold.
+
+        A row must add up to 12 — a short row leaves a hole, and every later block slides
+        up into it. It must also be *homogeneous*, because a block's width is a set of
+        responsive classes, not a fraction: frappe's blocks/block.js gives 12..7 a plain
+        col-xs-N (fixed at every width) but 6 a col-sm-6 and 4 a col-md-4, so a row of
+        8 + 4 sums to 12 on a wide window and to 116% under 768px. And a row of narrower
+        blocks must be closed by a spacer, so that when it does wrap on a narrow window
+        the leftover space cannot pull the next section's first block into it."""
+        import json
+
+        workspace = frappe.get_doc("Workspace", "Crema")
+        rows, row, width = [], [], 0
+        for block in json.loads(workspace.content):
+            row.append(block)
+            width += block.get("data", {}).get("col", 12)
+            self.assertLessEqual(width, 12, f"{block.get('id')} overflows its row")
+            if width == 12:
+                rows.append(row)
+                row, width = [], 0
+        self.assertEqual(width, 0, "the last row is not full")
+
+        for index, row in enumerate(rows):
+            cols = {b.get("data", {}).get("col", 12) for b in row}
+            first = row[0].get("id")
+            self.assertEqual(len(cols), 1, f"the row at {first} mixes block widths")
+            if cols == {12} or index == len(rows) - 1:
+                continue
+            self.assertEqual(
+                [b.get("type") for b in rows[index + 1]],
+                ["spacer"],
+                f"the row at {first} is not followed by a spacer",
+            )
 
     # --- the one-time example task ---------------------------------------
 
@@ -854,21 +915,128 @@ class IntegrationTestCremaLogInsert(IntegrationTestCase):
 
 
 class IntegrationTestCremaLogMeta(IntegrationTestCase):
-    def test_list_shows_the_interface_as_title_with_cost_beside_it(self):
+    def test_list_shows_the_labelled_use_case_as_title_with_tokens_and_cost_beside_it(self):
+        """The subject column is the label ("Default"), never the raw key ("simple") —
+        the key stays stored, since month_spend/check_budget and Crema Usage group on it.
+
+        status is deliberately absent: crema_log_list.js renders it as the indicator pill,
+        and a column would print the same word again one cell to the right."""
         meta = frappe.get_meta("Crema Log")
-        self.assertEqual(meta.title_field, "interface")
+        self.assertEqual(meta.title_field, "interface_label")
         self.assertEqual(
             {df.fieldname for df in meta.fields if df.in_list_view},
-            {"user", "status", "cost_usd"},
+            {"user", "total_tokens", "cost_usd"},
         )
+        self.assertTrue(meta.get_field("status").in_standard_filter)
         self.assertTrue(meta.get_field("section_diag").collapsible)
+
+    def test_insert_stamps_the_label_beside_the_raw_interface_key(self):
+        log.insert("simple", "test-model", "Success", None, prompt_sha="label-stamp-probe")
+        row = frappe.get_doc("Crema Log", {"prompt_sha": "label-stamp-probe"})
+        self.assertEqual(row.interface, "simple")
+        self.assertEqual(row.interface_label, interfaces.LABELS["simple"])
 
     def test_no_field_can_hold_prompt_or_document_text(self):
         """The layout change moved fields around. It must not have added one that could
-        hold prompt, context, or document text — see log.insert and docs/security.md."""
+        hold prompt, context, or document text — see log.insert and docs/security.md.
+
+        The developer_mode transcript deliberately does not weaken this: it is a Comment
+        on the row, not a field of it."""
         free_text = {"Small Text", "Text", "Long Text", "Text Editor", "Code", "HTML"}
         meta = frappe.get_meta("Crema Log")
         self.assertEqual(
             {df.fieldname for df in meta.fields if df.fieldtype in free_text},
             {"detail"},
         )
+
+
+class IntegrationTestListColumnsSayEachThingOnce(IntegrationTestCase):
+    """A field the list's get_indicator already renders, or that is the autoname source,
+    must not also be a column — that is the same value twice on one row. See the list-view
+    convention in CLAUDE.md, and the *_list.js files these mirror."""
+
+    def test_automation_task_list_columns(self):
+        meta = frappe.get_meta("Crema Automation Task")
+        # title_field, so the subject column header reads "Task Name" and not "ID";
+        # crema_automation_task_list.js sets hide_name_column to stop frappe appending
+        # its own ID column beside it.
+        self.assertEqual(meta.title_field, "task_name")
+        self.assertEqual(
+            {df.fieldname for df in meta.fields if df.in_list_view},
+            {"last_run", "trigger", "interface"},
+        )
+
+    def test_provider_list_columns(self):
+        meta = frappe.get_meta("Crema Provider")
+        self.assertEqual(meta.title_field, "provider_name")
+        self.assertEqual(
+            {df.fieldname for df in meta.fields if df.in_list_view},
+            {"base_url", "enabled", "monthly_budget_usd"},
+        )
+
+
+class IntegrationTestCremaLogTranscript(IntegrationTestCase):
+    """crema.client._record_transcript + crema.log._attach_transcript — the developer-mode
+    only path that puts the LLM round trip in the Crema Log row's timeline."""
+
+    def setUp(self):
+        super().setUp()
+        frappe.local.crema_transcript = None
+        self.addCleanup(lambda: setattr(frappe.local, "crema_transcript", None))
+
+    @staticmethod
+    def _comments(prompt_sha: str) -> list[str]:
+        row = frappe.get_doc("Crema Log", {"prompt_sha": prompt_sha})
+        return frappe.get_all(
+            "Comment",
+            filters={"reference_doctype": "Crema Log", "reference_name": row.name},
+            pluck="content",
+        )
+
+    def test_nothing_is_recorded_when_the_site_is_not_in_developer_mode(self):
+        with patch.dict(frappe.conf, {"developer_mode": 0}):
+            client._record_transcript([{"role": "user", "content": "hello"}], "hi")
+        log.insert("simple", "test-model", "Success", None, prompt_sha="transcript-off")
+
+        self.assertEqual(self._comments("transcript-off"), [])
+
+    def test_developer_mode_attaches_every_round_trip_with_api_keys_redacted(self):
+        # Reset to {}, never None: client._api_key treats the attribute as present once
+        # it exists and does `provider not in frappe.local.crema_keys`, which a None
+        # would turn into a TypeError for every later test in the run.
+        frappe.local.crema_keys = {"_Test Crema Provider": "sk-secret-key"}
+        self.addCleanup(lambda: setattr(frappe.local, "crema_keys", {}))
+
+        with patch.dict(frappe.conf, {"developer_mode": 1}):
+            client._record_transcript([{"role": "user", "content": "first sk-secret-key"}], "one")
+            client._record_transcript([{"role": "user", "content": "second"}], "two")
+        log.insert("simple", "test-model", "Success", None, prompt_sha="transcript-on")
+
+        comments = self._comments("transcript-on")
+        self.assertEqual(len(comments), 1)
+        self.assertIn("one", comments[0])
+        self.assertIn("two", comments[0])
+        self.assertIn("Call 2", comments[0])
+        self.assertNotIn("sk-secret-key", comments[0])
+
+    def test_the_accumulator_is_drained_so_it_never_trails_onto_the_next_row(self):
+        with patch.dict(frappe.conf, {"developer_mode": 1}):
+            client._record_transcript([{"role": "user", "content": "only once"}], "once")
+        log.insert("simple", "test-model", "Success", None, prompt_sha="transcript-first")
+        log.insert("simple", "test-model", "Success", None, prompt_sha="transcript-second")
+
+        self.assertEqual(len(self._comments("transcript-first")), 1)
+        self.assertEqual(self._comments("transcript-second"), [])
+
+
+class IntegrationTestCremaSeededIsolationUser(IntegrationTestCase):
+    def test_the_seeded_isolation_user_always_has_a_name(self):
+        """A Link to User renders the document name — the email — because core User does
+        not set show_title_field_in_link, and there is no per-field override. So "Runs As"
+        showing an email is stock Frappe, not a missing name. This pins the name anyway,
+        so a fresh install can never produce the nameless user that would look identical."""
+        from crema.install import _ensure_isolation_user
+
+        user = frappe.get_doc("User", _ensure_isolation_user())
+        self.assertTrue(user.first_name)
+        self.assertTrue(user.full_name)

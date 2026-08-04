@@ -879,6 +879,24 @@ function crema_open_transform_dialog(frm) {
 // crema_settings.js / crema_provider_list.js, which are evaluated as separate
 // scripts and can only reach it through the global object. ------------------------
 
+// Month-to-date spend as a pill: grey when the interface or provider has no budget (0
+// means unlimited), otherwise a percentage that goes orange at 80 and red at 100. Shared
+// by the Model Assignments grid on Crema Settings and the Crema Provider list.
+function crema_usage_pill(usage) {
+	if (!usage) return "";
+	const spend = `$${crema_fmt_usd(usage.spend)}`;
+	if (!usage.budget) return `<span class="indicator-pill gray">${spend}</span>`;
+	const pct = Math.round((usage.spend / usage.budget) * 100);
+	const color = pct >= 100 ? "red" : pct >= 80 ? "orange" : "green";
+	return `<span class="indicator-pill ${color}" title="${spend} of $${crema_fmt_usd(
+		usage.budget
+	)}">${pct}%</span>`;
+}
+
+function crema_fmt_usd(value) {
+	return (value || 0).toFixed(2);
+}
+
 function crema_fetch_models(provider, callback) {
 	if (!provider) {
 		callback([]);
@@ -973,6 +991,7 @@ function crema_new_provider_dialog(on_created) {
 
 window.crema_fetch_models = crema_fetch_models;
 window.crema_new_provider_dialog = crema_new_provider_dialog;
+window.crema_usage_pill = crema_usage_pill;
 // crema_automation_task.js is likewise a separate script, evaluated outside this IIFE.
 window.crema_show_error = crema_show_error;
 // The automation form's Dry Run preview renders extracted rows and a plan's field map

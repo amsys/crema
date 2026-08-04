@@ -15,8 +15,3 @@ fields, and the interface set can still change.
 
 See also the top-level [README.md](../README.md) for a quick start, and
 [ROADMAP.md](../ROADMAP.md) for planned work and accepted risks.
-
-These pages use ASD-STE100 Simplified Technical English. Sentences are short and
-direct. Each term keeps one meaning throughout: *provider*, *interface*, *isolation
-user*, *the scan*, *the guard*, *the trap*, *the sandbox*, *the log*, *the task*,
-*the plan*, *the watermark*.

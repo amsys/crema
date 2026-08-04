@@ -8,10 +8,16 @@ instead, and neither imports the other.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import frappe
+from crema import interfaces
 from crema.exceptions import CremaBudgetError
+
+# Per side of one round trip. An OCR payload or a long extraction can be far larger than
+# anything worth reading in a timeline comment.
+_TRANSCRIPT_CHARS = 20000
 
 
 def redact(text: str) -> str:
@@ -55,6 +61,38 @@ def _drain_trap() -> str | None:
     return reason
 
 
+def _drain_transcript() -> list[dict]:
+    """Pop and reset client._record_transcript's developer_mode-only accumulator. Same
+    drain-on-every-call contract as _drain_usage/_drain_trap, so a round trip recorded
+    for one logged row can never trail onto the next one."""
+    calls = getattr(frappe.local, "crema_transcript", None)
+    frappe.local.crema_transcript = None
+    return calls or []
+
+
+def _attach_transcript(doc: Any, calls: list[dict]) -> None:
+    """Write the provider round trips of one logged call into the Crema Log row's
+    timeline, as an ordinary comment.
+
+    A comment, not a field: Crema Log's contract is that no field of it can hold prompt
+    or document text (pinned by test_doctypes.test_no_field_can_hold_prompt_or_document_text),
+    and that stays true. Anyone who can read the row can read the comment, which is
+    acceptable only because client._record_transcript records nothing at all unless the
+    site is in developer mode.
+    """
+    from html import escape
+
+    blocks = []
+    for index, call in enumerate(calls, start=1):
+        sent = json.dumps(call.get("messages"), indent=2, default=str)
+        blocks.append(
+            f"<b>Call {index} — sent</b><pre>{escape(redact(sent)[:_TRANSCRIPT_CHARS])}</pre>"
+            f"<b>Call {index} — received</b>"
+            f"<pre>{escape(redact(str(call.get('response') or ''))[:_TRANSCRIPT_CHARS])}</pre>"
+        )
+    doc.add_comment("Info", "".join(blocks))
+
+
 def insert(
     interface: str | None,
     model: str | None,
@@ -70,16 +108,22 @@ def insert(
     accumulator, drained here — callers never pass usage explicitly. A "Log Only"
     output-trap miss is folded into `detail` the same way, but only on a Success row —
     a Blocked/Error row already carries its own more specific detail string.
+
+    The one exception to "never stores prompt content" is a developer_mode site, where
+    the round trips client._record_transcript captured are attached to the row as a
+    comment — see _attach_transcript. Off, and empty, on any other site.
     """
     usage = _drain_usage()
     trap_reason = _drain_trap()
+    transcript = _drain_transcript()
     if trap_reason and status == "Success":
         detail = trap_reason if not detail else f"{detail}; {trap_reason}"
     try:
-        frappe.get_doc(
+        doc = frappe.get_doc(
             {
                 "doctype": "Crema Log",
                 "interface": interface,
+                "interface_label": interfaces.LABELS.get(interface, interface) if interface else None,
                 "model": model,
                 "provider": provider,
                 "user": frappe.session.user,
@@ -93,7 +137,10 @@ def insert(
                 "cost_usd": usage["cost_usd"],
                 "llm_calls": usage["llm_calls"],
             }
-        ).insert(ignore_permissions=True)
+        )
+        doc.insert(ignore_permissions=True)
+        if transcript:
+            _attach_transcript(doc, transcript)
     except Exception:
         frappe.log_error(title="Crema Log insert failed")
 

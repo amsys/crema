@@ -127,6 +127,13 @@ _DASHBOARD_CARDS = [
         "function": "Sum",
         "aggregate_function_based_on": "cost_usd",
         "filters_json": "[]",
+        # Frappe shortens a card's number before formatting it, and its shortener returns
+        # an empty string for zero — which the currency branch then parses as NaN, so a
+        # month with no spend reads "Rs NaN". Frappe stamps a currency on every card from
+        # the site default, so this is not avoidable from the other end. Showing the full
+        # number skips the shortener, and also drops the odd "Rs 1.500000 K" it produces
+        # on a large one.
+        "show_full_number": 1,
     },
     {
         "name": "Blocked",
@@ -134,6 +141,11 @@ _DASHBOARD_CARDS = [
         "filters_json": '[["Crema Log","status","=","Blocked"]]',
     },
 ]
+
+# The trend line under a card's number only renders where frappe has a comparison to make,
+# so on the same row one card gains a line the other two do not and the three stop lining
+# up — and which card that is moves with the data.
+_DASHBOARD_CARD_DISPLAY = {"show_full_number": 0, "show_percentage_stats": 0}
 
 # A Number Card's name *is* its label (Number Card.autoname), and the workspace points at
 # these by name, so dropping the "Crema " prefix is a rename of a live record — not a
@@ -145,21 +157,53 @@ _RENAMED_DASHBOARD_CARDS = {
     "Crema Blocked": "Blocked",
 }
 
+# Unlike the Number Cards above, a Dashboard Chart *can* carry a rolling window
+# (timespan/time_interval), so these are the last 30 days rather than all-time totals —
+# an all-time line chart flattens out and stops saying anything after a few months.
+_DASHBOARD_CHARTS = [
+    {
+        "name": "Crema Spend",
+        "chart_type": "Sum",
+        "based_on": "creation",
+        "value_based_on": "cost_usd",
+        "timeseries": 1,
+        "timespan": "Last Month",
+        "time_interval": "Daily",
+        "type": "Line",
+    },
+    {
+        "name": "Crema Calls by Status",
+        "chart_type": "Group By",
+        "group_by_based_on": "status",
+        "group_by_type": "Count",
+        "timeseries": 0,
+        "type": "Donut",
+    },
+]
+
 
 def sync_dashboard() -> None:
-    """Idempotently create the three Number Cards the Crema workspace links to
-    (crema/crema/workspace/crema/crema.json's number_cards). All-time totals — Number
-    Card filters_json takes literal filter values, not a relative-date placeholder, so
-    a rolling window belongs to the Crema Usage report's date filters, not here. A
-    Number Card is a real DocType record — there is nothing to seed from a fixtures
-    export here, so this mirrors sync_interfaces' pattern instead."""
+    """Idempotently create the three Number Cards and two Dashboard Charts the Crema
+    workspace links to (crema/crema/workspace/crema/crema.json's number_cards/charts).
+
+    The cards are all-time totals — Number Card filters_json takes literal filter values,
+    not a relative-date placeholder, so a rolling window belongs to the Crema Usage
+    report's date filters, not there. The charts carry their own timespan and do roll.
+
+    Both are real DocType records — there is nothing to seed from a fixtures export here,
+    so this mirrors sync_interfaces' pattern instead."""
     for old, new in _RENAMED_DASHBOARD_CARDS.items():
         if frappe.db.exists("Number Card", old) and not frappe.db.exists("Number Card", new):
             frappe.rename_doc("Number Card", old, new, force=True)
             frappe.db.set_value("Number Card", new, "label", new)
 
     for card in _DASHBOARD_CARDS:
+        display = {k: card.get(k, default) for k, default in _DASHBOARD_CARD_DISPLAY.items()}
         if frappe.db.exists("Number Card", card["name"]):
+            # Restamped rather than skipped: these two say how the number is drawn, not
+            # what it counts, so an existing card loses nothing — and a site that
+            # installed an earlier version keeps rendering "Rs NaN" without this.
+            frappe.db.set_value("Number Card", card["name"], display)
             continue
         doc = frappe.new_doc("Number Card")
         doc.update(
@@ -172,9 +216,27 @@ def sync_dashboard() -> None:
                 "filters_json": card["filters_json"],
                 "is_public": 1,
                 "module": "Crema",
+                **display,
             }
         )
         doc.name = card["name"]
+        doc.insert(ignore_permissions=True)
+
+    for chart in _DASHBOARD_CHARTS:
+        if frappe.db.exists("Dashboard Chart", chart["name"]):
+            continue
+        doc = frappe.new_doc("Dashboard Chart")
+        doc.update(
+            {
+                "chart_name": chart["name"],
+                "document_type": "Crema Log",
+                "filters_json": "[]",  # mandatory on Dashboard Chart, even when empty
+                "is_public": 1,
+                "module": "Crema",
+                **{k: v for k, v in chart.items() if k != "name"},
+            }
+        )
+        doc.name = chart["name"]
         doc.insert(ignore_permissions=True)
 
 

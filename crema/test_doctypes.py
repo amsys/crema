@@ -54,6 +54,18 @@ class UnitTestIsLocalOrPrivate(UnitTestCase):
         self.assertFalse(_is_local_or_private(""))
 
 
+class UnitTestRefreshViewPromptPatch(UnitTestCase):
+    """Pure string comparison, no frappe I/O. Guards patches.refresh_view_prompt's own
+    doc comment: OLD_PROMPTS must be appended to on every future edit to
+    DEFAULT_PROMPTS["view"], or the patch silently stops matching stale stored prompts
+    on sites installed after that edit."""
+
+    def test_current_default_is_not_among_the_superseded_prompts(self):
+        from crema.patches import refresh_view_prompt
+
+        self.assertNotIn(interfaces.DEFAULT_PROMPTS["view"], refresh_view_prompt.OLD_PROMPTS)
+
+
 class IntegrationTestCremaProvider(CremaFixtureTestCase):
     def test_enabled_public_provider_without_api_key_is_rejected(self):
         doc = frappe.new_doc("Crema Provider")

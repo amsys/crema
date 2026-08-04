@@ -16,10 +16,10 @@ INTERNAL = frozenset({"security", "advanced_ocr"})
 
 # Selectable everywhere else, but never by an automation task, which drives its profile
 # through api.ask/ask_json and owns its own plan. "view" and "transform" each emit an
-# output shape only their caller applies — a desk list-view spec, and a single-document
-# diff. "ocr" forces {"text", "confidence"}, which the PLAN stage cannot parse a plan out
-# of. "transcribe" is not a chat interface at all: no default prompt, and its provider
-# takes audio, not chat completions.
+# output shape only their caller applies — a desk list-view spec or a proposed record
+# change, and a single-document diff. "ocr" forces {"text", "confidence"}, which the
+# PLAN stage cannot parse a plan out of. "transcribe" is not a chat interface at all: no
+# default prompt, and its provider takes audio, not chat completions.
 # Not INTERNAL: the desk UI drives "view", transform_api drives "transform", and ocr()
 # and transcribe() are public functions.
 NOT_FOR_TASKS = frozenset({"view", "transform", "ocr", "transcribe"})
@@ -65,7 +65,7 @@ LABELS = {
     "classification": "Classification",
     "summarization": "Summarization",
     "transform": "Transform",
-    "view": "View",
+    "view": "List Assistant",
     "transcribe": "Transcribe",
 }
 
@@ -89,12 +89,16 @@ DEFAULT_PROMPTS = {
     "summarization": "Summarize the given content concisely and accurately, preserving key facts.",
     "transform": "You propose changes to an ERP document. NEVER invent fields. Output ONLY "
     '`{"set": {fieldname: new_value}, "child_set": {table_fieldname: [row dicts]}, "reason": "..."}`.',
-    "view": "You turn a request about a list of ERP records into a view specification. NEVER "
-    "invent fieldnames — only use ones given in the schema. Output ONLY JSON "
-    '`{"view": "List"|"Report"|"Kanban", "filters": {fieldname: [operator, value]}, '
-    '"group_by": [fieldname, aggregate_fieldname, "count"|"sum"|"avg"] or null, '
-    '"order_by": "fieldname asc"|"fieldname desc" or null, "page_length": integer or null, '
-    '"columns": [fieldname, ...], "reason": "..."}`.',
+    # Deliberately just a role statement, not the output contract — that contract
+    # (the "action" discriminator: view/create/edit/delete/none) lives in the user turn
+    # crema.bundle.js's crema_view_prompt builds, not here. CremaModelAssignment.validate
+    # only seeds a row's system_prompt when it is empty, so an already-configured site
+    # never sees an edit to this string — see patches/refresh_view_prompt.py, which
+    # clears the contradiction in an already-stored prompt exactly once. A prompt that
+    # never carries the contract never goes stale, and never needs a patch again.
+    "view": "You turn a request about a list of ERP records into a JSON specification "
+    "the desk applies. NEVER invent fieldnames — only use ones given in the schema. "
+    "Follow the output contract in the user message exactly, and output ONLY that JSON.",
 }
 
 

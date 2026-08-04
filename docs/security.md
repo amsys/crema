@@ -203,6 +203,36 @@ Do not set `developer_mode` on a production site.
 A daily job deletes rows older than `Crema Settings.log_retention_days` (30 by
 default).
 
+## The desk assistant's write actions
+
+The list-view assistant (see [use.md](use.md#list-view)) can propose creating,
+editing, or deleting records, not only changing the view. Frappe's own permission
+engine is the fence, exactly as it is everywhere else in Crema — the desk UI adds no
+permission logic of its own. Three things sit in front of that fence, and none of
+them is itself the fence:
+
+- **The create/edit/delete shapes only appear in the prompt at all** when the session
+  user already has that permission on the doctype (`frappe.model.can_create`,
+  `frappe.perm.has_perm(doctype, 0, "write" | "delete")`). This stops an unusable
+  proposal, and the cost of asking the model for one, before either happens — not an
+  unauthorized write, which the save or delete call refuses regardless.
+- **A model-authored field list is filtered to writable fields client-side**, the same
+  discipline `api._filter_diff` already applies server-side for `transform` and
+  `extract` — the `view` interface's raw answer never passes through that server-side
+  filter, since its caller (the desk, not another Crema function) is what applies it.
+- **Creating or editing one record never writes by itself.** It opens an unsaved form
+  with the change already filled in — the diff is shown first, and you save it
+  yourself. **Editing or deleting more than one record asks first**: a dialog lists
+  every record the request would touch, by name, before the write happens. A request
+  naming no records to change or delete is refused outright, never read as "every
+  record" — this is the one rule with no Frappe equivalent to fall back on, since a
+  filter set is Crema's own construction, not a permission question.
+
+The write itself goes through Frappe's own bulk endpoints
+(`frappe.desk.doctype.bulk_update.bulk_update.submit_cancel_or_update_docs`,
+`frappe.desk.reportview.delete_items`) — the same code path the desk's own Actions
+menu uses, with the same permission check on every record.
+
 ## Budgets
 
 Each interface has a `monthly_budget_usd` field (in Crema Settings' Use Cases

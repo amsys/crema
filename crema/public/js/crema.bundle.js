@@ -1,17 +1,24 @@
 // Crema desk UI — a robot button on doctype list views, a robot button on doctype form
 // views, and an "Ask …" option in the awesomebar. The list-view button opens a dialog
 // that does two things: read an uploaded document (proposing one or more new records),
-// or turn a typed request into a filtered List/Report/Kanban view. The form-view button
-// opens a dialog that proposes a diff for the document already open, for the user to
-// apply and save themselves.
+// or turn a typed request into one of five actions — change the List/Report/Kanban
+// view, create one or more new records, edit records matched by a filter, delete
+// records matched by a filter, or an honest refusal when none of those fit. Which the
+// model picked is the "action" key in its JSON answer; see crema_view_prompt for the
+// contract. The form-view button opens a dialog that proposes a diff for the document
+// already open, for the user to apply and save themselves.
 //
 // Deliberately almost all client-side. Reading the schema (frappe.get_meta), applying
 // filters (frappe.route_options), inserting a record (frappe.model.get_new_doc, saved by
-// the user), and applying a diff (frm.set_value/add_child, saved by the user) all go
-// through ordinary desk paths, fenced as the session user — the server is only ever
-// asked to run the LLM (crema.api.ask_api / extract_api / transform_api). See the
-// "implement-in-desk-interface" plan for why: a server-side endpoint doing this would
-// run under the interface's isolation user, not the desk user who clicked.
+// the user), applying a diff (frm.set_value/add_child, saved by the user), and a bulk
+// edit/delete (frappe's own bulk_update/delete_items endpoints, after a confirm dialog
+// listing every affected record) all go through ordinary desk paths, fenced as the
+// session user — the server is only ever asked to run the LLM (crema.api.ask_api /
+// extract_api / transform_api). See the "implement-in-desk-interface" plan for why: a
+// server-side endpoint doing this would run under the interface's isolation user, not
+// the desk user who clicked. The create/edit/delete affordance checks below
+// (frappe.model.can_create, frappe.perm.has_perm) are UI honesty, not the fence — the
+// server enforces on save/delete regardless of what this file lets through.
 
 function crema_allowed() {
 	return (
@@ -35,6 +42,80 @@ function crema_readable_fields(doctype) {
 		.fields.filter(
 			(df) => df.fieldname && frappe.perm.get_field_display_status(df, null, perm) !== "None"
 		);
+}
+
+// Fields this session user may WRITE — the create/edit fence, one notch tighter than
+// crema_readable_fields above. Two corrections a naive version of this gets wrong:
+//   * get_field_display_status(df, null, perm) returns BEFORE its own read_only
+//     demotion when doc is null (frappe/public/js/frappe/model/perm.js: the "Write" ->
+//     "Read" downgrade for a read-only field only runs if a doc was passed in), so it
+//     reports "Write" for every read-only field — amended_from included. Checked here
+//     instead, alongside frappe.model.is_value_type/hidden/is_virtual, the same
+//     editability test list_view.js's own Bulk Edit menu uses.
+//   * perm is a PARAMETER, not refetched per call: a child doctype carries no DocPerm
+//     rows of its own, so frappe.perm.get_perm(child_doctype) returns read:0 for
+//     everything and would silently drop every child row. A child docfield's permlevel
+//     indexes into the PARENT's perm array — the same array grid.js passes in when it
+//     builds a grid column's display status.
+function crema_writable_fields(doctype, perm) {
+	const meta = frappe.get_meta(doctype);
+	// A child doctype's meta only arrives bundled with its parent's
+	// (frappe.desk.form.load.get_meta_bundle, one level deep) and frappe.model.with_doctype
+	// short-circuits on a doctype already in locals — so it can genuinely be missing here.
+	// Fail closed: no meta means no field is provably writable.
+	if (!meta) return [];
+	return meta.fields.filter(
+		(df) =>
+			df.fieldname &&
+			frappe.model.is_value_type(df) &&
+			!df.hidden &&
+			!df.is_virtual &&
+			!df.read_only &&
+			df.fieldtype !== "Read Only" &&
+			frappe.perm.get_field_display_status(df, null, perm) === "Write"
+	);
+}
+
+// The Table half of the write fence: crema_writable_fields only sees value-type fields
+// (frappe.model.is_value_type excludes "Table"), so a Table docfield is never in its set —
+// this is the question that set structurally can't answer. Returns the parent's own
+// docfield when this user may write rows into it, else null.
+function crema_writable_table(doctype, fieldname, perm) {
+	const df = frappe.meta.get_docfield(doctype, fieldname);
+	if (!df || df.fieldtype !== "Table" || df.hidden || df.read_only) return null;
+	return frappe.perm.get_field_display_status(df, null, perm) === "Write" ? df : null;
+}
+
+// api._filter_diff (crema/api.py) client-side, fenced on writable rather than merely
+// existing fields. Needed because the create/edit actions' answers come back from the
+// "view" interface's raw ask_api call, which — unlike extract_api/transform_api — never
+// runs through that server-side filter. Drops "name": it is a standard docfield, never
+// listed in meta.fields, so it is never "writable" here — which is what stops a
+// model-authored set.name from reaching a bulk update's doc.update(data) and silently
+// retargeting the save onto a different, unrelated record (the same footgun
+// automation._upsert guards against). Must run after frappe.model.with_doctype has
+// loaded the parent and every child doctype's meta.
+function crema_filter_diff(doctype, raw) {
+	const perm = frappe.perm.get_perm(doctype);
+	const writable = new Set(crema_writable_fields(doctype, perm).map((df) => df.fieldname));
+	const set = Object.fromEntries(Object.entries(raw.set || {}).filter(([k]) => writable.has(k)));
+
+	const child_set = {};
+	for (const [table, rows] of Object.entries(raw.child_set || {})) {
+		const df = crema_writable_table(doctype, table, perm);
+		if (!df || !Array.isArray(rows)) continue;
+		const child_writable = new Set(
+			crema_writable_fields(df.options, perm).map((c) => c.fieldname)
+		);
+		const filtered = rows
+			.filter((r) => r && typeof r === "object")
+			.map((r) =>
+				Object.fromEntries(Object.entries(r).filter(([k]) => child_writable.has(k)))
+			)
+			.filter((r) => Object.keys(r).length); // an all-invented row is no row at all
+		if (filtered.length) child_set[table] = filtered;
+	}
+	return { set, child_set };
 }
 
 function crema_schema_prompt(doctype) {
@@ -66,20 +147,110 @@ function crema_visible_list_fields(doctype) {
 	return new Set(fields);
 }
 
-// The view interface's system prompt (interfaces.DEFAULT_PROMPTS["view"]) states the
-// output shape; this is the per-request user turn, telling the model which fields it
-// may use, which of those are actually visible on screen, and the operator vocabulary
-// list filters actually support (frappe/public/js/frappe/ui/filters/filter.js) — without
-// this the model has no basis for picking a field for an unqualified request like
-// "items starting with foo", and no way to know "like" is its only substring/prefix tool.
+// interfaces.DEFAULT_PROMPTS["view"] is now just a role statement — the output contract
+// itself lives here, in the per-request user turn (see patches/refresh_view_prompt.py
+// for why: a system prompt only seeds once, at install time, and never sees a later
+// edit). This also tells the model which fields it may use, which are visible on
+// screen, which it may WRITE (create/edit/delete each only appear in the contract when
+// the session user actually has that permission on doctype), and the operator
+// vocabulary list filters actually support (frappe/public/js/frappe/ui/filters/filter.js)
+// — without this the model has no basis for picking a field for an unqualified request
+// like "items starting with foo", and no way to know "like" is its only substring tool.
 function crema_view_prompt(doctype) {
 	const visible = crema_visible_list_fields(doctype);
+	const can_create = frappe.model.can_create(doctype);
+	const can_write = frappe.perm.has_perm(doctype, 0, "write");
+	const can_delete = frappe.perm.has_perm(doctype, 0, "delete");
+	// Writability only matters for create/edit; skip computing it for a read-only user —
+	// same reasoning crema_readable_fields' comment gives for staying permlevel-aware.
+	// Hoisted so the Table-field branch below can ask the same question with the same perm
+	// array, rather than each recomputing frappe.perm.get_perm(doctype).
+	const perm = can_create || can_write ? frappe.perm.get_perm(doctype) : null;
+	const writable = perm
+		? new Set(crema_writable_fields(doctype, perm).map((df) => df.fieldname))
+		: null;
+
 	const lines = crema_readable_fields(doctype).map((df) => {
 		const shown = visible.has(df.fieldname) ? " [shown in list]" : "";
-		return `- ${df.fieldname} (${df.fieldtype}) ${df.label || ""}${shown}`.trim();
+		// A Link/Select value the model has to guess with no target doctype or option
+		// list will never match — give it what it needs to pick a real one.
+		const opts =
+			df.fieldtype === "Link"
+				? ` -> ${df.options}`
+				: df.fieldtype === "Select"
+				? ` [${(df.options || "").split("\n").filter(Boolean).join("|")}]`
+				: "";
+		let write = "";
+		if (df.fieldtype === "Table") {
+			// crema_writable_fields excludes Table (frappe.model.is_value_type), so it is
+			// never in `writable` above and would otherwise read [read-only] — contradicting
+			// the child_set shape the action contract advertises for this same field.
+			const table_df = perm ? crema_writable_table(doctype, df.fieldname, perm) : null;
+			if (table_df) {
+				const child_perm = frappe.perm.get_perm(table_df.options);
+				const child_fields = crema_writable_fields(table_df.options, child_perm);
+				const preferred = child_fields.filter((c) => c.in_list_view);
+				const names = (preferred.length ? preferred : child_fields)
+					.slice(0, CREMA_MAX_CHILD_FIELDS)
+					.map((c) => c.fieldname);
+				write = names.length ? ` [rows: ${names.join(", ")}]` : " [read-only]";
+			} else {
+				write = " [read-only]";
+			}
+		} else if (writable) {
+			write = writable.has(df.fieldname) ? (df.reqd ? " [required]" : "") : " [read-only]";
+		}
+		return `- ${df.fieldname} (${df.fieldtype})${opts} ${
+			df.label || ""
+		}${shown}${write}`.trim();
 	});
+
+	const actions = ['"view" — change what this list shows.'];
+	if (can_create) {
+		actions.push(
+			'"create" — make one or more new, unsaved records. Use every value the request ' +
+				"states and invent nothing else. Never set a [read-only] field."
+		);
+	}
+	if (can_write) {
+		actions.push(
+			'"edit" — change existing records matched by "filters". child_set is honored ' +
+				"only when the filters match exactly one record."
+		);
+	}
+	if (can_delete) {
+		actions.push('"delete" — remove existing records matched by "filters".');
+	}
+	actions.push(
+		'"none" — anything this list cannot do: a bulk export, sending mail, a question ' +
+			"with no view that answers it, a request about a different doctype, or several " +
+			"actions in one request. Say plainly, in one sentence, what you cannot do and " +
+			"what the user should do instead. Never approximate a request you cannot serve."
+	);
+
 	return (
 		`Fields of doctype '${doctype}':\n${lines.join("\n")}\n\n` +
+		'Output ONLY one JSON object. Its "action" key picks exactly one of:\n' +
+		actions.map((a) => `- ${a}`).join("\n") +
+		"\n\n" +
+		'{"action": "view", "view": "List"|"Report"|"Kanban", ' +
+		'"filters": {fieldname: [operator, value]}, ' +
+		'"group_by": [fieldname, aggregate_fieldname, "count"|"sum"|"avg"] or null, ' +
+		'"order_by": "fieldname asc"|"fieldname desc" or null, "page_length": integer or null, ' +
+		'"columns": [fieldname, ...], "reason": "..."}\n' +
+		(can_create
+			? '{"action": "create", "records": [{"set": {fieldname: value}, ' +
+			  '"child_set": {table_fieldname: [row dicts]}}, ...], "reason": "..."}\n'
+			: "") +
+		(can_write
+			? '{"action": "edit", "filters": {fieldname: [operator, value]}, ' +
+			  '"set": {fieldname: value}, "child_set": {table_fieldname: [row dicts]}, ' +
+			  '"reason": "..."}\n'
+			: "") +
+		(can_delete
+			? '{"action": "delete", "filters": {fieldname: [operator, value]}, "reason": "..."}\n'
+			: "") +
+		'{"action": "none", "reason": "..."}\n\n' +
 		"Rules for building the view specification:\n" +
 		"- If the request does not name a field, filter on a field marked [shown in list] " +
 		"(prefer a Data/Text field over a Link/Select).\n" +
@@ -95,7 +266,27 @@ function crema_view_prompt(doctype) {
 		"If the request implies an OR across fields, say so plainly in the reason instead of " +
 		"approximating it with AND.\n" +
 		'- order_by sorts the whole list: "fieldname asc" or "fieldname desc".\n' +
-		'- page_length is an integer row limit for requests like "top 10" or "first 5".'
+		'- page_length is an integer row limit for requests like "top 10" or "first 5".\n' +
+		'- columns only take effect when view is "Report" — set view to "Report" for a ' +
+		"request about which columns are shown.\n" +
+		'- group_by requires view to be "Report" too.\n' +
+		"- This works only on the doctype above — a request naming a different doctype is " +
+		'"none".\n' +
+		'- A request to find or open one record is still "view": filter tightly enough ' +
+		'that one row matches, do not use "create" or "edit" for it.\n' +
+		(can_create
+			? '- A create request naming several records lists them all under "records" in ' +
+			  "one create action; whether a required field is missing is checked when each " +
+			  "record is created, not by you.\n"
+			: "") +
+		(can_delete
+			? '- "delete the ones that are X" is one delete action with filters, not a view.\n'
+			: "") +
+		((can_create || can_write) && lines.some((l) => l.includes("[rows: "))
+			? "- A child_set row for a table field may only use the fieldnames listed after " +
+			  '"rows:" for that field — invent nothing else.\n'
+			: "") +
+		"- Pick exactly one action, even for a request that asks for more than one thing."
 	);
 }
 
@@ -110,7 +301,7 @@ function crema_show_error(r) {
 	if (data?.reason) {
 		frappe.msgprint({
 			title: data.blocked ? __("Blocked") : __("Crema"),
-			message: data.reason,
+			message: frappe.utils.escape_html(data.reason),
 			indicator: "red",
 		});
 		return;
@@ -151,6 +342,44 @@ function crema_diff_table(record) {
 	return `<table class="table table-bordered">${
 		rows || `<tr><td>${__("Nothing found")}</td></tr>`
 	}</table>`;
+}
+
+// Both create paths end here — a record read out of an uploaded document (Path A), and
+// a record described in a typed request (the "create" action, below). Fills an unsaved
+// form and routes to it; nothing is written until the user saves. Must run inside
+// frappe.model.with_doctype: get_new_doc and add_child both read frappe.get_meta, for
+// the parent and for each child doctype a child_set row belongs to.
+function crema_open_new_doc(doctype, record) {
+	const doc = frappe.model.get_new_doc(doctype);
+	Object.assign(doc, record.set || {});
+	for (const [fieldname, rows] of Object.entries(record.child_set || {})) {
+		(rows || []).forEach((row) => Object.assign(frappe.model.add_child(doc, fieldname), row));
+	}
+	frappe.set_route("Form", doctype, doc.name);
+}
+
+// Both edit paths end here — the single-record "edit" action (below) and the form-view
+// transform dialog (Path C). frm may be undefined (the record isn't the one currently
+// open, or isn't open at all): fall back to mutating the doc in locals directly via
+// frappe.model, the same locals-first trick crema_open_new_doc already relies on for a
+// brand new doc, so the Form these route to opens already showing the change — routing
+// AFTER the mutation sidesteps ever having to know when frappe.set_route's promise means
+// "the form finished rendering". Precondition when frm is omitted: the doc must already
+// be in locals (frappe.model.with_doc(doctype, name) resolved) — frappe.model.set_value
+// silently no-ops on a doc that isn't loaded yet.
+function crema_apply_diff(doctype, name, diff, frm) {
+	for (const [fieldname, value] of Object.entries(diff.set || {})) {
+		if (frm) frm.set_value(fieldname, value);
+		else frappe.model.set_value(doctype, name, fieldname, value);
+	}
+	for (const [table_fieldname, rows] of Object.entries(diff.child_set || {})) {
+		const target = frm ? frm.doc : frappe.get_doc(doctype, name);
+		(rows || []).forEach((row) =>
+			Object.assign(frappe.model.add_child(target, table_fieldname), row)
+		);
+	}
+	if (frm) frm.refresh_fields();
+	else frappe.get_doc(doctype, name).__unsaved = 1;
 }
 
 // ---- Path A: file -> new document(s) ------------------------------------------------
@@ -286,15 +515,11 @@ function crema_show_extract_preview(doctype, data, dialog) {
 
 		dialog.set_primary_action(__("Create Document"), () => {
 			frappe.model.with_doctype(doctype, () => {
-				const doc = frappe.model.get_new_doc(doctype);
-				Object.assign(doc, records[0].set || {});
-				for (const [fieldname, child_rows] of Object.entries(records[0].child_set || {})) {
-					(child_rows || []).forEach((row) =>
-						Object.assign(frappe.model.add_child(doc, fieldname), row)
-					);
-				}
 				dialog.hide();
-				frappe.set_route("Form", doctype, doc.name);
+				// The server already ran this record through api._filter_diff (extract() ->
+				// _filter_diff); running it through the client fence too is free and closes
+				// the read_only/permlevel gap that server-side filter doesn't check.
+				crema_open_new_doc(doctype, crema_filter_diff(doctype, records[0]));
 			});
 		});
 		return;
@@ -364,54 +589,93 @@ const CREMA_TEXTISH = new Set([
 	"Read Only",
 ]);
 const CREMA_FALLBACK_FIELD_CAP = 8;
+// How many child-table fieldnames crema_view_prompt lists per table field — a wide child
+// doctype (e.g. Sales Invoice Item) would otherwise balloon every prompt built against it.
+const CREMA_MAX_CHILD_FIELDS = 10;
 
-function crema_ask_for_view(doctype, prompt) {
-	frappe.call({
-		method: "crema.api.ask_api",
-		args: {
-			interface: "view",
-			prompt: `${crema_view_prompt(doctype)}\n\nRequest: ${prompt}`,
-			response_json: 1,
-		},
-		freeze: true,
-		freeze_message: __("Thinking…"),
-		callback(r) {
-			const data = r.message;
-			if (!data) return;
-			crema_apply_view_spec(doctype, data);
-		},
-		error: crema_show_error,
-	});
-}
-
-function crema_apply_view_spec(doctype, data) {
-	let spec;
-	try {
-		spec = JSON.parse(crema_strip_fence(data.result));
-	} catch (e) {
-		frappe.msgprint({
-			message: __("Crema returned an unreadable view spec."),
-			indicator: "red",
-		});
-		return;
-	}
-
-	// Same discipline as automation._validate_plan, just client-side: drop anything the
-	// model invented that isn't actually a field this user may see.
+// Same discipline as automation._validate_plan, just client-side: drop any filter whose
+// fieldname isn't readable, whose condition isn't a well-formed [operator, value] pair,
+// or whose operator isn't in the whitelist. Shared by the view action and by edit/
+// delete's target resolution below — "delete the ones that are X" must not silently
+// expand into "every record" because a stray or malformed key survived.
+function crema_valid_filters(doctype, raw) {
 	const allowed = new Set(crema_readable_fields(doctype).map((df) => df.fieldname));
-	// name/creation/modified are standard docfields, never listed in meta.fields, but are
-	// always valid sort fields (frappe/public/js/frappe/ui/sort_selector.js).
-	const sortable = new Set([...allowed, "name", "creation", "modified"]);
-	const view = CREMA_VALID_VIEWS.has(spec.view) ? spec.view : "List";
-
 	const filters = {};
-	for (const [fieldname, cond] of Object.entries(spec.filters || {})) {
+	for (const [fieldname, cond] of Object.entries(raw || {})) {
 		if (!allowed.has(fieldname) || !Array.isArray(cond) || cond.length !== 2) continue;
 		if (!CREMA_VALID_OPERATORS.has(cond[0])) continue;
 		filters[fieldname] = cond; // always [operator, value] — a bare value round-trips
 		// broken through frappe.route_options (router.js JSON-stringifies it, but
 		// list_view.js only JSON.parses values starting with "[").
 	}
+	return filters;
+}
+
+// with_doctype ensures every child (Table) doctype's meta is loaded before the prompt is
+// built — crema_view_prompt's row-schema branch needs frappe.get_meta(child) populated,
+// and without this it silently falls back to "[read-only]" depending on whether some
+// earlier, unrelated call happened to have loaded that child doctype already.
+function crema_ask(doctype, prompt) {
+	frappe.model.with_doctype(doctype, () => {
+		frappe.call({
+			method: "crema.api.ask_api",
+			args: {
+				interface: "view",
+				prompt: `${crema_view_prompt(doctype)}\n\nRequest: ${prompt}`,
+				response_json: 1,
+			},
+			freeze: true,
+			freeze_message: __("Thinking…"),
+			callback(r) {
+				const data = r.message;
+				if (!data) return;
+				crema_apply_spec(doctype, data);
+			},
+			error: crema_show_error,
+		});
+	});
+}
+
+// The "view" interface answers with one of five shapes, discriminated by "action" — see
+// crema_view_prompt for the contract. A missing action means "view": a site whose stored
+// Crema Model Assignment "view" row still carries an admin-customized system prompt
+// written before the contract moved into the user turn (patches/refresh_view_prompt.py
+// only rewrites a row matching a crema default byte-for-byte) may still steer a model
+// toward the old single-shape answer, and that answer is still a valid view spec.
+function crema_apply_spec(doctype, data) {
+	let spec;
+	try {
+		spec = JSON.parse(crema_strip_fence(data.result));
+	} catch (e) {
+		frappe.msgprint({ message: __("Crema returned an unreadable answer."), indicator: "red" });
+		return;
+	}
+	if (spec.action === "create") return crema_apply_create_spec(doctype, spec);
+	if (spec.action === "edit") return crema_apply_edit_spec(doctype, spec);
+	if (spec.action === "delete") return crema_apply_delete_spec(doctype, spec);
+	if (spec.action === "none") {
+		// A refusal is the honest answer, not a failure — orange, and a msgprint rather
+		// than an alert (which crema_apply_view_spec's reason gets) because it is the
+		// whole response, not a footnote to a view that changed.
+		frappe.msgprint({
+			title: __("Crema"),
+			message:
+				frappe.utils.escape_html(spec.reason || "") || __("Crema cannot do that here."),
+			indicator: "orange",
+		});
+		return;
+	}
+	crema_apply_view_spec(doctype, spec);
+}
+
+function crema_apply_view_spec(doctype, spec) {
+	// name/creation/modified are standard docfields, never listed in meta.fields, but are
+	// always valid sort fields (frappe/public/js/frappe/ui/sort_selector.js).
+	const allowed = new Set(crema_readable_fields(doctype).map((df) => df.fieldname));
+	const sortable = new Set([...allowed, "name", "creation", "modified"]);
+	const view = CREMA_VALID_VIEWS.has(spec.view) ? spec.view : "List";
+
+	const filters = crema_valid_filters(doctype, spec.filters);
 	const group_by =
 		Array.isArray(spec.group_by) &&
 		spec.group_by.length === 3 &&
@@ -658,8 +922,313 @@ function crema_widen_if_empty(doctype, filters) {
 // Where both apply paths in crema_apply_view_spec converge once the list has rendered:
 // the model's reason alert, then the zero-result fallback.
 function crema_after_view(doctype, spec, filters) {
-	if (spec.reason) frappe.show_alert({ message: spec.reason, indicator: "blue" });
+	// spec.reason is model-authored text; frappe.show_alert interpolates its message raw
+	// into an HTML template (frappe/public/js/frappe/ui/messages.js), so this is a DOM
+	// sink without the escape.
+	if (spec.reason) {
+		frappe.show_alert({ message: frappe.utils.escape_html(spec.reason), indicator: "blue" });
+	}
 	crema_widen_if_empty(doctype, filters);
+}
+
+// ---- Path B continued: prompt -> create / edit / delete ----------------------------
+
+// Resolves a model-authored filter set to actual records, under the desk user's own
+// permissions (frappe.db.get_list, same call crema_widen_if_empty already makes) — the
+// target set for edit/delete. An action naming no valid filter is refused outright
+// (rejects with "crema:no-filters") rather than silently read as "every record". frappe's
+// own bulk endpoints only handle up to 500 documents in one call
+// (bulk_update.py submit_cancel_or_update_docs) — a match past that rejects with
+// "crema:too-many" instead of quietly picking the first 500.
+function crema_resolve_targets(doctype, raw_filters) {
+	const filters = crema_valid_filters(doctype, raw_filters);
+	if (!Object.keys(filters).length) return Promise.reject(new Error("crema:no-filters"));
+	const meta = frappe.get_meta(doctype);
+	const title_field = meta.title_field && meta.title_field !== "name" ? meta.title_field : null;
+	const fields = title_field ? ["name", title_field] : ["name"];
+	return frappe.db.get_list(doctype, { filters, fields, limit: 501 }).then((rows) => {
+		if (rows.length > 500) return Promise.reject(new Error("crema:too-many"));
+		return { filters, rows, title_field };
+	});
+}
+
+function crema_resolve_error(e) {
+	if (e?.message === "crema:no-filters") {
+		frappe.msgprint({
+			message: __('Say which records — a request naming none is not "all of them".'),
+			indicator: "orange",
+		});
+		return;
+	}
+	if (e?.message === "crema:too-many") {
+		frappe.msgprint({
+			message: __("That matches more than 500 records — ask for something narrower."),
+			indicator: "orange",
+		});
+		return;
+	}
+	crema_show_error();
+}
+
+// Shared confirm dialog for edit/delete on more than one record, and for a multi-record
+// create — lists every affected record by name/title (or, for create, the proposed
+// records themselves via extra_html) before anything happens. Native elements only:
+// frappe.ui.Dialog, a plain bordered table, no bespoke widget.
+//
+// Hides itself on confirm rather than disabling the primary button and waiting for
+// onConfirm to close it: the dialog holds no input to protect mid-flight (just a
+// read-only list), the bulk-update and BulkOperations.delete calls each already show
+// their own freeze/progress overlay, and BulkOperations.delete (frappe core) accepts no
+// error callback at all — a "re-enable on failure" path was never reachable for delete,
+// so applying it only to edit/create would be an inconsistency, not a fix.
+function crema_confirm_records({
+	title,
+	rows,
+	title_field,
+	extra_html,
+	primary_label,
+	danger,
+	onConfirm,
+}) {
+	const list_html =
+		rows && rows.length
+			? `<div style="max-height: 40vh; overflow-y: auto; margin-bottom: 1rem;">
+					<table class="table table-bordered"><tbody>${rows
+						.map(
+							(r, i) =>
+								`<tr><td>${i + 1}</td><td>${frappe.utils.escape_html(
+									String((title_field ? r[title_field] : null) ?? r.name)
+								)}</td></tr>`
+						)
+						.join("")}</tbody></table>
+				</div>`
+			: "";
+	const dialog = new frappe.ui.Dialog({
+		title,
+		size: "large",
+		fields: [
+			{ fieldtype: "HTML", fieldname: "body", options: `${list_html}${extra_html || ""}` },
+		],
+		primary_action_label: primary_label,
+		primary_action() {
+			dialog.hide();
+			onConfirm();
+		},
+	});
+	if (danger) dialog.get_primary_btn().removeClass("btn-primary").addClass("btn-danger");
+	dialog.show();
+}
+
+// Single-record edit: shown as a diff before anything is applied — the diff table is how
+// the user knows what changed — then routes to the Form with the change already applied
+// (crema_apply_diff, locals-first — see its own comment for why routing happens AFTER
+// the mutation), left dirty for the user to review and save themselves.
+function crema_edit_one(doctype, name, diff, reason) {
+	const dialog = new frappe.ui.Dialog({
+		// name is a record name, not a fixed label — a field-autonamed doctype can put
+		// arbitrary text (including markup) into it, and Dialog.set_title is .html().
+		title: __("Update {0}", [frappe.utils.escape_html(name)]),
+		fields: [{ fieldtype: "HTML", fieldname: "body", options: crema_diff_table(diff) }],
+		primary_action_label: __("Apply"),
+		primary_action() {
+			dialog.hide();
+			frappe.model.with_doc(doctype, name).then(() => {
+				crema_apply_diff(doctype, name, diff);
+				frappe.set_route("Form", doctype, name);
+				if (reason) {
+					frappe.show_alert({
+						message: frappe.utils.escape_html(reason),
+						indicator: "blue",
+					});
+				}
+			});
+		},
+	});
+	dialog.show();
+}
+
+function crema_apply_create_spec(doctype, spec) {
+	// An affordance check, not the fence — stops an unsaveable form/import rather than an
+	// unauthorised write; frappe.model.get_new_doc + save (single) or Data Import (many)
+	// still enforce for real. Same gate the dialog's own upload area already uses.
+	if (!frappe.model.can_create(doctype)) {
+		frappe.msgprint({
+			message: __("You cannot create a {0}.", [__(doctype)]),
+			indicator: "red",
+		});
+		return;
+	}
+	const records = Array.isArray(spec.records) ? spec.records : [];
+	if (!records.length) {
+		frappe.msgprint({
+			message: __("Crema did not propose any records."),
+			indicator: "orange",
+		});
+		return;
+	}
+	frappe.model.with_doctype(doctype, () => {
+		// The "view" interface's raw ask_api answer never runs through api._filter_diff
+		// server-side (unlike extract_api/transform_api) — this is the only fence a
+		// create action's fields get. A record left with nothing set (every proposed
+		// field read-only or invented) is dropped rather than opened as a blank form.
+		const filtered = records
+			.map((r) => crema_filter_diff(doctype, r || {}))
+			.filter((r) => Object.keys(r.set).length || Object.keys(r.child_set).length);
+		if (!filtered.length) {
+			frappe.msgprint({
+				message: __("Crema did not propose any records."),
+				indicator: "orange",
+			});
+			return;
+		}
+
+		if (filtered.length === 1) {
+			crema_open_new_doc(doctype, filtered[0]);
+			if (spec.reason) {
+				frappe.show_alert({
+					message: frappe.utils.escape_html(spec.reason),
+					indicator: "blue",
+				});
+			}
+			return;
+		}
+		if (!frappe.model.can_import(doctype)) {
+			frappe.msgprint({
+				message: __("Creating several records at once needs the System Manager role."),
+				indicator: "orange",
+			});
+			return;
+		}
+		crema_confirm_records({
+			title: __("Create {0} {1} records?", [filtered.length, __(doctype)]),
+			rows: null,
+			extra_html: filtered.map((r, i) => `<b>${i + 1}.</b>${crema_diff_table(r)}`).join(""),
+			primary_label: __("Create {0} Documents", [filtered.length]),
+			onConfirm: () => crema_import_records(doctype, filtered),
+		});
+	});
+}
+
+function crema_apply_edit_spec(doctype, spec) {
+	if (!frappe.perm.has_perm(doctype, 0, "write")) {
+		frappe.msgprint({
+			message: __("You cannot edit {0} records.", [__(doctype)]),
+			indicator: "red",
+		});
+		return;
+	}
+	crema_resolve_targets(doctype, spec.filters)
+		.then(({ rows, title_field }) => {
+			if (!rows.length) {
+				frappe.msgprint({
+					message: __("Nothing in this list matches that."),
+					indicator: "orange",
+				});
+				return;
+			}
+			frappe.model.with_doctype(doctype, () => {
+				const diff = crema_filter_diff(doctype, spec);
+				// bulk_update.py's action=="update" branch calls doc.save() unconditionally,
+				// even when data is {} — an unguarded no-op would silently re-save every
+				// matched record (bumping modified, firing hooks) and report "success". Bulk
+				// drops child_set below, so a child-only change only counts for one record.
+				const has_changes =
+					Object.keys(diff.set).length ||
+					(rows.length === 1 && Object.keys(diff.child_set).length);
+				if (!has_changes) {
+					frappe.msgprint({
+						message: __("Crema did not propose any change you may write."),
+						indicator: "orange",
+					});
+					return;
+				}
+
+				if (rows.length === 1) {
+					crema_edit_one(doctype, rows[0].name, diff, spec.reason);
+					return;
+				}
+				// Bulk edit carries only "set" — frappe's own bulk_update endpoint only
+				// overwrites a whole child table field uniformly, not per-row like child_set
+				// describes, so a multi-target edit's child_set is dropped rather than
+				// applied wrong; the prompt tells the model child_set is single-record only.
+				crema_confirm_records({
+					title: __("Update {0} {1} records?", [rows.length, __(doctype)]),
+					rows,
+					title_field,
+					extra_html: crema_diff_table({ set: diff.set }),
+					primary_label: __("Update {0} records", [rows.length]),
+					onConfirm: () => {
+						frappe.call({
+							method: "frappe.desk.doctype.bulk_update.bulk_update.submit_cancel_or_update_docs",
+							args: {
+								doctype,
+								docnames: rows.map((r) => r.name),
+								action: "update",
+								data: diff.set,
+							},
+							freeze: true,
+							callback() {
+								frappe.show_alert(__("Updated successfully"));
+								if (
+									typeof cur_list !== "undefined" &&
+									cur_list &&
+									cur_list.doctype === doctype
+								) {
+									cur_list.refresh();
+								}
+							},
+							error: crema_show_error,
+						});
+					},
+				});
+			});
+		})
+		.catch(crema_resolve_error);
+}
+
+function crema_apply_delete_spec(doctype, spec) {
+	if (!frappe.perm.has_perm(doctype, 0, "delete")) {
+		frappe.msgprint({
+			message: __("You cannot delete {0} records.", [__(doctype)]),
+			indicator: "red",
+		});
+		return;
+	}
+	crema_resolve_targets(doctype, spec.filters)
+		.then(({ rows, title_field }) => {
+			if (!rows.length) {
+				frappe.msgprint({
+					message: __("Nothing in this list matches that."),
+					indicator: "orange",
+				});
+				return;
+			}
+			crema_confirm_records({
+				title: __("Delete {0} {1} records?", [rows.length, __(doctype)]),
+				rows,
+				title_field,
+				primary_label: __("Delete {0} records", [rows.length]),
+				danger: true,
+				onConfirm: () => {
+					// list_view.js's own delete confirmation uses this exact call
+					// (BulkOperations.delete -> frappe.desk.reportview.delete_items).
+					new frappe.ui.BulkOperations({ doctype }).delete(
+						rows.map((r) => r.name),
+						() => {
+							frappe.show_alert(__("Deleted successfully"));
+							if (
+								typeof cur_list !== "undefined" &&
+								cur_list &&
+								cur_list.doctype === doctype
+							) {
+								cur_list.refresh();
+							}
+						}
+					);
+				},
+			});
+		})
+		.catch(crema_resolve_error);
 }
 
 // ---- Dialog ---------------------------------------------------------------------------
@@ -682,7 +1251,9 @@ function crema_open_dialog(doctype, prefill) {
 				label: __("What do you want to do?"),
 				description: can_create
 					? __(
-							"A request changes this list view. If you also upload a document below, this text guides how the document is read."
+							"A request can change this list view, create a new record, or update or " +
+								"delete records it can find. If you also upload a document below, this " +
+								"text guides how the document is read."
 					  )
 					: undefined,
 				default: prefill || "",
@@ -702,7 +1273,7 @@ function crema_open_dialog(doctype, prefill) {
 				return;
 			}
 			dialog.hide();
-			crema_ask_for_view(doctype, values.instruction);
+			crema_ask(doctype, values.instruction);
 		},
 	});
 
@@ -775,17 +1346,7 @@ function crema_open_transform_dialog(frm) {
 					);
 					dialog.refresh();
 					dialog.set_primary_action(__("Apply"), () => {
-						for (const [fieldname, value] of Object.entries(data.set || {})) {
-							frm.set_value(fieldname, value);
-						}
-						for (const [table_fieldname, rows] of Object.entries(
-							data.child_set || {}
-						)) {
-							(rows || []).forEach((row) =>
-								Object.assign(frm.add_child(table_fieldname), row)
-							);
-						}
-						frm.refresh_fields();
+						crema_apply_diff(frm.doctype, frm.docname, data, frm);
 						dialog.hide();
 					});
 				},
@@ -867,7 +1428,7 @@ function crema_open_transform_dialog(frm) {
 			match: txt,
 			index: 99, // directly under "Search for …" (index 100)
 			default: "Ask",
-			onclick: () => crema_ask_for_view(doctype, txt),
+			onclick: () => crema_ask(doctype, txt),
 		});
 	};
 })();

@@ -49,16 +49,34 @@ it — without the role, the desk looks exactly as it did before Crema was insta
 your own session. Document and file access inside a server call runs as the
 interface's isolation user — see [docs/security.md](docs/security.md).
 
-- **List → view.** Type a request to filter, sort, limit, group, or switch to Report or
-  Kanban. If the result is empty and the request was a single text lookup, one more
-  database query probes up to eight readable text fields to find which one holds your
-  words — no second model call.
-- **List → records.** Drop a document to get one or more prefilled new records (the
-  model decides how many).
-- **Form → diff.** Type an instruction to get a proposed diff for the open document.
+A typed request on a list view resolves to one of five actions — which one is the
+model's own call:
 
-Crema writes nothing until you save the result. A blocked prompt, an exceeded
-monthly budget, or any other failure surfaces as a message — never a silent no-op.
+- **View.** Filter, sort, limit, group, or switch to Report or Kanban. If the result is
+  empty and the request was a single text lookup, one more database query probes up to
+  eight readable text fields to find which one holds your words — no second model call.
+- **Create.** One new record opens prefilled and unsaved, for you to save yourself;
+  several go through the same prefilled Data Import step a dropped document uses (needs
+  `System Manager`).
+- **Edit.** A request naming which records to change and what to change shows the
+  proposed diff, then opens the one matching record unsaved — or, for more than one
+  match, a dialog listing every record it would touch, before anything is applied.
+- **Delete.** Same confirm-first shape as edit: a dialog lists every matching record
+  before anything is deleted. A request naming no records is refused, never read as
+  "all of them".
+- **None.** Anything the list view can't do (export, email, a question with no view
+  answer, a different doctype) gets a plain refusal instead of a wrong-but-plausible
+  guess.
+
+A list view also takes a dropped document instead of typed text — one or more prefilled
+new records, the model decides how many. And a form you may edit has its own robot
+button: type an instruction to get a proposed diff for the open document.
+
+Creating or editing one record, or dropping a document, writes nothing until you save
+the result. Editing or deleting several records asks you to confirm first, listing every
+one, then writes immediately — the same fence Frappe's own bulk actions use. A blocked
+prompt, an exceeded monthly budget, or any other failure surfaces as a message — never a
+silent no-op.
 
 ## Interfaces
 
@@ -74,7 +92,7 @@ monthly budget, or any other failure surfaces as a message — never a silent no
 | `classification` | Classify / label content | `simple` |
 | `summarization` | Concise, accurate summaries | `simple` |
 | `transform` | Propose a diff for an ERP document (never auto-writes) | `complex` |
-| `view` | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
+| `view` (List Assistant) | Turn a prompt into a view, a new record, or an edit/delete for the desk UI | `complex` |
 | `transcribe` | Speech-to-text for audio files | none |
 
 ## Features

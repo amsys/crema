@@ -491,6 +491,295 @@ context("Crema desk UI", () => {
 		cy.get(".msgprint").should("contain", "Could not upload the generated file");
 	});
 
+	it("opens a new unsaved form for an action:create spec with one record", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "create",
+						records: [{ set: { description: "Call Acme back" }, child_set: {} }],
+						reason: "creating a todo",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"create a todo to call Acme back"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.location("pathname").should("contain", "/todo/new-todo-");
+		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(
+			".form-control[data-fieldname=description] textarea, textarea[data-fieldname=description]"
+		).should("contain.value", "Call Acme back");
+	});
+
+	it("drops a field the model invented from a create spec", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "create",
+						records: [
+							{
+								set: { description: "Call Acme back", not_a_field: "x" },
+								child_set: {},
+							},
+						],
+						reason: "creating a todo",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"create a todo to call Acme back"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.location("pathname").should("contain", "/todo/new-todo-");
+		cy.window().its("cur_frm.doc.not_a_field").should("be.undefined");
+	});
+
+	it("drops a read-only field from a create spec", () => {
+		// assignment_rule is read_only: 1 on ToDo — the perm.js:238 regression: without the
+		// !df.read_only check, get_field_display_status(df, null, perm) reports "Write" for
+		// every read-only field because its own read_only demotion only runs when a doc is
+		// passed in.
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "create",
+						records: [
+							{
+								set: {
+									description: "Call Acme back",
+									assignment_rule: "Bogus Rule",
+								},
+								child_set: {},
+							},
+						],
+						reason: "creating a todo",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"create a todo to call Acme back"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.location("pathname").should("contain", "/todo/new-todo-");
+		cy.window().its("cur_frm.doc.assignment_rule").should("not.eq", "Bogus Rule");
+	});
+
+	it("resolves an edit spec to one record, shows the diff, then leaves the form dirty", () => {
+		cy.insert_doc("ToDo", { description: "crema edit-one target" }, true);
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "edit",
+						filters: { description: ["=", "crema edit-one target"] },
+						set: { priority: "High" },
+						child_set: {},
+						reason: "raising priority",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				'raise the priority of the "crema edit-one target" todo'
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		// The diff dialog — how the user knows what changed before anything applies.
+		cy.get(".modal-title").should("contain", "Update crema edit-one target");
+		cy.get(".modal").within(() => cy.get(".btn-modal-primary").contains("Apply").click());
+
+		cy.location("pathname").should("contain", "crema%20edit-one%20target");
+		cy.get(".indicator-pill").should("contain", "Not Saved");
+	});
+
+	it("refuses an edit spec whose only proposed field is read-only", () => {
+		// Without the has_changes guard, bulk_update.py's action=="update" branch calls
+		// doc.save() even for an empty data dict — this asserts the request never reaches
+		// that endpoint at all, not merely that the UI hides the outcome.
+		cy.insert_doc("ToDo", { description: "crema empty-edit target" }, true);
+		cy.intercept("POST", "/api/method/frappe.desk.doctype.bulk_update.bulk_update.*").as(
+			"bulk_update"
+		);
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "edit",
+						filters: { description: ["=", "crema empty-edit target"] },
+						set: { assignment_rule: "Bogus Rule" },
+						child_set: {},
+						reason: "changing a read-only field",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				'set the assignment rule of the "crema empty-edit target" todo'
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".msgprint").should("contain", "did not propose any change you may write");
+		cy.get("@bulk_update.all").should("have.length", 0);
+	});
+
+	it("refuses an edit/delete action that names no valid filter", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "delete",
+						filters: {},
+						reason: "delete everything",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.location("search").then((before) => {
+			cy.get("[data-crema]").click();
+			cy.get(".modal").within(() => {
+				cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+					"delete all of these"
+				);
+				cy.get(".btn-modal-primary").click();
+			});
+			cy.wait("@ask");
+
+			cy.get(".msgprint").should("contain", 'not "all of them"');
+			cy.location("search").should("eq", before);
+		});
+	});
+
+	it("shows a confirm dialog listing every record before a delete, and deletes only after confirming", () => {
+		cy.insert_doc("ToDo", { description: "crema delete target one" }, true);
+		cy.insert_doc("ToDo", { description: "crema delete target two" }, true);
+		cy.intercept("POST", "/api/method/frappe.desk.reportview.delete_items").as("delete_items");
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "delete",
+						filters: { description: ["like", "crema delete target%"] },
+						reason: "deleting the two crema delete targets",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"delete the crema delete target todos"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".modal-title").should("contain", "Delete 2 ToDo records");
+		cy.get(".modal table tbody tr").should("have.length", 2);
+		cy.get("@delete_items.all").should("have.length", 0);
+
+		cy.get(".modal").within(() => cy.get(".btn-modal-primary").click());
+		cy.wait("@delete_items");
+	});
+
+	it("shows an action:none refusal as an orange message and leaves the list alone", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "none",
+						reason: "I cannot email this list from here.",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.location("search").then((before) => {
+			cy.get("[data-crema]").click();
+			cy.get(".modal").within(() => {
+				cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+					"email this list to bob"
+				);
+				cy.get(".btn-modal-primary").click();
+			});
+			cy.wait("@ask");
+
+			cy.get(".msgprint").should("contain", "I cannot email this list from here.");
+			cy.location("search").should("eq", before);
+		});
+	});
+
+	it("renders a model-authored reason as text, not HTML", () => {
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						view: "List",
+						reason: "<img src=x onerror=alert(1)>",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("show open todos");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".desk-alert .alert-message").should(
+			"contain.text",
+			"<img src=x onerror=alert(1)>"
+		);
+		cy.get(".desk-alert .alert-message img").should("not.exist");
+	});
+
 	it("offers an Ask … option in the awesomebar on a list view", () => {
 		cy.get("#navbar-modal-search").click();
 		cy.get("#navbar-search").type("overdue items");
@@ -540,6 +829,79 @@ context("Crema desk UI — form view", () => {
 		cy.get(".modal").within(() => cy.get(".btn-modal-primary").contains("Apply").click());
 
 		cy.get(".indicator-pill").should("contain", "Not Saved");
+	});
+});
+
+context("Crema desk UI — create spec child rows", () => {
+	before(() => {
+		cy.visit("/login");
+		cy.login();
+	});
+
+	beforeEach(() => {
+		cy.visit("/desk/contact");
+	});
+
+	it("keeps child rows from a create spec", () => {
+		// The perm.js child-doctype regression: frappe.perm.get_perm(child_doctype) returns
+		// read:0 for every field (a child doctype carries no DocPerm rows of its own), so a
+		// naive write-fence would silently drop every child_set row. crema_writable_fields
+		// takes the PARENT's perm array instead — this is the test that fails if that ever
+		// changes back.
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "create",
+						records: [
+							{
+								set: { first_name: "Crema Child Row Test" },
+								child_set: { phone_nos: [{ phone: "555-0100" }] },
+							},
+						],
+						reason: "creating a contact",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"create a contact named Crema Child Row Test"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.location("pathname").should("contain", "/contact/new-contact-");
+		cy.window().its("cur_frm.doc.phone_nos").should("have.length", 1);
+		cy.window().its("cur_frm.doc.phone_nos.0.phone").should("eq", "555-0100");
+	});
+
+	it("lists the child table's own writable fieldnames in the prompt, not [read-only]", () => {
+		// Guards the crema_writable_table branch in crema_view_prompt: a Table field is
+		// never in crema_writable_fields' set (frappe.model.is_value_type excludes it), so
+		// without this branch the prompt would print "[read-only]" for phone_nos while the
+		// same prompt's create/edit shapes advertise child_set — a self-contradiction the
+		// model has no way to resolve.
+		cy.intercept("POST", "/api/method/crema.api.ask_api", (req) => {
+			expect(req.body.prompt).to.match(
+				/phone_nos \(Table\)[^\n]*\[rows: [^\]]*phone[^\]]*\]/
+			);
+			req.reply({
+				statusCode: 200,
+				body: { message: { result: JSON.stringify({ action: "none", reason: "n/a" }) } },
+			});
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type("anything");
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
 	});
 });
 

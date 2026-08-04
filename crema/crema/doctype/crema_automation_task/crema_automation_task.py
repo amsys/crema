@@ -29,7 +29,7 @@ from crema import client, interfaces, sandbox
 from crema.crema.doctype.crema_model_assignment.crema_model_assignment import validate_isolation_user
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import now_datetime, split_emails, validate_email_address
+from frappe.utils import get_datetime, now_datetime, split_emails, validate_email_address
 
 # A blank preset means "I wrote the cron myself" — deliberately no doctype-level default,
 # so migrating an existing task never rewrites the schedule it already had.
@@ -114,7 +114,17 @@ class CremaAutomationTask(Document):
 
     @property
     def next_run(self) -> datetime | None:
-        if not self.enabled or self.trigger != "Schedule":
+        if not self.enabled:
+            return None
+        if self.trigger == "Once":
+            # Same "is it still armed" test automation.tick() makes, and for the same
+            # reason: last_run is stamped before the run, so run_at having overtaken it is
+            # what says "not run yet" — and moving run_at forward is what re-arms it.
+            if not self.run_at:
+                return None
+            run_at = get_datetime(self.run_at)
+            return None if self.last_run and run_at <= get_datetime(self.last_run) else run_at
+        if self.trigger != "Schedule":
             return None
         if not croniter.is_valid(self.schedule or ""):
             return None
@@ -260,6 +270,13 @@ class CremaAutomationTask(Document):
         )
 
     def _validate_trigger(self) -> None:
+        if self.trigger == "Once":
+            # mandatory_depends_on says the same thing to the form; frappe evaluates that
+            # client-side only, so this is the fence — same split as _validate_sources.
+            if not self.run_at:
+                frappe.throw(_("A Once trigger needs a Run At time."))
+            return
+
         if self.trigger not in ("Document Event", "Incoming Email"):
             return
         if not self.event:

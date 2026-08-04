@@ -367,6 +367,27 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
         self.assertEqual(task.consecutive_failures, 1)
         self.assertIn("CremaConfigError", task.last_error)
 
+    def test_frappes_own_markup_is_stripped_out_of_last_error(self):
+        """frappe.bold wraps <strong>, and throw(as_list=True) builds a <ul> — the shapes a
+        bad Link value or a missing mandatory field produce. last_error is a read-only text
+        field, so left in place the tags reach the admin as literal tags."""
+        task = _make_task()
+        message = f"Could not find {frappe.bold('Customer')}:<br>row 1&nbsp;&amp; row 2"
+
+        with (
+            patch("requests.get", return_value=_response()),
+            patch("crema.api.ask_json", side_effect=frappe.ValidationError(message)),
+            patch("frappe.db.commit"),
+        ):
+            status = automation.run_task(task.name)
+
+        self.assertEqual(status, "Failed")
+        task.reload()
+        self.assertNotIn("<", task.last_error)
+        self.assertNotIn("&amp;", task.last_error)
+        # A tag becomes a space, not nothing: the <br> must not weld "Customer:" to "row".
+        self.assertIn("Could not find Customer : row 1 & row 2", task.last_error)
+
     # --- upsert lookups are permission-fenced --------------------------------
 
     def test_upsert_does_not_match_records_the_isolation_user_cannot_see(self):
@@ -463,6 +484,50 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
             automation.tick()  # must not raise
 
         self.assertNotIn(task.name, {call.kwargs.get("task") for call in enqueue.call_args_list})
+
+    # --- Once trigger --------------------------------------------------------
+
+    @staticmethod
+    def _queued() -> set:
+        with patch("frappe.enqueue") as enqueue:
+            automation.tick()
+        return {call.kwargs.get("task") for call in enqueue.call_args_list}
+
+    def test_tick_enqueues_a_once_task_whose_time_has_passed(self):
+        task = _make_task(trigger="Once", run_at=add_to_date(now_datetime(), hours=-1))
+
+        self.assertIn(task.name, self._queued())
+
+    def test_tick_skips_a_once_task_whose_time_is_still_ahead(self):
+        task = _make_task(trigger="Once", run_at=add_to_date(now_datetime(), hours=1))
+
+        self.assertNotIn(task.name, self._queued())
+
+    def test_a_once_task_fires_exactly_once(self):
+        """run_task stamps last_run before doing any work, so run_at having been overtaken
+        is what says 'already run' — no done-flag of its own."""
+        task = _make_task(trigger="Once", run_at=add_to_date(now_datetime(), hours=-1))
+        task.db_set("last_run", now_datetime())
+
+        self.assertNotIn(task.name, self._queued())
+
+    def test_moving_run_at_forward_re_arms_a_spent_once_task(self):
+        task = _make_task(trigger="Once", run_at=add_to_date(now_datetime(), days=-2))
+        task.db_set("last_run", add_to_date(now_datetime(), days=-2, minutes=1))
+        self.assertNotIn(task.name, self._queued())
+
+        task.db_set("run_at", add_to_date(now_datetime(), minutes=-1))
+
+        self.assertIn(task.name, self._queued())
+
+    def test_next_run_is_empty_once_a_once_task_has_run(self):
+        task = _make_task(trigger="Once", run_at=add_to_date(now_datetime(), hours=-1))
+        self.assertIsNotNone(task.next_run)
+
+        task.db_set("last_run", now_datetime())
+        task.reload()
+
+        self.assertIsNone(task.next_run)
 
     # --- stored plan re-validated on load ------------------------------------
 

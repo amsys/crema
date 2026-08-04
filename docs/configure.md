@@ -197,7 +197,7 @@ to everyone except a System Manager until you grant the `Crema User` role. See
 | `classification` | Classification | Classify or label content | `simple` |
 | `summarization` | Summarization | Concise, accurate summaries | `simple` |
 | `transform` | Transform | Propose a diff for an ERP document | `complex` |
-| `view` | View | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
+| `view` | List Assistant | Turn a prompt into a view, a new record, or an edit/delete for the desk UI | `complex` |
 | `transcribe` | Transcribe | Speech-to-text via `crema.transcribe()` | none — a transcription call cannot fall back to a chat model |
 
 The Crema Automation Task **AI Profile** dropdown offers six of these. It leaves out

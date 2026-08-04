@@ -280,28 +280,56 @@ surfaces appear.
 Open any doctype's list view. A robot button sits between the **Menu** button and
 **Add**.
 
-The button opens a dialog. Type what you want first — a request changes the current
-list view; if you also drop a document below, the same text guides how that document
-is read. The upload area only appears if you may create a `doctype` document; if you
-can't, the dialog offers the request field alone.
+The button opens a dialog. Type what you want first — a request can change the current
+list view, create a record, or update or delete records it can find; if you also drop
+a document below, the same text guides how that document is read. The upload area only
+appears if you may create a `doctype` document; if you can't, the dialog offers the
+request field alone.
 
-- **Type a request.** The system turns it into a filtered List, Report, or Kanban view
-  of the current doctype (`ask_api` with the `view` interface) and switches you to it,
-  with an alert explaining why. The schema sent to the model, and any field name it
-  proposes back, are both filtered down to fields you have at least read access to. A
-  request can also set the sort order ("sorted by name descending"), limit the row
-  count ("show me the top 10"), and group by a field — all applied to the same view.
-  If you name no field, the system prefers one already shown as a column in the
-  current list. A request cannot do two things. It cannot match text
-  case-sensitively — matching is always case-insensitive. And it cannot combine two
-  different fields with OR: the system combines every filter with AND, so "starting
-  with A or B" filters on neither field, and the alert says so instead of guessing.
+A typed request does exactly one of five things. Which one is the model's own call,
+made from the same field schema either way — fields you cannot read never reach the
+model, and fields you cannot write never reach a save.
+
+- **Change the view.** The system turns the request into a filtered List, Report, or
+  Kanban view of the current doctype and switches you to it, with an alert explaining
+  why. A request can also set the sort order ("sorted by name descending"), limit the
+  row count ("show me the top 10"), pick which columns show (Report view only), and
+  group by a field with a count, sum, or average (Report view only). If you name no
+  field, the system prefers one already shown as a column in the current list. A
+  request that switches to Kanban does not carry filters with it — Kanban always
+  opens on the board's own, unfiltered records; ask for a List or Report view for a
+  filtered result. A request cannot match text case-sensitively — matching is always
+  case-insensitive.
+  And it cannot combine two different fields with OR: the system combines every filter
+  with AND, so "starting with A or B" filters on neither field, and the alert says so
+  instead of guessing.
 
   If the filtered view finds no records, the system does one more database query. It
   looks for the same words in every text field you can read, then applies the one
   field that holds them, and an alert tells you which field it used. This is a
   widening of one filter, not an OR: the result shows one field, not two. The system
   does not ask the model a second time.
+- **Create a record.** "Create a company called Acme" opens a new, unsaved form with
+  its fields filled in — nothing is written until you save it yourself. A request
+  naming several new records at once goes through the same **Import N Documents** step
+  the file upload path uses below, and needs the `System Manager` role for the same
+  reason Data Import always does.
+- **Change existing records.** A request can name which records to change and what to
+  change about them — "mark the Acme todo as closed". If it matches one record, the
+  system shows the proposed change first, then opens that record's form with the
+  change already filled in, unsaved, for you to review and save. If it matches more
+  than one, the system asks you to confirm first: a dialog lists every record the
+  request would touch, by name, before anything happens. A request naming no records
+  to change is refused outright — it is never read as "change everything". A request
+  that proposes changing only fields you cannot write is refused too, instead of
+  saving the record unchanged.
+- **Delete records.** Works the same way as changing records: a dialog lists every
+  record the request would delete, by name, before anything is deleted. A request
+  naming no records is refused outright.
+- **None of the above.** A request the system cannot carry out here — exporting,
+  emailing, a question with no view that answers it, a request about a different
+  doctype, several requests at once — gets a plain message saying so, instead of a
+  view that does not answer what you asked.
 - **Drop a document onto the upload area.** The upload area takes one local file, by
   drag-and-drop or by clicking to pick it — there is no file browser, web link, or
   camera option. The system reads it (`extract_api`) and shows a preview — the proposed

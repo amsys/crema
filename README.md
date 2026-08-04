@@ -23,10 +23,10 @@ chatbot on top is explicitly out of scope — see [ROADMAP.md](ROADMAP.md).
 
 ## Quick start
 
-1. **Add a provider.** Open **Crema Settings** (Crema's default landing page), click
-   **New from Template** in the Providers panel, pick a preset, paste your API key,
-   and create — this wizard also sets it as the default provider.
-2. **Set the default model.** Pick a **Default Model** above the Use Cases
+1. **Add a provider.** Open **Providers** — the first item in the Crema sidebar —
+   and click **New from Template**, pick a preset, paste your API key, and create.
+   This wizard also sets it as the default provider.
+2. **Set the default model.** Open **Crema Settings** and pick a **Default Model** above the Use Cases
    grid. A **Default Runs-As User** is already filled in (install creates one for
    you). Save — every interface now works; the grid stays collapsed unless you open a
    row to override one interface's provider, model, or Runs As user individually.

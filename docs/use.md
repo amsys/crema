@@ -144,7 +144,7 @@ def health(interface: str = "simple", *, live: bool = True) -> dict
 def is_configured(interface: str = "simple") -> bool
 ```
 
-`check_provider` (the Crema Settings Providers panel's live check) is
+`check_provider` (the Providers list's live Connection check) is
 `only_for("System Manager")`, so nothing below that role can render its own health
 badge from it — that's what these two are for. Neither is `@frappe.whitelist()`'d and
 neither applies a role check of its own; call them in-process from behind whatever
@@ -231,7 +231,8 @@ All System Manager only, all `POST /api/method/<name>`:
 |---|---|
 | `crema.api.get_interfaces` | Value/label pairs for the AI Profile dropdown on Crema Automation Task, one per selectable interface. `Security`, `Advanced OCR`, `View` and `Transform` are not included — a task must never run as any of them. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
 | `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
-| `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers panel's Connection badge. |
+| `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers list's Connection badge. |
+| `crema.api.grant_crema_role` | Adds the `Crema User` role to a user. System Manager only. |
 | `crema.api.get_usage` | Month-to-date spend and budget per interface and per provider. Feeds the Usage column. |
 | `crema.api.run_automation_now` | Enqueue one automation task run. Backs the Run Now button — see [automation.md](automation.md). |
 

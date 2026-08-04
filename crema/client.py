@@ -261,6 +261,26 @@ def _record_trap_miss(reason: str) -> None:
     frappe.local.crema_trap = reason
 
 
+def _record_transcript(msgs: list[dict], content: str) -> None:
+    """On a developer_mode site only, stash one provider round trip onto frappe.local so
+    crema.log.insert can attach it to the Crema Log row as a comment.
+
+    Request-local and drained on every logged row, exactly like _record_usage's
+    crema_usage and _record_trap_miss's crema_trap. A list, not a scalar: one logged row
+    can bill several round trips (an escalated OCR call, a trap retry), and all of them
+    belong on it.
+
+    This is the one place Crema keeps prompt text, and it is why the guard is
+    frappe.conf.developer_mode — a production site never reaches the append, so the
+    drain finds nothing and log.insert behaves as it always has. See docs/security.md.
+    """
+    if not frappe.conf.developer_mode:
+        return
+    if getattr(frappe.local, "crema_transcript", None) is None:
+        frappe.local.crema_transcript = []
+    frappe.local.crema_transcript.append({"messages": msgs, "response": content})
+
+
 def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
     """The only place a provider is actually called."""
     import litellm
@@ -282,7 +302,9 @@ def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict |
 
         response = litellm.completion(**kwargs)
         _record_usage(response)
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        _record_transcript(msgs, content)
+        return content
 
     trap = cfg.get("output_trap") or "Off"
     if trap == "Off":

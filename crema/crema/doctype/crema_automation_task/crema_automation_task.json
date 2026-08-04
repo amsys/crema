@@ -51,7 +51,6 @@
   {
    "fieldname": "task_name",
    "fieldtype": "Data",
-   "in_list_view": 1,
    "label": "Task Name",
    "reqd": 1,
    "unique": 1
@@ -60,7 +59,6 @@
    "default": "0",
    "fieldname": "enabled",
    "fieldtype": "Check",
-   "in_list_view": 1,
    "label": "Enabled"
   },
   {
@@ -270,7 +268,6 @@
   {
    "fieldname": "last_status",
    "fieldtype": "Select",
-   "in_list_view": 1,
    "label": "Last Status",
    "options": "\nSuccess\nReplanned\nFailed",
    "read_only": 1
@@ -325,5 +322,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
+ "title_field": "task_name",
  "track_changes": 1
 }

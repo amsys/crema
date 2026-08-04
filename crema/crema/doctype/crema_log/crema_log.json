@@ -6,7 +6,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "interface",
+  "interface_label",
   "user",
   "column_break_log",
   "status",
@@ -16,6 +16,7 @@
   "column_break_usage",
   "cost_usd",
   "section_diag",
+  "interface",
   "model",
   "provider",
   "prompt_sha",
@@ -27,7 +28,7 @@
  ],
  "fields": [
   {
-   "fieldname": "interface",
+   "fieldname": "interface_label",
    "fieldtype": "Data",
    "in_standard_filter": 1,
    "label": "Use Case",
@@ -49,7 +50,6 @@
   {
    "fieldname": "status",
    "fieldtype": "Select",
-   "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Success\nCached\nBlocked\nError",
@@ -71,6 +71,7 @@
   {
    "fieldname": "total_tokens",
    "fieldtype": "Int",
+   "in_list_view": 1,
    "label": "Total Tokens",
    "read_only": 1,
    "description": "How much text was handled, counted the way AI services bill it."
@@ -94,6 +95,13 @@
    "fieldname": "section_diag",
    "fieldtype": "Section Break",
    "label": "Details"
+  },
+  {
+   "description": "The internal name of the use case. Reports and spending limits group on this, so it stays as it is even when the label changes.",
+   "fieldname": "interface",
+   "fieldtype": "Data",
+   "label": "Use Case Key",
+   "read_only": 1
   },
   {
    "fieldname": "model",
@@ -165,6 +173,6 @@
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "title_field": "interface",
+ "title_field": "interface_label",
  "track_changes": 0
 }

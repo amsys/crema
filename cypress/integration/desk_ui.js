@@ -581,8 +581,43 @@ context("Crema Settings", () => {
 		});
 	});
 
-	it("shows a Providers panel with a New from Template action", () => {
-		cy.contains("Providers").should("be.visible");
+	// Providers are the Crema Provider list view now, not a panel on this form, and the
+	// sidebar lists Providers above Settings — so the form carries no link of its own.
+	// The one case it does interrupt for is having no enabled provider at all, since
+	// nothing here resolves without one.
+	it("does not link out to the provider list", () => {
+		cy.contains("button", /^AI Services$/).should("not.exist");
+	});
+
+	// Stubbed rather than acted out: the alternative is disabling every provider on the
+	// site mid-suite, and the count call is the only input the warning reads.
+	it("warns when no provider is switched on", () => {
+		cy.intercept("POST", "/api/method/frappe.desk.reportview.get_count", {
+			body: { message: 0 },
+		});
+		cy.visit("/app/crema-settings");
+		cy.contains("No AI service is switched on").should("be.visible");
+		cy.contains("button", "Add an AI Service").should("be.visible");
+	});
+});
+
+describe("Crema Provider list", () => {
+	before(() => {
+		cy.login();
+	});
+
+	beforeEach(() => {
+		cy.visit("/app/crema-provider");
+	});
+
+	it("keeps the New from Template action", () => {
 		cy.contains("button", "New from Template").should("be.visible");
+	});
+
+	// Connection and Usage are painted by listview_settings formatters after one
+	// prefetch-then-refresh pass (crema_provider_list.js) — the columns themselves are
+	// ordinary list columns, so the headers must be there whether or not a provider exists.
+	it("shows the Address and Monthly Budget columns the formatters paint into", () => {
+		cy.get(".list-row-head").contains("Address").should("exist");
 	});
 });

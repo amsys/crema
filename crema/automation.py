@@ -135,9 +135,21 @@ def tick() -> None:
 
 
 def cleanup_logs() -> None:
-    """Daily: drop Crema Log rows older than Crema Settings.log_retention_days."""
+    """Daily: drop Crema Log rows older than Crema Settings.log_retention_days.
+
+    frappe.db.delete is a raw DELETE and does not cascade the way frappe.delete_doc does,
+    so the row's comments have to go too. That matters beyond tidiness: on a
+    developer_mode site those comments hold the full prompt and response text
+    (log._attach_transcript), and left behind they would outlive the row that justified
+    them — and grow without limit.
+    """
     retention_days = frappe.db.get_single_value("Crema Settings", "log_retention_days") or _LOG_RETENTION_DAYS
-    frappe.db.delete("Crema Log", {"creation": ("<", add_days(now_datetime(), -retention_days))})
+    cutoff = add_days(now_datetime(), -retention_days)
+    stale = frappe.get_all("Crema Log", filters={"creation": ("<", cutoff)}, pluck="name")
+    if not stale:
+        return
+    frappe.db.delete("Comment", {"reference_doctype": "Crema Log", "reference_name": ("in", stale)})
+    frappe.db.delete("Crema Log", {"name": ("in", stale)})
 
 
 def enqueue_task(

@@ -1,20 +1,28 @@
-"""Crema Usage — calls/tokens/cost aggregated from Crema Log, grouped by interface,
-model, user, or day. Built for ROADMAP.md's "Usage/cost dashboards ... built on
-Crema Log" item.
+"""Crema Usage — calls/tokens/cost aggregated from Crema Log, grouped by use case,
+AI service, model, user, or day. Built for ROADMAP.md's "Usage/cost dashboards ... built
+on Crema Log" item.
 
 `group_by` is user input that reaches a raw SQL GROUP BY clause — mapped through
-_GROUP_BY_FIELD, a fixed whitelist, and rejected outright if it's not one of the four
-known keys. Never interpolate the raw filter value into SQL.
+_GROUP_BY_FIELD, a fixed whitelist, and rejected outright if it's not one of the known
+keys. Never interpolate the raw filter value into SQL.
+
+The filters themselves live in crema_usage.js, not in crema_usage.json — see the comment
+at the top of that file.
 """
 
 from __future__ import annotations
 
 import frappe
+from crema import interfaces
 from frappe import _
 from frappe.utils import flt
 
+# Keys are the desk labels the picker shows. "Interface" is kept as a hidden alias so a
+# filter a user saved before the relabel still resolves instead of throwing at them.
 _GROUP_BY_FIELD = {
+    "Use Case": "interface",
     "Interface": "interface",
+    "AI Service": "provider",
     "Model": "model",
     "User": "user",
     "Day": "DATE(creation)",
@@ -23,14 +31,14 @@ _GROUP_BY_FIELD = {
 
 def execute(filters: dict | None = None):
     filters = filters or {}
-    group_by = filters.get("group_by") or "Interface"
+    group_by = filters.get("group_by") or "Use Case"
     if group_by not in _GROUP_BY_FIELD:
         frappe.throw(_("Invalid group_by '{0}'").format(group_by))
     group_field = _GROUP_BY_FIELD[group_by]
 
     where, values = _where(filters)
     # group_field is never user input: group_by is rejected above unless it is one of
-    # _GROUP_BY_FIELD's four keys, and only the mapped value reaches the query.
+    # _GROUP_BY_FIELD's known keys, and only the mapped value reaches the query.
     rows = frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
         f"""
         SELECT
@@ -52,8 +60,16 @@ def execute(filters: dict | None = None):
         as_dict=True,
     )
 
+    # Grouping on `interface` groups on the stored key, which is right — but the key is
+    # not what the desk calls it anywhere else, so relabel for display only.
+    label = interfaces.LABELS.get if group_field == "interface" else None
     data = [
-        {**row, "cost_usd": flt(row.cost_usd, 6), "avg_duration_ms": flt(row.avg_duration_ms, 0)}
+        {
+            **row,
+            "group_value": label(row.group_value, row.group_value) if label else row.group_value,
+            "cost_usd": flt(row.cost_usd, 6),
+            "avg_duration_ms": flt(row.avg_duration_ms, 0),
+        }
         for row in rows
     ]
     chart = {
@@ -76,8 +92,13 @@ def _where(filters: dict) -> tuple[str, dict]:
         clauses.append("creation <= %(to_date)s")
         values["to_date"] = filters["to_date"]
     if filters.get("interface"):
-        clauses.append("interface = %(interface)s")
+        # The table shows labels ("Default"), so typing what you see has to work; the
+        # internal key ("simple") still does too. Both are stored columns.
+        clauses.append("(interface = %(interface)s or interface_label = %(interface)s)")
         values["interface"] = filters["interface"]
+    if filters.get("provider"):
+        clauses.append("provider = %(provider)s")
+        values["provider"] = filters["provider"]
     if filters.get("status"):
         clauses.append("status = %(status)s")
         values["status"] = filters["status"]

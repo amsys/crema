@@ -24,12 +24,22 @@ class IntegrationTestCremaUsageReport(IntegrationTestCase):
         with self.assertRaises(frappe.ValidationError):
             execute({"group_by": "1; DROP TABLE `tabCrema Log`; --"})
 
-    def test_default_group_by_is_interface(self):
+    def test_default_group_by_is_the_use_case(self):
         columns, data, message, chart = execute({})
-        self.assertEqual(columns[0]["label"], "Interface")
+        self.assertEqual(columns[0]["label"], "Use Case")
         self.assertIsInstance(data, list)
         self.assertIsNone(message)
         self.assertEqual(chart["type"], "bar")
+
+    def test_the_old_interface_group_by_still_resolves(self):
+        """ "Interface" was the picker's label before the desk relabel. A filter a user
+        saved back then must not start throwing at them."""
+        columns, *_rest = execute({"group_by": "Interface"})
+        self.assertEqual(columns[0]["label"], "Interface")
+
+    def test_group_by_provider_uses_the_provider_field(self):
+        columns, *_rest = execute({"group_by": "AI Service"})
+        self.assertEqual(columns[0]["label"], "AI Service")
 
     def test_group_by_day_uses_the_date_function(self):
         columns, *_rest = execute({"group_by": "Day"})

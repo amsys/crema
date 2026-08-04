@@ -4,17 +4,17 @@ Configure two things before you call Crema: a provider and an interface. A provi
 holds a connection to an LLM API. An interface binds a provider, a model, and a
 security setting to one named use-case.
 
-Do both from **Crema Settings** — the page Crema opens to by default from the
-Framework app switcher, and reachable any time from the Crema workspace sidebar. It
-holds an **AI Services** panel and a **Use Cases** grid.
+Add the provider first. **Providers** is a list of its own, first in the Crema
+workspace sidebar. Interfaces live on **Crema Settings**, below it in the same
+sidebar: the defaults and a **Use Cases** grid. Crema Settings tells you when no
+provider is switched on, because nothing on that page can work until one is.
 
 ## Procedure A — add a provider
 
 Caution: the system refuses to enable a provider with no API key, unless the base URL
 is a local or private address (for example, a local Ollama server).
 
-1. In the **AI Services** panel, click **New from Template**. The same button is also on
-   the **Crema Provider** list view.
+1. Open the **Providers** list and click **New from Template**.
 2. Pick a preset: OpenAI, OpenRouter, Groq, Mistral, DeepSeek, or Ollama. The system
    fills in the provider name and base URL. The provider name must be unique — change
    it when you add a second key for the same vendor.
@@ -23,7 +23,7 @@ is a local or private address (for example, a local Ollama server).
    already have a default and are only adding a second provider.
 5. Click **Create**.
 
-Every enabled provider in the panel shows a live **Connection** status next to
+Every enabled provider in the list shows a live **Connection** status next to
 Enabled/Disabled — green with a model count on success, red with the error otherwise
 (unauthorized, timeout, unreachable host). The page checks it fresh on every load,
 with no cache, so a revoked key shows red immediately.

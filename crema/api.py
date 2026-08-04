@@ -693,12 +693,25 @@ def get_models(provider: str) -> list[str]:
 
 @frappe.whitelist()
 def check_provider(provider: str) -> dict[str, Any]:
-    """Live connection status for the Providers panel on Crema Settings.
+    """Live connection status for the Connection column on the Crema Provider list.
     {"ok": bool, "detail": str} — see client.check_connection. Deliberately not
     cached, unlike get_models/list_models: a stale "Connected" pill after a key was
     revoked is worse than one extra request per page load."""
     frappe.only_for("System Manager")
     return client.check_connection(provider)
+
+
+@frappe.whitelist()
+def grant_crema_role(user: str | None = None) -> str:
+    """Add the "Crema User" role to `user` (the caller by default).
+
+    The one-click fix behind the notice on Crema Settings for an admin who cannot see the
+    Ask Crema button. System Manager only, because handing out a role is exactly the kind
+    of thing a Crema User must not be able to do for themselves."""
+    frappe.only_for("System Manager")
+    user = user or frappe.session.user
+    frappe.get_doc("User", user).add_roles("Crema User")
+    return user
 
 
 @frappe.whitelist()

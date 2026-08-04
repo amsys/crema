@@ -69,7 +69,7 @@
   },
   {
    "default": "[]",
-   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "depends_on": "eval:doc.source_type==\"Document Query\" && doc.source_doctype",
    "description": "Narrow down which records to read. Click the table to change them. You set these — the AI never adds a filter of its own.",
    "fieldname": "source_filters",
    "fieldtype": "Code",

@@ -599,6 +599,13 @@ context("Crema Settings", () => {
 		cy.contains("No AI service is switched on").should("be.visible");
 		cy.contains("button", "Add an AI Service").should("be.visible");
 	});
+
+	// Administrator holds System Manager but not Crema User, so this exercises the
+	// yellow branch and its one-click grant button.
+	it("tells a non-Crema-User System Manager they lack the role, with a grant button", () => {
+		cy.contains("You do not have the Crema User role").should("be.visible");
+		cy.contains("button", "Give Me the Crema User Role").should("be.visible");
+	});
 });
 
 describe("Crema Provider list", () => {

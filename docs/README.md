@@ -7,7 +7,7 @@ doctype fields are stable. A change that breaks them will come with a migration 
 
 | Page | Audience | Question it answers |
 |---|---|---|
-| [install.md](install.md) | admin | How do I install the app on a site? |
+| [install.md](install.md) | admin | How do I install the app on a site, and who can use it? |
 | [configure.md](configure.md) | admin | How do I add a provider and an interface? |
 | [use.md](use.md) | developer, user | How do I call Crema from Python or HTTP, and how does the desk UI work? |
 | [automation.md](automation.md) | admin | How do I schedule a fetch-and-extract task? |

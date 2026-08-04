@@ -27,8 +27,16 @@ virtual environment sets it automatically when you activate it.
 
 The install step creates one role: **Crema User**. The role has Desk access. A user
 with this role can open Desk and use the Crema desk UI — the robot button on a list
-view, and `Ask …` in the search bar — alongside System Managers. Give the role to any
-user who calls Crema, through the desk UI or through the HTTP endpoints.
+view, the robot button on a form, and `Ask …` in the search bar — alongside System
+Managers. Give the role to any user who calls Crema, through the desk UI or through the
+HTTP endpoints.
+
+A user without the role sees no robot button and no `Ask …` option — Crema does not
+appear in the desk at all, with nothing to say a role is missing. To grant it, open the
+user's **User** record, go to the **Roles** tab, and check **Crema User**. A System
+Manager granting the role to themselves can instead click **Give Me the Crema User
+Role** on **Crema Settings**. Either way, the user must reload Desk before the robot
+button appears.
 
 The install step also seeds one **Crema Model Assignment** row per interface name
 onto **Crema Settings**, with no provider assigned yet. The row set is not fixed: it

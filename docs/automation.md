@@ -30,7 +30,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `read_webhook_payload` | Check | Label **Use Webhook Data**. On by default. For a Webhook trigger. Reads what the caller sends as one more source. |
 | `sources` | Table (Crema Automation Source) | Label **Sources**. Required, except for a Webhook task that uses webhook data. One row per thing this task reads. See the field list below. |
 | `on_source_error` | Check | Label **Stop if a Source Fails**. Off by default. Shown when a task has more than one source. |
-| `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Security`, `Advanced OCR`, `View` and `Transform` are not offered — a task must never run as any of them. |
+| `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Security`, `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not offered — a task must never run as any of them. |
 | `run_as` | Link (User) | Label **Runs As**. The account this task acts as. Empty uses the account set for the AI profile. Not `Administrator`, not a System Manager, not a disabled user. |
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
 | `action` | Select | `Create or Update Records`, `Update the Records It Read`, or `No Changes`. |

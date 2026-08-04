@@ -23,24 +23,22 @@ from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigErr
 from frappe import _
 from frappe.rate_limiter import rate_limit
 
+# Exactly the programmer surface crema/__init__.py re-exports, plus the three exceptions.
+# The whitelisted endpoints below are deliberately absent: they are addressed by dotted
+# path over HTTP, so naming them here buys them nothing.
 __all__ = [
     "CremaBlockedError",
     "CremaBudgetError",
     "CremaConfigError",
     "ask",
-    "ask_api",
     "ask_json",
+    "configure",
     "extract",
-    "extract_api",
-    "get_interfaces",
-    "get_models",
-    "get_usage",
     "health",
     "is_configured",
     "ocr",
     "transcribe",
     "transform",
-    "transform_api",
 ]
 
 _USER_RL_LIMIT = 60
@@ -113,19 +111,18 @@ def _scan_context(context: str | None, history: list[dict] | None) -> str | None
 
 
 def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
-    """Permission-checked (as the isolation user) content parts for vision models.
+    """Permission-checked (as the calling user) content parts for vision models.
 
-    A `str` is a Frappe File URL, permission-checked via file_doc.check_permission
-    before its content is read. A `(bytes, mime)` tuple is content the caller already
-    read under its own permission check — e.g. a bare image with no Frappe File behind
-    it at all (a bot photo) — and is prepped as-is, no re-check possible or needed.
+    A `str` is a Frappe File URL — permission-checked via _ocr_impl._load_bytes, the
+    same fence ocr()/extract()/transcribe() apply, before its content is read. A
+    `(bytes, mime)` tuple is content the caller already read under its own permission
+    check — e.g. a bare image with no Frappe File behind it at all (a bot photo) — and
+    is prepped as-is, no re-check possible or needed.
 
     Delegates to crema._ocr.prep_parts, which routes PDFs through the same text-vs-scan
     detection ocr() uses (extracted text for text PDFs, rendered page images for
     scanned ones) and downscales plain images. Anything else is dropped.
     """
-    import mimetypes
-
     parts: list[dict] = []
     for f in files:
         if isinstance(f, tuple):
@@ -134,14 +131,10 @@ def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
             continue
 
         try:
-            file_doc = frappe.get_doc("File", {"file_url": f})
-            file_doc.check_permission("read")
-            content = file_doc.get_content()
+            content, mime = _ocr_impl._load_bytes(f)
         except Exception:
             continue
 
-        content = content if isinstance(content, bytes) else content.encode()
-        mime = mimetypes.guess_type(file_doc.file_name or f)[0] or ""
         parts.extend(_ocr_impl.prep_parts(content, mime))
     return parts
 
@@ -230,7 +223,13 @@ class _Ask:
                 _log(cfg, "Blocked", reason, prompt_sha=prompt_sha)
                 raise CremaBlockedError(reason)
 
-        if cfg["cache_ttl"]:
+        # A call carrying files is never cached, read or write: _prompt_hash cannot see
+        # the file bytes (it doubles as the audit log's prompt_sha, and a File URL's
+        # content can change under an unchanged URL), so two calls with the same prompt
+        # and different files would otherwise collide on one cache entry.
+        cacheable = bool(cfg["cache_ttl"]) and not files
+
+        if cacheable:
             cached = frappe.cache.get_value(cache.response_key(prompt_sha))
             if cached is not None:
                 # Served with no provider call — logged as its own status, not
@@ -285,6 +284,14 @@ class _Ask:
         try:
             with sandbox.isolation(cfg["isolation_user"]):
                 file_parts = _resolve_files(files) if files else []
+                if file_parts and cfg["enable_prompt_scan"]:
+                    # A text PDF's extracted text only exists here, after layer 1 already
+                    # ran on prompt/context. Scan it so the same bytes block on this path
+                    # as on extract()'s, which hands the read text to layer 1 via
+                    # context=. Image parts hold no text to scan.
+                    reason = security.scan("\n".join(p["text"] for p in file_parts if p["type"] == "text"))
+                    if reason:
+                        raise CremaBlockedError(reason)
                 if file_parts:
                     messages[-1] = {
                         "role": "user",
@@ -292,10 +299,11 @@ class _Ask:
                     }
                 result = client._complete(cfg, messages, response_format)
         except CremaBlockedError as exc:
-            # client._complete's layer-3 output trap (an "output_trap: Block" or
-            # "Retry Once" miss) raises this. Logged as Blocked, not Error, so a trap
-            # hit is distinguishable from a provider failure in the audit log — that
-            # distinction is what makes the trap's false-positive rate measurable.
+            # Two raisers: client._complete's layer-3 output trap (an "output_trap:
+            # Block" or "Retry Once" miss), and the layer-1 scan over a file's extracted
+            # text just above. Logged as Blocked, not Error, so either is distinguishable
+            # from a provider failure in the audit log — that distinction is what makes
+            # the trap's false-positive rate measurable.
             _log(
                 cfg,
                 "Blocked",
@@ -318,7 +326,7 @@ class _Ask:
             raise
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        if cfg["cache_ttl"]:
+        if cacheable:
             frappe.cache.set_value(cache.response_key(prompt_sha), result, expires_in_sec=cfg["cache_ttl"])
 
         _log(cfg, "Success", None, prompt_sha=prompt_sha, duration_ms=duration_ms)
@@ -465,15 +473,16 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, A
     those layers scan text a caller supplies, and there is none here before the
     provider call happens. Every call is still logged to Crema Log and
     budget-checked, same as ask()/ocr(); reuses _ocr_impl._load_bytes for the
-    File URL / raw-bytes read rather than duplicating it — which means it shares
-    _load_bytes' known private-file permission gap (see docs/security.md).
+    File URL / raw-bytes read rather than duplicating it — which means a File URL is
+    permission-checked as the calling (session) user, same as ocr() (see
+    docs/security.md).
     """
     cfg = client._resolve("transcribe")
 
     prompt_sha = None
     start = time.monotonic()
     try:
-        content, mime = _ocr_impl._load_bytes(file, cfg["isolation_user"])
+        content, mime = _ocr_impl._load_bytes(file)
         prompt_sha = hashlib.sha256(content).hexdigest()
         _log_mod.check_budget(cfg)
         # Whisper-style endpoints commonly derive the audio format from the multipart
@@ -556,6 +565,58 @@ def health(interface: str = "simple", *, live: bool = True) -> dict[str, Any]:
     return result
 
 
+def configure(
+    interface: str,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    monthly_budget_usd: float | None = None,
+) -> dict[str, Any]:
+    """Set an interface's model/provider/monthly_budget_usd on its Crema Model
+    Assignment row, in-process. The supported alternative to a migration hand-rolling
+    `settings.save()` for its reconcile side effect, then walking `settings.assignments`
+    by fieldname (see PLAN.md item 9).
+
+    Raises CremaConfigError if `interface` isn't in interfaces.names(). A row missing
+    entirely (a brand-new PREDEFINED or app-registered name never saved before) is
+    created first, via the same reconcile every Crema Settings save already runs.
+    Every kwarg left at its default (None) is left untouched on the row — this is not a
+    replace, only the named fields are written. Idempotent: calling it again with the
+    same arguments changes nothing.
+
+    Only these three fields: everything else on a Crema Model Assignment row (the
+    security flags, the system prompt, output_trap, ...) is intentionally left a desk
+    edit, not a second code-side surface over the same settings.
+
+    Deliberately NOT @frappe.whitelist()'d, like health() — an admin/migration
+    affordance, and Crema Settings is already System-Manager-gated in the desk. Setting
+    `provider` with no isolation user anywhere (row or Crema Settings' Default
+    Isolation User) still raises from CremaSettings.validate — that fence is
+    unchanged, and this function does not attempt to set an isolation user.
+
+    Returns health(interface, live=False) — the resolved config after the write, or
+    {"configured": False, ...} if the interface still doesn't resolve to a usable
+    provider (e.g. model set before any provider exists)."""
+    if interface not in interfaces.names():
+        raise CremaConfigError(f"'{interface}' is not a known interface name.")
+
+    settings = frappe.get_single("Crema Settings")
+    if not any(row.interface == interface for row in settings.assignments):
+        settings.save()
+        settings = frappe.get_single("Crema Settings")
+
+    row = next(row for row in settings.assignments if row.interface == interface)
+    if model is not None:
+        row.model = model
+    if provider is not None:
+        row.provider = provider
+    if monthly_budget_usd is not None:
+        row.monthly_budget_usd = monthly_budget_usd
+    settings.save()
+
+    return health(interface, live=False)
+
+
 def is_configured(interface: str = "simple") -> bool:
     """Cheap, no-network check: does `interface` resolve to a usable (configured,
     enabled-provider) config at all? health(interface, live=False)["configured"]."""
@@ -629,7 +690,9 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
     """
     frappe.only_for(("System Manager", "Crema User"))
     if interface in interfaces.INTERNAL:
-        frappe.throw(f"'{interface}' is an internal crema interface and cannot be called over HTTP")
+        frappe.throw(
+            _("'{0}' is an internal crema interface and cannot be called over HTTP").format(interface)
+        )
     _check_user_rate_limit()
 
     kw = {"response_format": {"type": "json_object"}} if response_json else {}
@@ -694,7 +757,9 @@ def get_models(provider: str) -> list[str]:
 @frappe.whitelist()
 def check_provider(provider: str) -> dict[str, Any]:
     """Live connection status for the Connection column on the Crema Provider list.
-    {"ok": bool, "detail": str} — see client.check_connection. Deliberately not
+    {"ok": bool, "reachable": bool, "detail": str} — see client.check_connection.
+    "reachable" separates an endpoint that could not be reached at all from one that
+    answered but rejected or errored; health() reports all three. Deliberately not
     cached, unlike get_models/list_models: a stale "Connected" pill after a key was
     revoked is worse than one extra request per page load."""
     frappe.only_for("System Manager")
@@ -758,7 +823,7 @@ def run_automation_now(task: str) -> str:
     manual path is byte-identical to the scheduled one. Returns the job id."""
     frappe.only_for("System Manager")
     if not frappe.db.exists("Crema Automation Task", task):
-        frappe.throw(f"No Crema Automation Task named '{task}'")
+        frappe.throw(_("No Crema Automation Task named '{0}'").format(task))
 
     from crema import automation
 
@@ -806,7 +871,7 @@ def dry_run_automation(task: str) -> dict:
     """
     frappe.only_for("System Manager")
     if not frappe.db.exists("Crema Automation Task", task):
-        frappe.throw(f"No Crema Automation Task named '{task}'")
+        frappe.throw(_("No Crema Automation Task named '{0}'").format(task))
 
     from crema import automation
 

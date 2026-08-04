@@ -630,9 +630,9 @@ def _read_attachments(doctype: str, rows: list) -> tuple[str, str]:
 
     frappe.get_list, not frappe.desk.form.load.get_attachments: that helper uses get_all,
     which ignores permissions, and everything inside sandbox.isolation goes through the
-    permission engine. Note the separate, already-documented limit that _ocr._load_bytes
-    reads a File's bytes off disk without its own permission check — this listing is the
-    fence, so it must be the permission-aware one.
+    permission engine. api.ocr -> _ocr._load_bytes now also checks the File document
+    itself as the calling (isolation) user, so a File attached to a record this listing
+    could see is checked twice, not zero times.
     """
     blocks, failures = [], []
     for row in rows:

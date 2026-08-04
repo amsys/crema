@@ -19,11 +19,14 @@ import pymupdf
 from PIL import Image as PILImage
 
 import frappe
-from crema import cache, interfaces
+from crema import cache, interfaces, testing
 from frappe.tests import IntegrationTestCase
 
-TEST_PROVIDER = "_Test Crema Provider"
-TEST_ISOLATION_USER = "_test_crema_isolation@example.com"
+# Defined in crema.testing, the supported bootstrap a consuming app's own test suite
+# imports — re-exported under these names here so the rest of this module (and every
+# test_*.py that imports them) didn't need to change.
+TEST_PROVIDER = testing.DEFAULT_PROVIDER
+TEST_ISOLATION_USER = testing.DEFAULT_ISOLATION_USER
 TEST_SANDBOX_USER = "_test_crema_sandbox_user@example.com"
 TEST_SANDBOX_VICTIM = "_test_crema_sandbox_victim@example.com"
 TEST_PLAIN_USER = "_test_crema_plain_user@example.com"
@@ -150,16 +153,15 @@ def _ensure_user(email: str, roles: list[str] | None = None) -> str:
 
 
 def _ensure_provider() -> str:
+    """The row shape lives in crema.testing.seed_provider now — this only adds this
+    suite's own fixture-tracking on top, and never touches Crema Settings' defaults
+    itself (set_defaults=False): several classes in this suite test the "not
+    configured" state via _clear_defaults(), which a seeded default would fight."""
     if frappe.db.exists("Crema Provider", TEST_PROVIDER):
         return TEST_PROVIDER
-    doc = frappe.new_doc("Crema Provider")
-    doc.provider_name = TEST_PROVIDER
-    doc.base_url = "http://localhost:11434/v1"  # local/private -> no api_key required
-    doc.enabled = 1
-    doc.timeout_seconds = 5
-    doc.insert(ignore_permissions=True)
-    _CREATED.append(("Crema Provider", doc.name))
-    return doc.name
+    testing.seed_provider(TEST_PROVIDER, set_defaults=False)
+    _CREATED.append(("Crema Provider", TEST_PROVIDER))
+    return TEST_PROVIDER
 
 
 _ASSIGNMENT_FIXTURE_FIELDS = (
@@ -251,10 +253,13 @@ def _assignment_row_name(interface: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _text_pdf_bytes() -> bytes:
+def _text_pdf_bytes(text: str = "Hello world. " * 20) -> bytes:
+    """A PDF whose text layer is `text`. The default is well over _TEXT_PDF_MIN_CHARS,
+    so prep_parts() treats it as a text PDF rather than a scanned one; a caller passing
+    its own text has to keep it that long too."""
     doc = pymupdf.open()
     page = doc.new_page()
-    page.insert_text((72, 72), "Hello world. " * 20)  # well over _TEXT_PDF_MIN_CHARS
+    page.insert_text((72, 72), text)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

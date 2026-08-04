@@ -15,7 +15,7 @@ import pymupdf
 from PIL import Image as PILImage
 
 import frappe
-from crema import _ocr, cache
+from crema import _ocr, cache, sandbox
 from crema._json import strip_fence
 from crema.api import ocr
 from crema.test_fixtures import (
@@ -306,9 +306,9 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
         self.assertEqual(mock_complete.call_count, 2)
         self.assertEqual(result, {"text": "blurry", "confidence": 0.3, "escalated": True})
 
-    # --- str input is a File URL, resolved inside the isolation user's sandbox --------
+    # --- str input is a File URL, permission-checked as the calling user -------------
 
-    def test_file_url_input_reads_via_file_manager(self):
+    def test_file_url_input_reads_the_file_document(self):
         file_doc = frappe.get_doc(
             {
                 "doctype": "File",
@@ -323,16 +323,13 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
 
         self.assertEqual(result["text"], "Hello world.")
 
-    def test_private_file_url_content_is_read_regardless_of_isolation_user_permission(self):
-        """Pins a discovered gap, not intended behavior: _load_bytes calls
-        frappe.utils.file_manager.get_file(), which resolves the path with a bare DB
-        query and reads it straight off disk — it never calls check_permission(), unlike
-        api._resolve_files's ask(files=[...]) path, which does (see IntegrationTestCremaFiles
-        in test_client.py). So a private File's bytes are read here regardless of whether
-        the isolation user could actually read that File document. Flagged, not fixed in
-        this pass — same "known accepted risk" treatment as the automation._fetch SSRF
-        gap in CLAUDE.md, but arguably more sensitive since it contradicts _load_bytes's
-        own docstring claim that "private-file permissions apply" inside the sandbox."""
+    def test_a_private_file_the_isolation_user_cannot_read_is_refused(self):
+        """_ocr._load_bytes permission-checks the File document as the calling user —
+        inside sandbox.isolation, that's the isolation user, the same shape
+        api._resolve_files's ask(files=[...]) path already used (see
+        IntegrationTestCremaFiles in test_client.py). A private File owned by
+        Administrator, with no share and no attached_to, is unreadable to the plain
+        TEST_ISOLATION_USER account, so the call must refuse rather than read it."""
         file_doc = frappe.get_doc(
             {
                 "doctype": "File",
@@ -342,10 +339,25 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
             }
         ).insert(ignore_permissions=True)
 
-        with patch("crema.client._complete", return_value='{"text": "Hello world.", "confidence": 0.95}'):
-            result = ocr(file_doc.file_url)
+        with patch("crema.client._complete") as mock_complete:
+            with self.assertRaises(frappe.PermissionError):
+                with sandbox.isolation(TEST_ISOLATION_USER):
+                    ocr(file_doc.file_url)
+        mock_complete.assert_not_called()
 
-        self.assertEqual(result["text"], "Hello world.")
+        log = frappe.get_last_doc(
+            "Crema Log", filters={"interface": "ocr", "status": "Error", "provider": TEST_PROVIDER}
+        )
+        self.assertIn("PermissionError", log.detail)
+
+    def test_a_file_url_naming_no_file_document_is_refused_not_read_off_disk(self):
+        """Before the fix, an unmatched string fell through to get_file_path() and read
+        whatever path it constructed straight off disk. A File-shaped string with no
+        matching File row must now raise instead."""
+        with patch("crema.client._complete") as mock_complete:
+            with self.assertRaises(frappe.DoesNotExistError):
+                ocr("/private/files/_test_crema_no_such_file.pdf")
+        mock_complete.assert_not_called()
 
     # --- instruction reaches the OCR prompt -------------------------------------------
 

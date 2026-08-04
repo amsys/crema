@@ -23,6 +23,10 @@ The scan is a local regex and unicode check. It runs before any network call. It
 reads the prompt, the context, and any `history` turns together, because an attack
 can split its wording across the fields.
 
+The scan also reads the text that `ask(files=[...])` gets out of a file. This text only
+exists after the file is read, so the scan runs a second time on it, just before the
+call to the provider. A file that gives an image gives no text to scan.
+
 First the scan checks the raw text for invisible, bidirectional, and control
 characters — a soft hyphen or a right-to-left override blocks on its own. Then it
 makes the text canonical in four steps, and matches the canonical text against the
@@ -101,9 +105,14 @@ non-adversarial replies, step that interface down to `Log Only` — the Crema Lo
 Every document read or write inside a call runs as that interface's isolation user —
 the **Runs As** field in the desk.
 Frappe's own permission engine — roles and User Permissions — checks each access.
-Crema adds almost no permission logic of its own on top. The one addition is
-`ask(files=[...])`'s explicit read check on each File URL; the one gap is the
-private-file read described under [Known limits](#known-limits).
+Crema adds almost no permission logic of its own on top. The one addition is an
+explicit read check on each File URL a caller names — `ask(files=[...])`, `ocr()`,
+`extract()`, and `transcribe()` all resolve a File URL through the same function,
+`_ocr._load_bytes`, and it refuses one the calling user cannot read. Inside an
+automation run that calling user is the isolation user, same as everything else in the
+sandbox; the desk file→record flow instead runs as the browser user who just uploaded
+the file, which is correct there too — that File is private and unattached, owned by
+the person uploading it, not by the interface's isolation user.
 
 An automation task runs the same way: the whole run — the source read, the plan, the
 extraction, and the write — happens as the isolation user. A Document Query
@@ -251,14 +260,8 @@ error log.
   the individual records that trip the scan and reports the count in `last_result`,
   rather than failing the whole run. Without that, one odd record would block the
   batch, and five such runs would turn the task off. This per-record drop runs only
-  when the interface's `enable_prompt_scan` is on.
-- `ocr()`, `extract()`, and `transcribe()` read a private File straight off disk.
-  They do not check whether the isolation user could read that File document through
-  Frappe's own permission check. The `ask(files=[...])` path does run this check
-  correctly. This is a known gap, not yet fixed. An automation source with
-  **Attachments** on reaches the same code, but only for files attached to a record the
-  query already returned, and it lists those files with a permission-checked query — so
-  the fence there is the record, not the file.
+  when the interface's `enable_prompt_scan` is on. There is no such per-record drop for
+  `ask(files=[...])`: one file that trips the scan stops that call.
 - The scan folds many, but not all, look-alike letters. It changes each letter to the
   Latin letters that give its sound, not to the Latin letter it looks like. The two
   agree for most look-alikes, but not for all of them: the Cyrillic letter "es" looks

@@ -135,6 +135,33 @@ Set `cache_ttl` on the `view` row to make a repeated desk "Ask Crema" list-view 
 free: Crema serves the exact same request on the same doctype from cache, with no
 provider call, until the TTL expires.
 
+## Procedure D — configure by code
+
+For a migration or a provisioning script, not the desk: `crema.configure()` sets
+**Provider**, **Model**, or the monthly budget on one interface's row without opening
+the form.
+
+```python
+import crema
+
+crema.configure("transcribe", model="whisper-1")
+```
+
+Every argument left out is left untouched on the row — this is not a replace. A row
+that doesn't exist yet (a brand-new interface name never saved before) is created
+first, the same way saving Crema Settings in the desk always would. An unknown
+interface name raises `CremaConfigError`. Calling it again with the same arguments
+changes nothing.
+
+It returns the resolved config afterward — `health(interface, live=False)` — which
+reports `{"configured": False, ...}` rather than raising if the interface still
+doesn't resolve to a usable provider (for example, a model set before any provider
+exists yet). Setting `provider` with no isolation user anywhere still raises, same as
+saving the form with that row would — `configure()` does not set one.
+
+Only these three fields. Everything else on a row — the security toggles, the
+standing instructions, Runs As — stays a desk edit.
+
 ### Crema Settings fields (the rest of the page)
 
 | Field | Type | Notes |
@@ -162,9 +189,11 @@ provider call, until the TTL expires.
 | `view` | View | Turn a prompt into a List/Report/Kanban view for the desk UI | `complex` |
 | `transcribe` | Transcribe | Speech-to-text via `crema.transcribe()` | none — a transcription call cannot fall back to a chat model |
 
-The Crema Automation Task **AI Profile** dropdown offers eight of these. It leaves out
-`security` and `advanced_ocr`, which a task must never run as, and `view` and `transform`,
-whose answers only the desk UI that asked for them can apply.
+The Crema Automation Task **AI Profile** dropdown offers six of these. It leaves out
+`security` and `advanced_ocr`, which a task must never run as; `view` and `transform`,
+whose answers only the caller that asked for them can apply; `ocr`, whose answer is a
+page of text and not a plan; and `transcribe`, which speaks to a speech provider and not
+to a chat provider.
 
 If an interface has no provider of its own, the system tries Crema Settings' Default
 Provider first. Only if that is also blank does it try the next interface in its
@@ -205,12 +234,14 @@ crema_interfaces = "my_app.llm.interfaces.INTERFACES"
 
 Always set `prompt` and `fallback`. The system does not enforce them: a missing
 `prompt` gives the interface an empty prompt, and a missing `fallback` gives it no
-fallback chain. Every other key is a `Crema Model Assignment` fieldname
-(`enable_prompt_scan`, `output_trap`, `max_tokens`, ...) that the system seeds onto
-the row the first time it creates it — an admin can change any of it afterward in
-the desk. The system ignores a name already in the 12 predefined interfaces, so an
-app can never redefine `security` or `ocr`. Run `bench migrate` (or restart) so the
-new row appears.
+fallback chain. Set `label` too, or the Use Cases grid and the Crema Log show the raw
+key (`my_app_ocr`) instead of a human-readable name — `label` is read the same way as
+`prompt`/`fallback`, not written onto the row. Every other key is a `Crema Model
+Assignment` fieldname (`enable_prompt_scan`, `output_trap`, `max_tokens`, ...) that
+the system seeds onto the row the first time it creates it — an admin can change any
+of it afterward in the desk. The system ignores a name already in the 12 predefined
+interfaces, so an app can never redefine `security` or `ocr`. Run `bench migrate` (or
+restart) so the new row appears.
 
 **In crema itself**, for a new predefined interface that talks to a provider the same
 way `ask()` already does (a chat completion):

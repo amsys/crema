@@ -365,6 +365,14 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
 
+    def test_a_once_trigger_without_a_run_at_is_rejected(self):
+        """mandatory_depends_on says the same thing to the form, but frappe evaluates that
+        client-side only — this is the fence."""
+        doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
+        doc.trigger = "Once"
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
     def test_create_or_update_records_without_a_target_doctype_is_rejected(self):
         doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
         doc.action = "Create or Update Records"

@@ -5,6 +5,9 @@
 // Run with: bench --site fcr.local run-ui-tests crema --headless
 context("Crema Automation Task form", () => {
 	const TASK = "_cypress_crema_task";
+	// A second task rather than a second source row on TASK: "Update the Records It Read"
+	// is refused unless the task has exactly one Document Query source.
+	const FILTERED_TASK = "_cypress_crema_filtered_task";
 
 	before(() => {
 		cy.visit("/login");
@@ -27,6 +30,28 @@ context("Crema Automation Task form", () => {
 				interface: "complex",
 				instruction: "Set a priority on every open item.",
 				action: "Update the Records It Read",
+			},
+			true
+		);
+		cy.insert_doc(
+			"Crema Automation Task",
+			{
+				task_name: FILTERED_TASK,
+				enabled: 0,
+				trigger: "Schedule",
+				schedule_preset: "Daily 03:00",
+				sources: [
+					{
+						source_type: "Document Query",
+						source_doctype: "ToDo",
+						// The 3-element shape the server itself writes — no leading doctype.
+						source_filters: JSON.stringify([["status", "=", "Open"]]),
+						source_limit: 50,
+					},
+				],
+				interface: "complex",
+				instruction: "Summarise the open items.",
+				action: "No Changes",
 			},
 			true
 		);
@@ -150,10 +175,39 @@ context("Crema Automation Task form", () => {
 		);
 		cy.get('[data-fieldname="source_filters"] table').click();
 		cy.get(".modal-title").should("contain.text", "Which Records");
-		cy.get(".modal .filter-area, .modal .fieldname-select-area").should("exist");
+		// An unfiltered source seeds one blank row, so the field-name autocomplete is on
+		// screen rather than behind "Add a Filter" — what the list view's popover does.
+		cy.get(".modal .fieldname-select-area input").should("exist");
+		cy.get(".modal").should("not.contain.text", "No filters selected");
+	});
+
+	// The regression the 3-element shape caused: source_filters written by the server
+	// (_apply_email_trigger, the seeded example task) omits the leading doctype, and
+	// FilterGroup only reads the 4-element form — it rejected the row, opened empty, and
+	// Set then wrote [] over the user's filters.
+	it("round-trips a filter stored without a leading doctype", () => {
+		cy.visit(`/app/crema-automation-task/${FILTERED_TASK}`);
+		cy.wait("@interfaces");
+		cy.get('[data-fieldname="sources"] .grid-row').first().find(".btn-open-row").click();
+
+		// The table reads the same shape the dialog does.
+		cy.get('[data-fieldname="source_filters"] table').as("table");
+		cy.get("@table").should("contain.text", "status");
+		cy.get("@table").should("contain.text", "Open");
+
+		cy.get("@table").click();
+		cy.get(".modal-title").should("contain.text", "Which Records");
+		// The filter arrived instead of being refused as a doctype named "status".
+		cy.get(".modal .fieldname-select-area input").should("have.value", "Status");
+		cy.get(".msgprint, .modal-body").should("not.contain.text", "Invalid filter");
+
+		// Set without touching anything keeps the filter rather than clearing it.
+		cy.get(".modal .btn-primary").contains("Set").click();
+		cy.get('[data-fieldname="source_filters"] table').should("contain.text", "Open");
 	});
 
 	after(() => {
 		cy.remove_doc("Crema Automation Task", TASK);
+		cy.remove_doc("Crema Automation Task", FILTERED_TASK);
 	});
 });

@@ -108,6 +108,13 @@ function crema_render_row_filters(frm, row) {
 		return; // unparseable — leave the raw Code field visible so it can be fixed
 	}
 	if (!Array.isArray(filters)) return;
+	// Stored filters may be the 3-element [fieldname, operator, value] form — what
+	// _apply_email_trigger, the seeded example task and hand-written JSON all write.
+	// FilterGroup.add_filters_to_filter_group only reads the 4-element
+	// [doctype, fieldname, operator, value] one, and mis-reads a 3-element row as a doctype
+	// named after the field: it rejects it, opens empty, and Set then writes [] over the
+	// user's filters. Normalise here, so the table and the dialog read the same thing.
+	filters = filters.map((f) => (f.length > 3 ? f : [row.source_doctype, ...f]));
 
 	const wrapper = $(field.wrapper).empty();
 	const table = $(`<table class="table table-bordered" style="cursor:pointer; margin:0">
@@ -121,9 +128,7 @@ function crema_render_row_filters(frm, row) {
 
 	if (filters.length) {
 		filters.forEach((f) => {
-			// FilterGroup writes 4-element rows (doctype first); a hand-written filter may
-			// be 3.
-			const [fieldname, operator, value] = f.length > 3 ? f.slice(1) : f;
+			const [, fieldname, operator, value] = f;
 			table.find("tbody").append(
 				$(`<tr>
 						<td>${frappe.utils.escape_html(String(fieldname))}</td>
@@ -153,18 +158,31 @@ function crema_render_row_filters(frm, row) {
 					row.doctype,
 					row.name,
 					"source_filters",
-					JSON.stringify(frm.crema_filter_group.get_filters())
+					JSON.stringify(filter_group.get_filters())
 				);
 				dialog.hide();
 				crema_render_row_filters(frm, row);
 			},
 		});
-		frm.crema_filter_group = new frappe.ui.FilterGroup({
+		// Local, not on frm: two expanded rows share one form, and a single slot would have
+		// the older dialog's Set write the newer row's filters.
+		const filter_group = new frappe.ui.FilterGroup({
 			parent: dialog.get_field("filter_area").$wrapper,
 			doctype: row.source_doctype,
 			on_change: () => {},
 		});
-		if (filters.length) frm.crema_filter_group.add_filters_to_filter_group(filters);
+		if (filters.length) {
+			filter_group.add_filters_to_filter_group(filters);
+		} else {
+			// The two lines the list view's own filter popover runs when it opens on an
+			// unfiltered list (filter_list.js set_popover_events): seed one blank row, so
+			// the field-name autocomplete — frappe.ui.FieldSelect, the same control the
+			// list view types into — is on screen instead of behind an "Add a Filter" the
+			// user has to find first. get_filters() drops a row with no value, so leaving
+			// it untouched and pressing Set still stores nothing.
+			filter_group.toggle_empty_filters(false);
+			filter_group.add_filter(row.source_doctype, "name");
+		}
 		dialog.show();
 	});
 }
@@ -219,12 +237,14 @@ frappe.ui.form.on("Crema Automation Source", {
 	// carry over.
 	source_doctype(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
-		frappe.model.set_value(row.doctype, row.name, "source_filters", "[]");
-		crema_stamp_row(frm, row);
-		// Which Records depends_on this field, and frappe re-renders a control when its
-		// dependency turns it visible — after this handler. Painting now would be undone,
-		// leaving the raw JSON box on screen, so paint on the next tick instead.
-		setTimeout(() => crema_render_row_filters(frm, row), 0);
+		// Which Records depends_on this field, so frappe re-renders that control — as part
+		// of this set_value's own trigger chain, which set_value resolves its promise
+		// after. Painting before then is undone, leaving the raw JSON box on screen, and a
+		// setTimeout is only a guess at when "then" is.
+		frappe.model.set_value(row.doctype, row.name, "source_filters", "[]").then(() => {
+			crema_stamp_row(frm, row);
+			crema_render_row_filters(frm, row);
+		});
 	},
 });
 

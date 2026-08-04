@@ -42,6 +42,7 @@ out the whole run — and five such runs auto-disable the task.
 
 from __future__ import annotations
 
+import html
 import mimetypes
 import re
 from datetime import datetime
@@ -118,14 +119,24 @@ class AutomationError(frappe.ValidationError):
 
 
 def tick() -> None:
-    """Enqueue every enabled task whose cron schedule is due. Runs every 15 minutes —
-    that tick interval is the effective granularity floor for `schedule`."""
+    """Enqueue every enabled task that is due. Runs every 15 minutes — that tick interval
+    is the effective granularity floor for both `schedule` and `run_at`.
+
+    A `Once` task needs no done-flag of its own: run_task stamps `last_run` and commits it
+    *before* doing any work, so `run_at > last_run` is both the fire-once guard (a crash
+    mid-run cannot re-fire it) and the re-arm mechanism (move run_at forward and it is due
+    again).
+    """
     now = now_datetime()
     for task in frappe.get_all(
         "Crema Automation Task",
-        filters={"enabled": 1, "trigger": "Schedule"},
-        fields=["name", "schedule", "last_run", "creation"],
+        filters={"enabled": 1, "trigger": ("in", ("Schedule", "Once"))},
+        fields=["name", "trigger", "schedule", "run_at", "last_run", "creation"],
     ):
+        if task.trigger == "Once":
+            if task.run_at and task.run_at <= now and not (task.last_run and task.run_at <= task.last_run):
+                enqueue_task(task.name)
+            continue
         try:
             due_at = croniter(task.schedule, task.last_run or task.creation).get_next(datetime)
         except Exception:
@@ -427,8 +438,25 @@ def _notify(doc, status: str, result: str) -> None:
         frappe.log_error(title=f"Crema automation notify failed: {doc.name}"[:140], message=_describe(exc))
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain(text: str) -> str:
+    """Frappe writes its own error messages with markup — `frappe.bold` wraps <strong>, and
+    `throw(as_list=True)` builds a <ul> — and those are exactly the messages an automation
+    run hits (a bad Link value, a missing mandatory field). `last_error` and `last_result`
+    are read-only text fields, so the tags reach the admin as literal tags.
+
+    A tag becomes a space, not nothing: a <br> between two words must not weld them. Hence
+    not frappe's own strip_html/strip_html_tags, both of which substitute the empty string.
+    Stripping rather than rendering is deliberate — the string is partly model-influenced
+    (a plan's fieldnames reach frappe's error messages), so it must never become markup.
+    """
+    return " ".join(html.unescape(_TAG_RE.sub(" ", text)).split())
+
+
 def _describe(exc: Exception) -> str:
-    return log.redact(f"{type(exc).__name__}: {exc}")[:_ERROR_MAX_CHARS]
+    return log.redact(_plain(f"{type(exc).__name__}: {exc}"))[:_ERROR_MAX_CHARS]
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ Build a task from three choices:
 
 | Choice | Options |
 |---|---|
-| **Trigger** — when it runs | `Schedule` (a cron expression), `Document Event`, `Incoming Email`, or `Webhook` |
+| **Trigger** — when it runs | `Schedule` (a cron expression), `Once` (a date and time), `Document Event`, `Incoming Email`, or `Webhook` |
 | **Sources** — what it reads | One or more rows: `URL`, or `Document Query` (records on this site). A task can mix them. A Webhook task can also read what the caller sends. |
 | **Action** — what it does | `Create or Update Records`, `Update the Records It Read`, or `No Changes` |
 
@@ -21,9 +21,10 @@ address in **Email Report To** and it applies to whichever action you picked.
 |---|---|---|
 | `task_name` | Data | Required. Unique. |
 | `enabled` | Check | Off by default. |
-| `trigger` | Select | Label **Trigger**. `Schedule`, `Document Event`, `Incoming Email`, or `Webhook`. |
+| `trigger` | Select | Label **Trigger**. `Schedule`, `Once`, `Document Event`, `Incoming Email`, or `Webhook`. |
 | `schedule_preset` | Select | Label **How Often**. A common schedule, or `Custom`. The preset rewrites `schedule` on every save — pick `Custom`, or leave the preset empty, to keep a cron expression you wrote yourself. |
 | `schedule` | Data | Label **Custom Schedule (cron)**. The cron expression. The preset fills it in. |
+| `run_at` | Datetime | Label **Run At**. Required for a Once trigger. The one time the task runs. Set it to a new time in the future to run the task again. |
 | `event` | Select | For a Document Event trigger: `After Insert`, `On Update`, or `On Submit`. An Incoming Email trigger sets it to `On Update` for you. |
 | `webhook_endpoint` | Data (read-only) | Label **Endpoint**. For a Webhook trigger. The address to call. |
 | `read_webhook_payload` | Check | Label **Use Webhook Data**. On by default. For a Webhook trigger. Reads what the caller sends as one more source. |
@@ -40,7 +41,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `plan_match_fields` | Data (read-only) | Label **Finds Existing Records By**. Read from the stored plan. |
 | `plan_field_map` | Table (read-only) | Label **Field Mapping**. The stored plan's field map, one row per field. Read from the stored plan. |
 | `plan_prompt` | Small Text (read-only) | Label **What the AI Is Asked to Pull Out**. Read from the stored plan. |
-| `next_run` | Datetime (read-only) | Label **Next Run**. When the task is due next. Empty while the task is off, or when the trigger is not Schedule. |
+| `next_run` | Datetime (read-only) | Label **Next Run**. When the task is due next. Empty while the task is off, after a Once task has run, or when the trigger is neither Schedule nor Once. |
 | `last_run` | Datetime (read-only) | |
 | `last_status` | Select (read-only) | `Success`, `Replanned`, or `Failed`. |
 | `last_result` | Text (read-only) | What the last run did — for example `3 created, 2 updated, 1 skipped`, `no new records`, or the report text. |
@@ -249,6 +250,17 @@ successful run into a failed one.
 The scheduler ticks every 15 minutes. A `schedule` set finer than 15 minutes still
 runs once per tick, not more often. The tick queues each due task once — it never
 double-queues a task that is already waiting or running.
+
+### Once
+
+The task runs one time, at the date and time in **Run At**. Use it for a job with a
+day of its own — an import the night before a cutover, a clean-up after a migration.
+
+The scheduler ticks every 15 minutes, so the task starts at that time or shortly after
+it. It runs once and stays on: **Next Run** goes empty, and nothing runs it again.
+
+To run it again, set **Run At** to a new time in the future. The task is due again as
+soon as that time passes.
 
 ### Document Event
 

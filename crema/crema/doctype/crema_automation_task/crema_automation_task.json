@@ -17,11 +17,11 @@
   "section_basic",
   "task_name",
   "enabled",
-  "section_trigger",
   "trigger",
   "column_break_task",
   "schedule_preset",
   "schedule",
+  "run_at",
   "event",
   "webhook_endpoint",
   "section_source",
@@ -62,21 +62,17 @@
    "label": "Enabled"
   },
   {
-   "fieldname": "section_trigger",
-   "fieldtype": "Section Break"
-  },
-  {
    "fieldname": "column_break_task",
    "fieldtype": "Column Break"
   },
   {
    "default": "Schedule",
-   "description": "<b>Schedule</b> — run at set times. <b>Document Event</b> — run each time a record is created, changed, or submitted. Document Event needs a Document Query source, and reads only the record that changed from it. <b>Incoming Email</b> — run when a message arrives in a Frappe inbox; Crema adds the source row for you. <b>Webhook</b> — run only when another system calls the address below.",
+   "description": "<b>Schedule</b> — run at set times. <b>Once</b> — run one time, at a date and time you set. <b>Document Event</b> — run each time a record is created, changed, or submitted. Document Event needs a Document Query source, and reads only the record that changed from it. <b>Incoming Email</b> — run when a message arrives in a Frappe inbox; Crema adds the source row for you. <b>Webhook</b> — run only when another system calls the address below.",
    "fieldname": "trigger",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Trigger",
-   "options": "Schedule\nDocument Event\nIncoming Email\nWebhook",
+   "options": "Schedule\nOnce\nDocument Event\nIncoming Email\nWebhook",
    "reqd": 1
   },
   {
@@ -94,6 +90,14 @@
    "fieldtype": "Data",
    "label": "Custom Schedule (cron)",
    "mandatory_depends_on": "eval:doc.trigger==\"Schedule\" && (!doc.schedule_preset || doc.schedule_preset==\"Custom\")"
+  },
+  {
+   "depends_on": "eval:doc.trigger==\"Once\"",
+   "description": "The one time this task runs. Crema checks for due tasks every 15 minutes, so the task starts at this time or shortly after it. To run the task again, set this to a new time in the future.",
+   "fieldname": "run_at",
+   "fieldtype": "Datetime",
+   "label": "Run At",
+   "mandatory_depends_on": "eval:doc.trigger==\"Once\""
   },
   {
    "depends_on": "eval:doc.trigger==\"Document Event\"",
@@ -250,8 +254,8 @@
    "label": "Last Run"
   },
   {
-   "depends_on": "eval:doc.trigger==\"Schedule\"",
-   "description": "When this task is due to run next. Empty while the task is switched off.",
+   "depends_on": "eval:[\"Schedule\", \"Once\"].includes(doc.trigger)",
+   "description": "When this task is due to run next. Empty while the task is switched off, and after a Once task has run.",
    "fieldname": "next_run",
    "fieldtype": "Datetime",
    "is_virtual": 1,
@@ -299,7 +303,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-03 12:00:00.000000",
+ "modified": "2026-08-04 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Automation Task",

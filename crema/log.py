@@ -123,7 +123,7 @@ def insert(
             {
                 "doctype": "Crema Log",
                 "interface": interface,
-                "interface_label": interfaces.LABELS.get(interface, interface) if interface else None,
+                "interface_label": interfaces.label_for(interface) if interface else None,
                 "model": model,
                 "provider": provider,
                 "user": frappe.session.user,

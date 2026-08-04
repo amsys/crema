@@ -191,7 +191,7 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
         self.assertEqual(log.llm_calls, 1)
         self.assertAlmostEqual(log.cost_usd, 0.004, places=6)
 
-    def test_file_url_input_reads_via_file_manager(self):
+    def test_file_url_input_reads_the_file_document(self):
         file_doc = frappe.get_doc(
             {
                 "doctype": "File",

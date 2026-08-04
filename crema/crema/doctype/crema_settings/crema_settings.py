@@ -56,7 +56,10 @@ class CremaSettings(Document):
         replaces the old install.sync_interfaces insert loop. A newly-created
         app-registered row is seeded from its hook config (any Crema Model Assignment
         fieldname — enable_prompt_scan, output_trap, max_tokens, ...) once, so an
-        admin's later edits in the desk survive the next reconcile."""
+        admin's later edits in the desk survive the next reconcile. "prompt", "fallback"
+        and "label" are read separately (interfaces.prompt_for/fallback_for/label_for),
+        not seeded onto the row: none of the three is a Crema Model Assignment
+        fieldname."""
         by_name = {row.interface: row for row in self.assignments if row.interface}
         self.assignments = []
         app_cfg = interfaces.app_interfaces()
@@ -66,11 +69,11 @@ class CremaSettings(Document):
                 row = self.append("assignments", {})
                 row.interface = name
                 for field, value in app_cfg.get(name, {}).items():
-                    if field not in ("prompt", "fallback"):
+                    if field not in ("prompt", "fallback", "label"):
                         setattr(row, field, value)
             else:
                 self.assignments.append(row)
-            row.interface_label = interfaces.LABELS.get(name, name)
+            row.interface_label = interfaces.label_for(name)
 
     def _warn_missing_models(self) -> None:
         """A provider with no model still resolves (client._load_from_db has no fence

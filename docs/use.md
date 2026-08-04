@@ -161,6 +161,10 @@ provider at all; `ok` and `reachable` are `None` in that case, because there is 
 provider to check. `is_configured()` is the cheap, no-network shortcut:
 `health(interface, live=False)["configured"]`.
 
+To set an interface's model, provider, or monthly budget from code instead of the desk
+— a migration, a provisioning script — see `crema.configure()` in
+[configure.md](configure.md#procedure-d--configure-by-code).
+
 ## HTTP endpoints
 
 Three call endpoints expose `ask`, `extract`, and `transform` over HTTP. All three
@@ -229,7 +233,7 @@ All System Manager only, all `POST /api/method/<name>`:
 
 | Endpoint | Purpose |
 |---|---|
-| `crema.api.get_interfaces` | Value/label pairs for the AI Profile dropdown on Crema Automation Task, one per selectable interface. `Security`, `Advanced OCR`, `View` and `Transform` are not included — a task must never run as any of them. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
+| `crema.api.get_interfaces` | Value/label pairs for the AI Profile dropdown on Crema Automation Task, one per selectable interface. `Security`, `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not included — a task must never run as any of them. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
 | `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
 | `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers list's Connection badge. |
 | `crema.api.grant_crema_role` | Adds the `Crema User` role to a user. System Manager only. |
@@ -370,3 +374,41 @@ many seconds. Set the `cache_ttl` argument on one call to override the interface
 setting for that call only. A `cache_ttl` of 0 turns caching off. The cache covers
 `ask`/`ask_json` (and everything built on them) only — `ocr`, `advanced_ocr`, and
 `transcribe` never read it.
+
+A call that gives `files` is never cached, whatever `cache_ttl` says. The cache key is
+made from the prompt, and it cannot see the content of a file. A file behind a File URL
+can also change while the URL stays the same.
+
+## Testing an app that uses crema
+
+An app that hard-depends on crema needs `client._resolve()` to succeed before its own
+tests reach the mock — otherwise every call in its suite raises `CremaConfigError`
+first. `crema.testing.seed_provider()` is the supported way to get there, meant for a
+consuming app's own `before_tests`:
+
+```python
+# my_app/setup.py
+from crema.testing import seed_provider
+
+def before_tests():
+    seed_provider()
+    frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+```
+
+Idempotent and non-overriding: it fills in a `Crema Provider` and a `Crema Settings`
+default only where one doesn't already exist, so calling it twice, or on a site an
+admin already configured by hand, changes nothing. See its docstring for the
+`base_url`/`model`/`isolation_user` arguments.
+
+With the site configured this way, `client._complete(cfg, messages,
+response_format=None)` is the supported patch point for a caller's test — the single
+place a provider is actually called, so patching it exercises every layer above
+(security scan, guard, cache, output trap, audit log). Its signature is covered by the
+same stability expectation as the functions `crema/__init__.py` exports:
+
+```python
+from unittest.mock import patch
+
+with patch("crema.client._complete", return_value="mocked reply"):
+    crema.ask("simple", "hello")
+```

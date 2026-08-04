@@ -14,11 +14,15 @@ import frappe
 # Also not selectable for an automation task — a task should never be run as either.
 INTERNAL = frozenset({"security", "advanced_ocr"})
 
-# Selectable everywhere else, but never by an automation task: both emit an output shape
-# their caller parses itself — a desk list-view spec, and a single-document diff — and an
-# automation task owns its own plan instead, so neither prompt can be applied to a run.
-# Not INTERNAL: the desk UI drives "view", and transform_api drives "transform".
-NOT_FOR_TASKS = frozenset({"view", "transform"})
+# Selectable everywhere else, but never by an automation task, which drives its profile
+# through api.ask/ask_json and owns its own plan. "view" and "transform" each emit an
+# output shape only their caller applies — a desk list-view spec, and a single-document
+# diff. "ocr" forces {"text", "confidence"}, which the PLAN stage cannot parse a plan out
+# of. "transcribe" is not a chat interface at all: no default prompt, and its provider
+# takes audio, not chat completions.
+# Not INTERNAL: the desk UI drives "view", transform_api drives "transform", and ocr()
+# and transcribe() are public functions.
+NOT_FOR_TASKS = frozenset({"view", "transform", "ocr", "transcribe"})
 
 PREDEFINED = [
     "simple",
@@ -96,8 +100,11 @@ DEFAULT_PROMPTS = {
 
 def app_interfaces() -> dict[str, dict]:
     """Interfaces contributed by installed apps via the `crema_interfaces` hooks.py key
-    — {name: {"prompt": str, "fallback": str | None, ...any other Crema Model
-    Assignment fieldname}}. The hooks.py value can be a literal dict, or a dotted path
+    — {name: {"prompt": str, "fallback": str | None, "label": str | None, ...any other
+    Crema Model Assignment fieldname}}. "prompt"/"fallback"/"label" are read separately
+    (prompt_for/fallback_for/label_for) rather than seeded onto the row — none of the
+    three is itself a Crema Model Assignment fieldname. The hooks.py value can be a
+    literal dict, or a dotted path
     string to one (resolved lazily via frappe.get_attr) — the same convention Frappe's
     own hooks already use for after_install/scheduler_events/doc_events, so an app
     whose config dict sits behind a module of real prompt text isn't forced to import
@@ -119,6 +126,13 @@ def app_interfaces() -> dict[str, dict]:
         try:
             cfg = frappe.get_attr(declared) if isinstance(declared, str) else declared
         except Exception:
+            # Keep going — a bad third-party hook must not break boot — but say so, or a
+            # typo'd dotted path costs its author a silently missing interface and no
+            # trace. frappe.logger, not log_error: names() calls this on every resolve
+            # with no memoization, and a row per call would flood the Error Log.
+            frappe.logger("crema").warning(
+                f"{app}: crema_interfaces path '{declared}' did not resolve — interfaces skipped"
+            )
             continue
         for name, row in (cfg or {}).items():
             if name not in PREDEFINED:
@@ -144,6 +158,13 @@ def fallback_for(name: str) -> str | None:
     if name in FALLBACKS:
         return FALLBACKS[name]
     return app_interfaces().get(name, {}).get("fallback")
+
+
+def label_for(name: str) -> str:
+    """LABELS for a core interface, else the app's own "label", else the raw name —
+    used everywhere a human reads an interface name (the Crema Settings grid, a Crema
+    Log row's title)."""
+    return LABELS.get(name) or app_interfaces().get(name, {}).get("label") or name
 
 
 def selectable() -> list[str]:

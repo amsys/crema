@@ -68,13 +68,10 @@ Themed, not priority-ordered — pick by what you need, not by position in the l
   EXTRACT drop out of that path entirely, since `extract()` plans against the target
   doctype's metadata itself; what `_upsert` still needs from the plan is `match_fields`,
   so the same invoice attached twice updates one record instead of importing two.
-  One prerequisite, and it is not optional: `_ocr._load_bytes` resolves a File URL with
-  `frappe.utils.file_manager.get_file()`, which never calls `check_permission()` — its
-  docstring's claim that "private-file permissions apply" is not true today, and
-  `test_ocr.test_private_file_url_content_is_read_regardless_of_isolation_user_permission`
-  pins that. Bounded while a System Manager hands over the URL by hand; a task reading
-  whatever a `File` query returns, under an isolation user, would make the sandbox fence
-  advertised but not enforced. That check lands first, or this feature does not land.
+  The prerequisite this used to block on is done: `_ocr._load_bytes` now runs
+  `file_doc.check_permission("read")` as the calling user before reading a File URL's
+  content, so a `File Query` source reading under an isolation user would get the same
+  enforced fence `_read_documents` already gives a Document Query.
 - A `Propose Only` action, and a confidence floor. Every other surface in crema proposes
   and lets a human apply: `transform()` returns a diff the desk dialog applies into an
   open form, `extract()` returns records the caller creates under its own permissions.

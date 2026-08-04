@@ -10,8 +10,9 @@ import uuid
 from unittest.mock import patch
 
 import frappe
-from crema import cache, client, interfaces, log
+from crema import api, cache, client, interfaces, log, testing
 from crema.crema.doctype.crema_provider.crema_provider import PRESETS, _is_local_or_private, get_presets
+from crema.exceptions import CremaConfigError
 from crema.test_fixtures import (
     TEST_ISOLATION_USER,
     TEST_PLAIN_USER,
@@ -595,7 +596,10 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         field = frappe.get_meta("Crema Automation Task").get_field("interface")
         self.assertEqual(field.fieldtype, "Select")
         self.assertEqual(field.options.split("\n"), ["", *interfaces.selectable()])
-        for excluded in ("security", "advanced_ocr", "view", "transform"):
+        # security/advanced_ocr are INTERNAL; the other four are NOT_FOR_TASKS — each
+        # emits something a task's PLAN stage cannot use, and transcribe is not even a
+        # chat interface.
+        for excluded in ("security", "advanced_ocr", "view", "transform", "ocr", "transcribe"):
             self.assertNotIn(excluded, field.options.split("\n"))
 
     def test_ensure_isolation_user_is_idempotent(self):
@@ -836,6 +840,33 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         for name in interfaces.PREDEFINED:
             self.assertEqual(labels[name], interfaces.LABELS[name])
 
+    def test_reconcile_stamps_the_app_label_when_present_else_the_raw_name(self):
+        """interfaces.label_for's fallback order for an app-registered row: its own
+        "label" if it supplied one, else the raw interface name — same shape as
+        prompt_for/fallback_for. "label" is not a Crema Model Assignment fieldname, so
+        it must not land on the row itself (unlike "prompt"/"fallback", it isn't read
+        back off the row anywhere — reconcile must simply not setattr it)."""
+        fake = {
+            "_test_app_iface_labeled": {"prompt": "p", "label": "Nice Label"},
+            "_test_app_iface_unlabeled": {"prompt": "p"},
+        }
+        try:
+            with patch("crema.interfaces.app_interfaces", return_value=fake):
+                settings = frappe.get_single("Crema Settings")
+                settings.save(ignore_permissions=True)
+
+                rows = {r.interface: r for r in settings.assignments}
+                self.assertEqual(rows["_test_app_iface_labeled"].interface_label, "Nice Label")
+                self.assertEqual(
+                    rows["_test_app_iface_unlabeled"].interface_label, "_test_app_iface_unlabeled"
+                )
+                self.assertIsNone(rows["_test_app_iface_labeled"].get("label"))
+        finally:
+            frappe.get_single("Crema Settings").save(ignore_permissions=True)
+            names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
+            self.assertNotIn("_test_app_iface_labeled", names)
+            self.assertNotIn("_test_app_iface_unlabeled", names)
+
     def test_app_registered_interface_is_seeded_and_edits_survive_reconcile(self):
         """crema_interfaces (hooks.py) rows behave exactly like PREDEFINED ones: added
         when missing, seeded once from the app's config, then left alone."""
@@ -904,6 +935,89 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         )
 
 
+class IntegrationTestCremaConfigure(CremaFixtureTestCase):
+    """crema.api.configure() — the supported code-side setter for one interface's
+    model/provider/monthly_budget_usd (PLAN.md item 9)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        frappe.set_user("Administrator")
+
+    def test_unknown_interface_name_raises(self):
+        with self.assertRaises(CremaConfigError):
+            api.configure("_not_a_real_interface_name", model="whatever")
+
+    def test_configure_creates_a_missing_row_and_sets_the_model(self):
+        """A brand-new app-registered name that has never been saved has no row yet —
+        configure() must create it via the same reconcile a settings.save() runs, not
+        fail looking one up. Asserted against the row itself, not the returned
+        health() dict: whether it resolves as "configured" depends on whether this
+        site's own Default Provider/Model are already set, which this test must not
+        assume either way."""
+        fake = {"_test_app_iface_configure": {"prompt": "p"}}
+        try:
+            with patch("crema.interfaces.app_interfaces", return_value=fake):
+                api.configure("_test_app_iface_configure", model="my-model")
+
+                settings = frappe.get_single("Crema Settings")
+                row = next(r for r in settings.assignments if r.interface == "_test_app_iface_configure")
+                self.assertEqual(row.model, "my-model")
+        finally:
+            frappe.get_single("Crema Settings").save(ignore_permissions=True)
+            names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
+            self.assertNotIn("_test_app_iface_configure", names)
+
+    def test_a_field_left_out_is_untouched_and_a_second_call_is_idempotent(self):
+        _ensure_user(TEST_ISOLATION_USER)
+        _ensure_provider()
+        settings = frappe.get_single("Crema Settings")
+        row = next(r for r in settings.assignments if r.interface == "translation")
+        row.provider = TEST_PROVIDER
+        row.isolation_user = TEST_ISOLATION_USER
+        settings.save(ignore_permissions=True)
+
+        result = api.configure("translation", model="second-model")
+
+        self.assertEqual(result["model"], "second-model")
+        reloaded = frappe.get_single("Crema Settings")
+        row = next(r for r in reloaded.assignments if r.interface == "translation")
+        self.assertEqual(row.model, "second-model")
+        self.assertEqual(row.provider, TEST_PROVIDER)  # untouched, not cleared
+
+        api.configure("translation", model="second-model")  # idempotent
+        row = next(r for r in frappe.get_single("Crema Settings").assignments if r.interface == "translation")
+        self.assertEqual(row.model, "second-model")
+
+
+class IntegrationTestCremaTesting(CremaFixtureTestCase):
+    """crema.testing.seed_provider — the supported bootstrap a consuming app's own
+    before_tests calls instead of hand-building a Crema Provider row (PLAN.md item 8).
+    No explicit cleanup beyond the per-test savepoint: seed_provider never commits."""
+
+    def test_seed_provider_is_idempotent(self):
+        name = f"_test_seed_provider_{uuid.uuid4().hex[:8]}"
+        testing.seed_provider(name, set_defaults=False)
+        testing.seed_provider(name, set_defaults=False)  # must not raise or duplicate
+
+        self.assertEqual(frappe.db.count("Crema Provider", {"provider_name": name}), 1)
+
+    def test_seed_provider_does_not_clobber_an_already_set_default(self):
+        _ensure_user(TEST_ISOLATION_USER)
+        _ensure_provider()
+        settings = frappe.get_single("Crema Settings")
+        settings.default_provider = TEST_PROVIDER
+        settings.default_isolation_user = TEST_ISOLATION_USER
+        settings.default_model = "already-set-model"
+        settings.save(ignore_permissions=True)
+
+        name = f"_test_seed_provider_default_{uuid.uuid4().hex[:8]}"
+        testing.seed_provider(name)
+
+        reloaded = frappe.get_single("Crema Settings")
+        self.assertEqual(reloaded.default_provider, TEST_PROVIDER)
+        self.assertEqual(reloaded.default_model, "already-set-model")
+
+
 class IntegrationTestCremaLogInsert(IntegrationTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -943,6 +1057,15 @@ class IntegrationTestCremaLogMeta(IntegrationTestCase):
         row = frappe.get_doc("Crema Log", {"prompt_sha": "label-stamp-probe"})
         self.assertEqual(row.interface, "simple")
         self.assertEqual(row.interface_label, interfaces.LABELS["simple"])
+
+    def test_insert_stamps_an_app_interfaces_own_label(self):
+        """A row logged under an app-registered interface carries the app's own label
+        (interfaces.label_for), not the raw key — same as the Crema Settings grid."""
+        fake = {"_test_app_iface_logged": {"prompt": "p", "label": "App Label"}}
+        with patch("crema.interfaces.app_interfaces", return_value=fake):
+            log.insert("_test_app_iface_logged", "test-model", "Success", None, prompt_sha="app-label-probe")
+        row = frappe.get_doc("Crema Log", {"prompt_sha": "app-label-probe"})
+        self.assertEqual(row.interface_label, "App Label")
 
     def test_no_field_can_hold_prompt_or_document_text(self):
         """The layout change moved fields around. It must not have added one that could

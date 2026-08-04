@@ -21,6 +21,7 @@ import mimetypes
 import time
 from typing import Any
 
+import frappe
 from crema import client
 from crema import log as _log
 from crema._json import strip_fence
@@ -58,29 +59,31 @@ def _is_pdf(data: bytes, mime: str | None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _load_bytes(file: str | bytes, isolation_user: str) -> tuple[bytes, str]:
+def _load_bytes(file: str | bytes) -> tuple[bytes, str]:
     """Return (bytes, mime) for `file`.
 
-    A str is treated as a frappe File URL and resolved via frappe.utils.file_manager
-    inside the isolation user's context. Known limit: get_file() resolves the path
-    with a bare DB query and reads it off disk without check_permission(), so the
-    isolation context does NOT enforce private-file permissions here — see
-    CLAUDE.md's known-risk note and docs/security.md. Raw bytes are used as-is,
-    mime sniffed from magic bytes only.
+    A str is treated as a frappe File URL, permission-checked as the CALLING (session)
+    user before its content is read — the same fence api._resolve_files applies to
+    ask(files=[...]). This is the isolation user's own permission wherever this runs
+    inside sandbox.isolation (every automation path, per CLAUDE.md); the desk
+    file->record flow instead runs as the browser user who just uploaded the file,
+    which is deliberate — crema.bundle.js uploads a private, unattached File owned by
+    that user, and only that user (or an isolation-user check) could then read it back.
+    Raises frappe.PermissionError on a File the caller can't read, and
+    frappe.DoesNotExistError if `file` doesn't name a File document at all — no more
+    falling back to reading an arbitrary on-disk path. Raw bytes are used as-is, mime
+    sniffed from magic bytes only.
     """
     if isinstance(file, bytes):
         return file, _sniff_mime(file)
 
-    from crema import sandbox
-
-    with sandbox.isolation(isolation_user):
-        from frappe.utils.file_manager import get_file
-
-        fname, content = get_file(file)
+    file_doc = frappe.get_doc("File", {"file_url": file})
+    file_doc.check_permission("read")
+    content = file_doc.get_content()
 
     if isinstance(content, str):
         content = content.encode("utf-8")
-    mime = mimetypes.guess_type(fname)[0] or _sniff_mime(content)
+    mime = mimetypes.guess_type(file_doc.file_name or file)[0] or _sniff_mime(content)
     return content, mime
 
 
@@ -235,7 +238,7 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict[str, Any]:
     prompt_sha = None
     start = time.monotonic()
     try:
-        content, mime = _load_bytes(file, cfg["isolation_user"])
+        content, mime = _load_bytes(file)
         prompt_sha = hashlib.sha256(content).hexdigest()
         parts = prep_parts(content, mime)
 

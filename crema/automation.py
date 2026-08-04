@@ -69,6 +69,9 @@ _SOURCE_LIMIT_DEFAULT = 50
 _ATTACHMENT_MAX_PER_RECORD = 5
 _WEBHOOK_PAYLOAD_CHARS = 20_000
 
+_FILE_DOCTYPE = "File"
+_FILE_QUERY_FIELDS = ["name", "modified", "file_name", "file_url"]
+
 _EVENT_METHODS = {
     "After Insert": "after_insert",
     "On Update": "on_update",
@@ -255,7 +258,7 @@ def _fetch_event_tasks() -> list[dict]:
         filters={
             "parenttype": "Crema Automation Task",
             "parent": ("in", list(events)),
-            "source_type": "Document Query",
+            "source_type": ("in", ("Document Query", "File Query")),
         },
         fields=["parent", "source_doctype"],
     )
@@ -337,18 +340,29 @@ def _run_inside(
     """Everything that runs as the isolation user. Returns
     (status, error, plan_to_store, result, watermarks)."""
     try:
-        content, allowed_names, note, watermarks = _read_source(
+        content, allowed_names, note, watermarks, records = _read_source(
             doc, cfg, started, doc_doctype, doc_name, payload=payload
         )
     except Exception as exc:
         return "Failed", f"source read failed — {_describe(exc)}", None, "", {}
 
-    if not content.strip():
+    if not content.strip() and not records:
         # The normal state of a quiet incremental task. Left to fall through it would
         # cost two LLM calls, record Failed, and auto-disable the task after five quiet
         # nights. The watermarks still propagate: a batch whose records were all dropped
         # by the scan must still advance, or the backlog behind it is never read.
         return "Success", "", None, note or "no new records", watermarks
+
+    if doc.file_sources():
+        # PLAN/EXTRACT don't run for a File Query — extract() already planned against
+        # target_doctype's own metadata per file (see _read_files). match_on is
+        # admin-entered, not model-authored, for the same reason.
+        match_fields = [f.strip() for f in (doc.match_on or "").split(",") if f.strip()]
+        try:
+            result = _summary(_upsert_files(doc.target_doctype, records, match_fields))
+        except Exception as exc:
+            return "Failed", _describe(exc), None, "", {}
+        return "Success", "", None, _join_note(result, note), watermarks
 
     if doc.action == "No Changes":
         try:
@@ -472,9 +486,9 @@ def _read_source(
     doc_name: str | None,
     preview: bool = False,
     payload: str | None = None,
-) -> tuple[str, set[str] | None, str, dict[str, Any]]:
+) -> tuple[str, set[str] | None, str, dict[str, Any], list[dict]]:
     """Read every source row of this task, as one labelled text. Returns
-    (content, allowed_names, note, watermarks).
+    (content, allowed_names, note, watermarks, records).
 
     `allowed_names` is None when no document query contributed, and otherwise the exact
     set of record names the queries returned — it is what fences `Update the Records It Read`
@@ -482,6 +496,12 @@ def _read_source(
 
     `watermarks` is {source row name: read up to}, applied by run_task only if the run as
     a whole succeeded. A source that raised is absent from it, so it is re-read next time.
+
+    `records` is non-empty only for a File Query source: each file already reads as
+    {"set", "child_set"} records via api.extract(), not text, so there is nothing to add
+    to `content` for it — see _read_files and _run_inside's file-source branch.
+    CremaAutomationTask._validate_sources refuses a File Query mixed with any other
+    source, so `content` and `records` are never both populated at once.
 
     A webhook `payload` counts as one more source while the task's Use Webhook Data box is
     on: it gets its own share of the budget and its own labelled block, and layer 1 scans it
@@ -495,14 +515,19 @@ def _read_source(
         payload = None
 
     budget = _EXTRACT_CONTENT_CHARS // max(len(doc.sources) + (1 if payload else 0), 1)
-    blocks, allowed_names, notes, watermarks, failures = [], None, [], {}, []
+    blocks, allowed_names, notes, watermarks, failures, records = [], None, [], {}, [], []
 
     if payload:
         blocks.append(f"=== Source: webhook payload ===\n{payload[:budget]}")
 
     for source in doc.sources:
         try:
-            if source.source_type != "Document Query":
+            if source.source_type == "File Query":
+                narrow = doc_name if doc_doctype == _FILE_DOCTYPE else None
+                rows, note, read_up_to = _read_files(source, doc, cfg, started, narrow, preview)
+                records.extend(rows)
+                text, names = "", None
+            elif source.source_type != "Document Query":
                 text, names, note, read_up_to = _fetch(source.source_url)[:budget], None, "", None
             else:
                 # An event run reads the one record that changed — but only from the
@@ -528,7 +553,7 @@ def _read_source(
     if failures and len(failures) == len(doc.sources) and not payload:
         raise AutomationError("; ".join(failures))
 
-    return "\n\n".join(blocks), allowed_names, "; ".join(notes + failures), watermarks
+    return "\n\n".join(blocks), allowed_names, "; ".join(notes + failures), watermarks, records
 
 
 def _source_fields(doctype: str) -> list[str]:
@@ -558,9 +583,14 @@ def _normalized_filters(raw: Any) -> list[list]:
     return [list(row) for row in raw or [] if isinstance(row, list | tuple)]
 
 
-def _read_documents(
-    source, cfg: dict, started, doc_name: str | None, budget: int, preview: bool = False
-) -> tuple[str, set[str], str, Any]:
+def _query_rows(
+    doctype: str, source, cfg: dict, started, doc_name: str | None, fields: list[str], preview: bool
+) -> tuple[list, Any]:
+    """Filters + the incremental watermark + the get_list read fence — shared by
+    _read_documents (Document Query) and _read_files (File Query).
+
+    Returns (rows, read_up_to). `read_up_to` is None when the source isn't incremental.
+    """
     filters = _normalized_filters(frappe.parse_json(source.source_filters or "[]"))
 
     # An event run reads one named record, so it is not a window over time and must never
@@ -583,18 +613,21 @@ def _read_documents(
     # source_limit takes the head of the backlog and leaves the watermark at the last row
     # handled — newest-first would starve the tail permanently.
     limit = cint(source.source_limit) or _SOURCE_LIMIT_DEFAULT
-    rows = frappe.get_list(
-        source.source_doctype,
-        filters=filters,
-        fields=_source_fields(source.source_doctype),
-        limit=limit,
-        order_by="modified asc",
-    )
+    rows = frappe.get_list(doctype, filters=filters, fields=fields, limit=limit, order_by="modified asc")
 
     # A capped batch read the head of the backlog only, so the next run resumes at the
     # last row it actually handled; an uncapped one read everything up to the moment this
     # run started. `started`, not `now`: a record changed during a long run is not lost.
     read_up_to = (rows[-1].get("modified") if len(rows) == limit else started) if incremental else None
+    return rows, read_up_to
+
+
+def _read_documents(
+    source, cfg: dict, started, doc_name: str | None, budget: int, preview: bool = False
+) -> tuple[str, set[str], str, Any]:
+    rows, read_up_to = _query_rows(
+        source.source_doctype, source, cfg, started, doc_name, _source_fields(source.source_doctype), preview
+    )
     if not rows:
         return "", set(), "", read_up_to
 
@@ -618,6 +651,55 @@ def _read_documents(
             notes.append(attachment_note)
 
     return text[:budget], {row["name"] for row in kept}, "; ".join(notes), read_up_to
+
+
+def _ocr_readable(file_name: str | None) -> bool:
+    """_ocr.prep_parts returns [] for anything that is not a PDF or an image, and ocr()
+    would still bill a provider call for the empty result — shared by _read_attachments
+    and _read_files so a non-document file is skipped before that call, not after."""
+    mime = mimetypes.guess_type(file_name or "")[0] or ""
+    return mime == "application/pdf" or mime.startswith("image/")
+
+
+def _read_files(
+    source, doc, cfg: dict, started, doc_name: str | None, preview: bool
+) -> tuple[list[dict], str, Any]:
+    """The File Query reader. Reuses _query_rows' filter/watermark/get_list machinery over
+    the File doctype, then calls api.extract() per file instead of serialising the row —
+    PLAN and EXTRACT drop out of the pipeline for a File Query entirely, since extract()
+    plans against the target doctype's own metadata (see the module docstring's action
+    table and CremaAutomationTask._validate_action).
+
+    Returns (records, note, read_up_to). A file that fails to extract — including a
+    CremaBlockedError from layer 1 on poisoned document text, same as _read_documents'
+    per-record scan drop — is skipped and noted rather than failing the whole source: one
+    bad PDF must not disable the task after five runs.
+    """
+    rows, read_up_to = _query_rows(_FILE_DOCTYPE, source, cfg, started, doc_name, _FILE_QUERY_FIELDS, preview)
+    if not rows:
+        return [], "", read_up_to
+
+    records, failures, unreadable = [], [], 0
+    for row in rows:
+        if not _ocr_readable(row["file_name"]):
+            unreadable += 1
+            continue
+        try:
+            result = api.extract(doc.target_doctype, row["file_url"])
+        except Exception as exc:
+            failures.append(f"{row['file_name']} — {_describe(exc)}")
+            continue
+        if result["records"]:
+            records.extend(result["records"])
+        else:
+            failures.append(f"{row['file_name']} — {result['reason'] or 'no records found'}")
+
+    notes = []
+    if unreadable:
+        notes.append(f"{unreadable} file(s) skipped (not a PDF or image)")
+    if failures:
+        notes.append(f"{len(failures)} file(s) unreadable: {'; '.join(failures)}")
+    return records, "; ".join(notes), read_up_to
 
 
 def _read_attachments(doctype: str, rows: list) -> tuple[str, str]:
@@ -644,10 +726,7 @@ def _read_attachments(doctype: str, rows: list) -> tuple[str, str]:
             limit=_ATTACHMENT_MAX_PER_RECORD,
         )
         for file in files:
-            mime = mimetypes.guess_type(file.file_name or "")[0] or ""
-            # _ocr.prep_parts returns [] for anything that is not a PDF or an image, and
-            # ocr() would still bill a provider call for the empty result.
-            if mime != "application/pdf" and not mime.startswith("image/"):
+            if not _ocr_readable(file.file_name):
                 continue
             try:
                 text = api.ocr(file.file_url)["text"]
@@ -848,41 +927,58 @@ def _row_values(field_map: dict[str, str], row: dict) -> dict[str, Any]:
     return {fieldname: row[key] for key, fieldname in field_map.items() if key in row}
 
 
+def _match_existing(
+    doctype: str,
+    values: dict[str, Any],
+    match_fields: list[str],
+    *,
+    allowed_names: set[str] | None = None,
+    create: bool = True,
+) -> str | bool | None:
+    """The identify-or-skip fence shared by _upsert (an LLM-authored field_map row) and
+    _upsert_files (an extract() record, already fieldname-keyed by _filter_diff). Returns
+    the matched record's name, None if none exists (create one), or False if this row
+    must be skipped instead.
+
+    `create=False` and `allowed_names` are the `Update the Records It Read` fences: never
+    create, and never touch a record the source query did not return — checked after the
+    lookup, so the fence holds whatever match fields were actually used.
+    """
+    filters = {fieldname: values.get(fieldname) for fieldname in match_fields}
+    if any(value is None or isinstance(value, dict | list) for value in filters.values()):
+        # None: the row can't be identified — skip rather than create junk. dict/list:
+        # frappe reads a list filter value as ["operator", ...], so a row could smuggle
+        # ["like", "%"] into the match and hit an arbitrary record instead of one equal
+        # to the extracted value.
+        return False
+
+    # get_list, not get_all: these filters are built from LLM-extracted values taken from
+    # fetched (attacker-influenceable) content, and get_all ignores permissions — it would
+    # happily locate and load a record the isolation user cannot see.
+    existing = frappe.get_list(doctype, filters=filters, limit=1, pluck="name")
+
+    if allowed_names is not None and (not existing or existing[0] not in allowed_names):
+        return False
+    if not existing and not create:
+        return False
+    return existing[0] if existing else None
+
+
 def _upsert(
     mapping: dict, rows: list[dict], *, create: bool = True, allowed_names: set[str] | None = None
 ) -> dict[str, int]:
     """Find-or-create one record per row, then (optionally) upsert one child row from the
-    same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts.
-
-    `create=False` and `allowed_names` are the `Update the Records It Read` fences: never
-    create, and never touch a record the source query did not return.
-    """
+    same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts."""
     doctype = mapping["doctype"]
     child = mapping.get("child_table")
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
 
     for row in rows:
         values = _row_values(mapping["field_map"], row)
-        filters = {fieldname: values.get(fieldname) for fieldname in mapping["match_fields"]}
-        if any(value is None or isinstance(value, dict | list) for value in filters.values()):
-            # None: the row can't be identified — skip rather than create junk. dict/list:
-            # frappe reads a list filter value as ["operator", ...], so a row could
-            # smuggle ["like", "%"] into the match and hit an arbitrary record instead of
-            # one equal to the extracted value.
-            counts["skipped"] += 1
-            continue
-
-        # get_list, not get_all: these filters are built from LLM-extracted values taken
-        # from fetched (attacker-influenceable) content, and get_all ignores permissions
-        # — it would happily locate and load a record the isolation user cannot see.
-        existing = frappe.get_list(doctype, filters=filters, limit=1, pluck="name")
-
-        # Checked after the lookup, so the fence holds whatever match_fields the model
-        # picked — it never depends on the plan having matched on "name".
-        if allowed_names is not None and (not existing or existing[0] not in allowed_names):
-            counts["skipped"] += 1
-            continue
-        if not existing and not create:
+        match = _match_existing(
+            doctype, values, mapping["match_fields"], allowed_names=allowed_names, create=create
+        )
+        if match is False:
             counts["skipped"] += 1
             continue
 
@@ -891,8 +987,8 @@ def _upsert(
         # onto whatever row the model named — with no permission check on that row.
         values.pop("name", None)
 
-        doc = frappe.get_doc(doctype, existing[0]) if existing else frappe.new_doc(doctype)
-        if existing and not child and _unchanged(doc, values):
+        doc = frappe.get_doc(doctype, match) if match else frappe.new_doc(doctype)
+        if match and not child and _unchanged(doc, values):
             # Skipping the save is what stops an incremental Update Source task from
             # bumping `modified` on every run and re-reading its own output forever. It
             # also makes the replan-after-partial-failure path idempotent.
@@ -903,7 +999,41 @@ def _upsert(
         if child:
             _upsert_child(doc, child, row)
         doc.save()
-        counts["updated" if existing else "created"] += 1
+        counts["updated" if match else "created"] += 1
+
+    return counts
+
+
+def _upsert_files(doctype: str, records: list[dict], match_fields: list[str]) -> dict[str, int]:
+    """The File Query writer. `records` are already {"set", "child_set"} dicts straight
+    from api.extract() — _filter_diff has already sanitised every key against the target
+    (and child) doctype's own meta, so there is no field_map to apply, unlike _upsert.
+    Shares _match_existing's identify-or-skip fence: a File Query always creates (never
+    `Update the Records It Read` — see CremaAutomationTask._validate_action), so
+    `allowed_names` is never passed here."""
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+
+    for record in records:
+        values = {k: v for k, v in (record.get("set") or {}).items() if k != "name"}
+        match = _match_existing(doctype, values, match_fields)
+        if match is False:
+            counts["skipped"] += 1
+            continue
+
+        child_set = record.get("child_set") or {}
+        doc = frappe.get_doc(doctype, match) if match else frappe.new_doc(doctype)
+        if match and not child_set and _unchanged(doc, values):
+            counts["unchanged"] += 1
+            continue
+
+        doc.update(values)
+        for fieldname, child_rows in child_set.items():
+            # The file is the whole truth for its own line items — replace, don't merge.
+            doc.set(fieldname, [])
+            for child_row in child_rows:
+                doc.append(fieldname, child_row)
+        doc.save()
+        counts["updated" if match else "created"] += 1
 
     return counts
 
@@ -924,9 +1054,24 @@ def dry_run(task: str) -> dict[str, Any]:
     cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
 
     with sandbox.isolation(cfg["isolation_user"]):
-        content, allowed_names, note, _ = _read_source(doc, cfg, now_datetime(), None, None, preview=True)
-        if not content.strip():
+        content, allowed_names, note, _, records = _read_source(
+            doc, cfg, now_datetime(), None, None, preview=True
+        )
+        if not content.strip() and not records:
             return {"action": doc.action, "row_count": 0, "note": note or "no records matched"}
+
+        if doc.file_sources():
+            # No plan for a File Query — each file already reads as a full {"set",
+            # "child_set"} record via api.extract(), so (unlike the plan-based rows
+            # below) the preview can show child rows too. crema_show_dry_run treats a
+            # missing used_stored_plan key as "there is no plan to describe" rather than
+            # "a new one was written".
+            return {
+                "action": doc.action,
+                "rows": records[:20],
+                "row_count": len(records),
+                "note": note,
+            }
 
         if doc.action == "No Changes":
             return {"action": doc.action, "report": api.ask(doc.interface, doc.instruction, context=content)}

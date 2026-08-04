@@ -28,12 +28,30 @@ from frappe.utils import cint
 
 _DEFAULT_SOURCE_LIMIT = 50
 _MAX_SOURCE_LIMIT = 200
+# A File Query bills at least two AI calls per file (OCR, then extraction), against one
+# per record for a Document Query — a lower default and cap keep an unattended run's cost
+# in the same ballpark.
+_DEFAULT_FILE_SOURCE_LIMIT = 10
+_MAX_FILE_SOURCE_LIMIT = 50
+
+_FILE_DOCTYPE = "File"
 
 
 class CremaAutomationSource(Document):
     def validate(self) -> None:
         if self.source_type == "Document Query":
-            self._validate_query()
+            if not self.source_doctype:
+                frappe.throw(_("A Document Query source needs a Record Type to Read."))
+            self._validate_query(self.source_doctype, _DEFAULT_SOURCE_LIMIT, _MAX_SOURCE_LIMIT)
+            self.read_attachments = cint(self.read_attachments)
+        elif self.source_type == "File Query":
+            # Pinned, not admin-chosen: a File Query always reads the File doctype itself
+            # (the bytes), never a doctype's own fields — that is what a Document Query is
+            # for. Pinning it here is also what makes a Document Event trigger work on a
+            # File Query for free: _event_tasks maps (doctype, event) -> task, and this
+            # gives it "File" to key on with no extra code.
+            self._validate_query(_FILE_DOCTYPE, _DEFAULT_FILE_SOURCE_LIMIT, _MAX_FILE_SOURCE_LIMIT)
+            self.read_attachments = 0  # a File Query IS the file read; nothing to attach
         else:
             self.source_doctype = None
             self.source_filters = None
@@ -48,27 +66,24 @@ class CremaAutomationSource(Document):
 
         self.source_label = self._label()
 
-    def _validate_query(self) -> None:
-        if not self.source_doctype:
-            frappe.throw(_("A Document Query source needs a Record Type to Read."))
-        if frappe.get_meta(self.source_doctype).module == "Crema":
+    def _validate_query(self, doctype: str, default_limit: int, max_limit: int) -> None:
+        self.source_doctype = doctype
+        if frappe.get_meta(doctype).module == "Crema":
             frappe.throw(
-                _("'{0}' is a Crema doctype — a task cannot read crema's own records.").format(
-                    self.source_doctype
-                )
+                _("'{0}' is a Crema doctype — a task cannot read crema's own records.").format(doctype)
             )
 
         self.source_url = None
-        self.source_limit = min(cint(self.source_limit) or _DEFAULT_SOURCE_LIMIT, _MAX_SOURCE_LIMIT)
+        self.source_limit = min(cint(self.source_limit) or default_limit, max_limit)
 
         try:
             # A trial query is the cheapest way to reject a bad fieldname/operator/shape
             # now, with frappe's own error message, instead of at 3am in last_error.
-            frappe.get_all(self.source_doctype, filters=self.parsed_filters(), limit=1)
+            frappe.get_all(doctype, filters=self.parsed_filters(), limit=1)
         except frappe.ValidationError:
             raise
         except Exception as exc:
-            frappe.throw(_("Which Records is not usable on {0}: {1}").format(self.source_doctype, str(exc)))
+            frappe.throw(_("Which Records is not usable on {0}: {1}").format(doctype, str(exc)))
 
     def parsed_filters(self) -> dict | list:
         raw = (self.source_filters or "").strip()
@@ -88,13 +103,15 @@ class CremaAutomationSource(Document):
         note lines, where "· 2 filters" would be noise."""
         if self.source_type == "Document Query":
             return self.source_doctype or ""
+        if self.source_type == "File Query":
+            return "Files"
         # The scheme is noise in a grid cell and every URL here has one.
         return (self.source_url or "").split("://", 1)[-1]
 
     def _label(self) -> str:
         """The What grid column: heading(), plus the filter count when there is one."""
         heading = self.heading()
-        if self.source_type != "Document Query":
+        if self.source_type not in ("Document Query", "File Query"):
             return heading
         count = len(self.parsed_filters())
         if not count:

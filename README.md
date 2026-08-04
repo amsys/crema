@@ -99,11 +99,13 @@ monthly budget, or any other failure surfaces as a message — never a silent no
 - **Automation** — a task reads one or more sources — any mix of URLs and
   permission-fenced queries over your own records, optionally including the files
   attached to each record (so an invoice that arrives by email can be read into a
-  record) — self-plans once, and then either creates or updates records, writes values
-  back onto the records it read, or changes nothing. Any task can email what it did. It
-  runs on a cron schedule, on a document event, or on an authenticated webhook call, and
-  a Dry Run button shows what it would do before it does it. The plan is data, never
-  code.
+  record), or a permission-fenced query over uploaded files on their own (so an
+  invoice attached anywhere on the site can be read into a record, matched on a field
+  you choose so a re-read updates instead of duplicating) — self-plans once, and then
+  either creates or updates records, writes values back onto the records it read, or
+  changes nothing. Any task can email what it did. It runs on a cron schedule, on a
+  document event, or on an authenticated webhook call, and a Dry Run button shows what
+  it would do before it does it. The plan is data, never code.
 - **Health probe** — `health()` and `is_configured()` let a consuming app show its own
   status page; the caller applies its own role check.
 - **Cost control and audit** — an optional monthly budget per interface and per

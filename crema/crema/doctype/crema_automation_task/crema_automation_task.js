@@ -76,17 +76,29 @@ function crema_show_dry_run(frm, result) {
 		frm.doc.action === "Update the Records It Read"
 			? __("would be updated")
 			: __("would be written");
+	// A File Query dry run has no plan at all — each file was read straight into records
+	// by extract() — so "used_stored_plan" is absent rather than false, and the line
+	// below is skipped entirely instead of misreporting "a new plan was written".
+	const plan_line =
+		"used_stored_plan" in result
+			? result.used_stored_plan
+				? `<p class="text-muted small">${__("Using the stored plan.")}</p>`
+				: `<p class="text-muted small">${__("A new plan was written and saved.")}</p>`
+			: "";
 	const header = [
 		`<p>${__("{0} row(s) {1}. Nothing was saved.", [result.row_count, verb])}</p>`,
-		result.used_stored_plan
-			? `<p class="text-muted small">${__("Using the stored plan.")}</p>`
-			: `<p class="text-muted small">${__("A new plan was written and saved.")}</p>`,
+		plan_line,
 		result.note
 			? `<p class="text-muted small">${frappe.utils.escape_html(result.note)}</p>`
 			: "",
 	].join("");
 
-	const rows = (result.rows || []).map((row) => crema_diff_table({ set: row })).join("");
+	// A File Query row already comes back shaped {set, child_set} from extract(), so it
+	// renders as-is (child rows included); a plan-based row is still a flat extracted
+	// object and needs wrapping the way it always has.
+	const rows = (result.rows || [])
+		.map((row) => crema_diff_table(row && row.set !== undefined ? row : { set: row }))
+		.join("");
 	frappe.msgprint({ title: __("Dry Run"), message: header + rows, wide: true });
 }
 
@@ -99,7 +111,8 @@ function crema_show_dry_run(frm, result) {
 function crema_render_row_filters(frm, row) {
 	const grid_row = frm.fields_dict.sources.grid.grid_rows_by_docname[row.name];
 	const field = grid_row && grid_row.grid_form && grid_row.grid_form.fields_dict.source_filters;
-	if (!field || row.source_type !== "Document Query" || !row.source_doctype) return;
+	const is_query = row.source_type === "Document Query" || row.source_type === "File Query";
+	if (!field || !is_query || !row.source_doctype) return;
 
 	let filters = [];
 	try {
@@ -197,8 +210,14 @@ function crema_render_row_filters(frm, row) {
 // row's cell without hiding every row's.
 function crema_stamp_row(frm, row) {
 	const query = row.source_type === "Document Query";
+	const file_query = row.source_type === "File Query";
 	const set = (fieldname, value) =>
 		frappe.model.set_value(row.doctype, row.name, fieldname, value);
+
+	// A File Query always reads the File doctype itself — pinned here (mirroring
+	// CremaAutomationSource.validate) so Which Records' depends_on and the filter
+	// dialog below both have a doctype to work with before the row is even saved.
+	if (file_query && row.source_doctype !== "File") set("source_doctype", "File");
 
 	let count = 0;
 	try {
@@ -207,15 +226,21 @@ function crema_stamp_row(frm, row) {
 		count = 0;
 	}
 
-	const heading = query
+	const heading = file_query
+		? "Files"
+		: query
 		? row.source_doctype || ""
 		: (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "");
 
 	set(
 		"source_label",
-		query && count ? `${heading} · ${count} filter${count > 1 ? "s" : ""}` : heading
+		(query || file_query) && count
+			? `${heading} · ${count} filter${count > 1 ? "s" : ""}`
+			: heading
 	);
-	if (!query) {
+	if (file_query) {
+		set("read_attachments", 0); // the File Query IS the file read; nothing to attach
+	} else if (!query) {
 		set("source_limit", 0);
 		set("incremental", 0);
 		set("read_attachments", 0);
@@ -225,7 +250,14 @@ function crema_stamp_row(frm, row) {
 frappe.ui.form.on("Crema Automation Source", {
 	form_render: (frm, cdt, cdn) => crema_render_row_filters(frm, locals[cdt][cdn]),
 
-	source_type: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
+	source_type(frm, cdt, cdn) {
+		// For File Query, crema_stamp_row's own source_doctype="File" set_value re-enters
+		// this doctype's own handler below and re-renders the filter dialog on it. This
+		// call still matters on its own: switching between two non-Document-Query types
+		// (URL <-> File Query with no filters yet) never fires that handler.
+		crema_stamp_row(frm, locals[cdt][cdn]);
+		crema_render_row_filters(frm, locals[cdt][cdn]);
+	},
 	source_url: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
 	source_limit: (frm, cdt, cdn) => crema_stamp_row(frm, locals[cdt][cdn]),
 	source_filters(frm, cdt, cdn) {
@@ -247,6 +279,71 @@ frappe.ui.form.on("Crema Automation Source", {
 		});
 	},
 });
+
+// Match Records On is admin-entered, not model-authored (see automation.py's module
+// docstring and CremaAutomationTask._validate_match_on): the target doctype's own
+// metadata already answers "what identifies this record" deterministically, so this is
+// a picker over that metadata, not a planning call.
+function crema_default_match_fields(doctype) {
+	const meta = frappe.get_meta(doctype);
+	if (!meta) return [];
+	const unique = meta.fields.filter((df) => df.unique).map((df) => df.fieldname);
+	if (unique.length) return unique;
+	const autoname = (meta.autoname || "").match(/^field:(.+)$/);
+	return autoname ? [autoname[1]] : [];
+}
+
+// A clickable "Pick fields…" link under Match Records On, mirroring the click-to-open
+// pattern crema_render_row_filters uses for a source row's Which Records — the Data
+// field stays the source of truth and degrades to editable text if this cannot render.
+function crema_render_match_on_picker(frm) {
+	const field = frm.fields_dict.match_on;
+	if (!field) return;
+	$(field.wrapper).find(".crema-match-on-pick").remove();
+	if (!frm.doc.target_doctype || !frm.has_perm("write")) return;
+
+	$(
+		`<a class="crema-match-on-pick small text-muted" style="cursor:pointer">${__(
+			"Pick fields…"
+		)}</a>`
+	)
+		.appendTo($(field.wrapper).find(".control-input-wrapper"))
+		.on("click", () => {
+			const doctype = frm.doc.target_doctype;
+			frappe.model.with_doctype(doctype, () => {
+				const options = frappe
+					.get_meta(doctype)
+					.fields.filter((df) => !df.hidden && frappe.model.is_value_type(df))
+					.map((df) => df.fieldname)
+					.concat("name");
+
+				const dialog = new frappe.ui.Dialog({
+					title: __("Match Records On"),
+					fields: [
+						{
+							fieldtype: "MultiSelectPills",
+							fieldname: "fields",
+							label: __("Fields"),
+							get_data: (txt) => options.filter((f) => f.includes(txt || "")),
+						},
+					],
+					primary_action_label: __("Set"),
+					primary_action(values) {
+						frm.set_value("match_on", (values.fields || []).join(", "));
+						dialog.hide();
+					},
+				});
+				dialog.set_value(
+					"fields",
+					(frm.doc.match_on || "")
+						.split(",")
+						.map((f) => f.trim())
+						.filter(Boolean)
+				);
+				dialog.show();
+			});
+		});
+}
 
 frappe.ui.form.on("Crema Automation Task", {
 	onload(frm) {
@@ -274,6 +371,17 @@ frappe.ui.form.on("Crema Automation Task", {
 	// the trigger promises shows up when the trigger is picked, instead of the grid
 	// sitting empty — and mandatory — until a save the user cannot make yet. Like the
 	// server, this never removes the row when the trigger changes away.
+	// Prefill from the doctype's own metadata rather than leaving the admin to guess a
+	// fieldname — never overwrites a value they already set.
+	target_doctype(frm) {
+		crema_render_match_on_picker(frm);
+		if (!frm.doc.target_doctype || frm.doc.match_on) return;
+		frappe.model.with_doctype(frm.doc.target_doctype, () => {
+			const fields = crema_default_match_fields(frm.doc.target_doctype);
+			if (fields.length) frm.set_value("match_on", fields.join(", "));
+		});
+	},
+
 	trigger(frm) {
 		if (frm.doc.trigger !== "Incoming Email") return;
 		const seeded = (frm.doc.sources || []).some(
@@ -297,6 +405,7 @@ frappe.ui.form.on("Crema Automation Task", {
 
 	refresh(frm) {
 		crema_render_status(frm);
+		crema_render_match_on_picker(frm);
 		if (frm.is_new()) return;
 
 		frm.add_custom_button(__("Dry Run"), () => crema_dry_run(frm));

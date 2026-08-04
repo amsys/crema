@@ -100,6 +100,15 @@ class CremaAutomationTask(Document):
         these."""
         return [row for row in self.sources if row.source_type == "Document Query"]
 
+    def file_sources(self) -> list:
+        """The File Query rows — at most one, enforced by _validate_sources below."""
+        return [row for row in self.sources if row.source_type == "File Query"]
+
+    def record_sources(self) -> list:
+        """Every row that can drive a Document Event trigger — a Document Query on the
+        changed doctype, or a File Query (which always watches "File")."""
+        return self.query_sources() + self.file_sources()
+
     # -- virtual fields -----------------------------------------------------------
     #
     # Read-only views onto data the form used to render as a hand-built HTML blob. Each
@@ -215,12 +224,36 @@ class CremaAutomationTask(Document):
                 )
             )
 
+        # A File Query skips PLAN/EXTRACT entirely and calls api.extract() per file — see
+        # automation._run_inside. Mixing it with text sources would mean half the run
+        # produces records and half produces prose, with nothing to join them into one
+        # pipeline; refusing the combination is simpler than inventing one.
+        if self.file_sources() and len(self.sources) > 1:
+            frappe.throw(
+                _(
+                    "A File Query source cannot share a task with any other source — it reads "
+                    "files into records on its own."
+                )
+            )
+
     def _validate_action(self) -> None:
         # Any action may email its result, so the recipients are checked for all of them.
         for address in split_emails(self.notify_to or ""):
             validate_email_address(address, throw=True)
 
-        if self.action == "Update the Records It Read":
+        if self.file_sources():
+            if self.action != "Create or Update Records":
+                frappe.throw(
+                    _(
+                        "A File Query source only supports Create or Update Records — it always "
+                        "produces new-or-changed records, never a report or an update to the "
+                        "records it read."
+                    )
+                )
+            if not self.target_doctype:
+                frappe.throw(_("Create or Update Records needs a Record Type to Write."))
+            self._validate_match_on()
+        elif self.action == "Update the Records It Read":
             # See the module docstring — this is the fence, not a convenience check.
             queries = self.query_sources()
             if len(queries) != 1:
@@ -232,10 +265,33 @@ class CremaAutomationTask(Document):
                     )
                 )
             self.target_doctype = queries[0].source_doctype
+            self.match_on = None
         elif self.action == "No Changes":
             self.target_doctype = None
+            self.match_on = None
         elif not self.target_doctype:
             frappe.throw(_("Create or Update Records needs a Record Type to Write."))
+        else:
+            self.match_on = None
+
+    def _validate_match_on(self) -> None:
+        """Which field(s) identify "the same record" across runs — admin-entered, not
+        model-authored: the doctype's own metadata already answers this deterministically
+        (a unique field, or the field autoname keys on), so asking an LLM would add cost
+        and a failure mode for a question that has a fixed answer. Validated the same way
+        automation._validate_field_maps checks a plan's match_fields."""
+        fields = [f.strip() for f in (self.match_on or "").split(",") if f.strip()]
+        if not fields:
+            frappe.throw(_("A File Query source needs Match Records On — see its description."))
+
+        known = {df.fieldname for df in frappe.get_meta(self.target_doctype).fields} | {"name"}
+        if unknown := [f for f in fields if f not in known]:
+            frappe.throw(
+                _("Match Records On has unknown field(s) on {0}: {1}").format(
+                    self.target_doctype, ", ".join(unknown)
+                )
+            )
+        self.match_on = ", ".join(fields)
 
     def _apply_email_trigger(self) -> None:
         """Incoming Email is sugar over Document Event, materialised into the ordinary
@@ -281,11 +337,11 @@ class CremaAutomationTask(Document):
             return
         if not self.event:
             frappe.throw(_("A Document Event trigger needs an Event."))
-        if not self.query_sources():
+        if not self.record_sources():
             frappe.throw(
                 _(
-                    "A Document Event trigger needs a Document Query source — it runs on the record "
-                    "that changed."
+                    "A Document Event trigger needs a Document Query or File Query source — it runs "
+                    "on the record (or file) that changed."
                 )
             )
 
@@ -295,7 +351,7 @@ class CremaAutomationTask(Document):
         is being authored, so an unresolvable one is Crema Settings' problem, not this
         form's. Blocking here would also make an unrelated Crema Settings change able to
         lock a System Manager out of editing tasks."""
-        doctypes = [row.source_doctype for row in self.query_sources()]
+        doctypes = [row.source_doctype for row in self.record_sources()]
         if not doctypes:
             doctypes = [self.target_doctype] if self.target_doctype else []
         if not doctypes:

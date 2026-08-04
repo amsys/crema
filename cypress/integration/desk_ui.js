@@ -621,3 +621,58 @@ describe("Crema Provider list", () => {
 		cy.get(".list-row-head").contains("Address").should("exist");
 	});
 });
+
+// Covers the File Query source type and the Match Records On picker
+// (crema_automation_task.js): a File Query row pins its own doctype and reuses the
+// Which Records filter dialog, and Match Records On is a plain Data field with a
+// clickable "Pick fields…" helper once a target doctype is chosen.
+describe("Crema Automation Task form — File Query source", () => {
+	before(() => {
+		cy.login();
+	});
+
+	beforeEach(() => {
+		cy.visit("/app/crema-automation-task/new");
+	});
+
+	it("offers File Query as a source type and pins it to the File doctype", () => {
+		cy.get(".grid-add-row, [data-fieldname='sources'] .grid-add-row").click();
+		cy.get(
+			".grid-row-open select[data-fieldname='source_type'], select[data-fieldname='source_type']"
+		)
+			.last()
+			.select("File Query");
+
+		// source_doctype is hidden (depends_on Document Query only) but stamped to "File"
+		// underneath — the Which Records filter dialog is what proves it rendered.
+		cy.contains(".grid-row-open", "Which Records").should("be.visible");
+		cy.contains(".grid-row-open, .grid-body", "Click to set filters").should("exist");
+	});
+
+	it("clears Files (attachments) for a File Query row", () => {
+		cy.get(".grid-add-row, [data-fieldname='sources'] .grid-add-row").click();
+		cy.get("select[data-fieldname='source_type']").last().select("File Query");
+
+		cy.get(".grid-row [data-fieldname='read_attachments'] input[type='checkbox']")
+			.last()
+			.should("not.be.checked");
+	});
+
+	it("shows a Pick fields… helper on Match Records On once a target doctype is set", () => {
+		cy.get("select[data-fieldname='action']").select("Create or Update Records");
+		cy.get("[data-fieldname='target_doctype'] input").type("Contact{enter}");
+		cy.wait(300); // frappe.model.with_doctype fetches Contact's meta before the link renders
+
+		cy.get("[data-fieldname='match_on']")
+			.contains("a", "Pick fields…")
+			.should("be.visible")
+			.click();
+
+		cy.get(".modal-title").contains("Match Records On").should("be.visible");
+		cy.get(".modal .awesomplete input").type("first_name");
+		cy.contains("li", "first_name").click();
+		cy.contains(".modal-footer button", "Set").click();
+
+		cy.get("[data-fieldname='match_on'] input").should("have.value", "first_name");
+	});
+});

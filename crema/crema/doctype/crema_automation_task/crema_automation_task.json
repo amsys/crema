@@ -35,6 +35,7 @@
   "column_break_action",
   "action",
   "target_doctype",
+  "match_on",
   "notify_to",
   "section_plan",
   "plan_target_doctype",
@@ -193,6 +194,13 @@
    "label": "Record Type to Write",
    "mandatory_depends_on": "eval:doc.action==\"Create or Update Records\"",
    "options": "DocType"
+  },
+  {
+   "depends_on": "eval:doc.action==\"Create or Update Records\" && (doc.sources||[]).some(r=>r.source_type==\"File Query\")",
+   "description": "Which field or fields (comma-separated) identify the same record across runs — for example email_id, or invoice_no. A file whose values match an existing record updates it instead of creating a duplicate. Required for a File Query source.",
+   "fieldname": "match_on",
+   "fieldtype": "Data",
+   "label": "Match Records On"
   },
   {
    "description": "Email addresses to send the result to after each successful run, separated by commas. Works with any action: a task that writes records emails what it did. Leave empty to only save it on this task.",

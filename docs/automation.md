@@ -2,14 +2,16 @@
 
 A **Crema Automation Task** reads a source, sends it to an LLM, and does something
 with the result — on a schedule, or when a document changes. Each task runs four
-steps in order: SOURCE, PLAN, EXTRACT, WRITE.
+steps in order: SOURCE, PLAN, EXTRACT, WRITE. A [File Query](#file-query) source is the
+exception: it skips PLAN and EXTRACT, mapping each file onto the target doctype
+directly.
 
 Build a task from three choices:
 
 | Choice | Options |
 |---|---|
 | **Trigger** — when it runs | `Schedule` (a cron expression), `Once` (a date and time), `Document Event`, `Incoming Email`, or `Webhook` |
-| **Sources** — what it reads | One or more rows: `URL`, or `Document Query` (records on this site). A task can mix them. A Webhook task can also read what the caller sends. |
+| **Sources** — what it reads | One or more rows: `URL`, `Document Query` (records on this site), or `File Query` (uploaded files, read into records). A task can mix `URL` and `Document Query`; a `File Query` row must stand alone. A Webhook task can also read what the caller sends. |
 | **Action** — what it does | `Create or Update Records`, `Update the Records It Read`, or `No Changes` |
 
 Any task can also email what it did. That is not one of the three choices — put an
@@ -35,6 +37,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
 | `action` | Select | `Create or Update Records`, `Update the Records It Read`, or `No Changes`. |
 | `target_doctype` | Link (DocType) | Label **Record Type to Write**. For `Create or Update Records`. The only doctype this task can write to. |
+| `match_on` | Data | Label **Match Records On**. Comma-separated fieldname(s) on `target_doctype`. Required for a `File Query` source — see [File Query](#file-query) below. Unused, and cleared, by the other two actions. |
 | `notify_to` | Small Text | Label **Email Report To**. Comma-separated addresses. Works with every action. |
 | `plan_json` | Code (read-only) | Label **Raw Plan (JSON)**. Written by the system on the first run. The system replaces it when you change the plan inputs, or when the stored plan no longer validates. |
 | `plan_target_doctype` | Data (read-only) | Label **Creates or Updates**. Read from the stored plan. |
@@ -58,20 +61,22 @@ Run**, **Changed** and **Files** — and the rest opens with the row's edit butt
 The rows are read in the order shown, but the order changes nothing: each row is read on
 its own and the results are joined. The grid is deliberately not numbered.
 
-**Per Run**, **Changed** and **Files** apply to a Document Query only. A URL row shows
-them empty, and clears them when you save.
+**Per Run** and **Changed** apply to a Document Query or a File Query. **Files**
+(attachments) applies to a Document Query only — a File Query already reads files, so
+it has nothing of its own to attach. A URL row shows all three empty, and clears them
+when you save.
 
 | Field | Type | Notes |
 |---|---|---|
-| `source_type` | Select | Label **Type**. `URL` or `Document Query`. |
+| `source_type` | Select | Label **Type**. `URL`, `Document Query`, or `File Query`. |
 | `source_url` | Data | For a URL source. The only address this source reads. Only a System Manager can set it. |
-| `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. |
-| `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. |
-| `source_limit` | Int | Label **Per Run**. Most records to read in one run. 50 by default, 200 maximum. |
-| `incremental` | Check | Label **Changed**. Read only records changed since this source was last read. On by default. Has no effect on a Document Event run, which always reads the one record that triggered it. |
-| `read_attachments` | Check | Label **Files**. Also read the files attached to each record. See [Attachments](#attachments) below. |
+| `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. A File Query source always reads `File` — this is filled in for you and not shown. |
+| `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. For a File Query, filters narrow which files — for example `attached_to_doctype`, `is_private`, or `file_name`. |
+| `source_limit` | Int | Label **Per Run**. Most records (or files) to read in one run. 50 by default for a Document Query, 200 maximum; 10 by default for a File Query, 50 maximum — each file costs at least two AI calls, against one per record for a Document Query. |
+| `incremental` | Check | Label **Changed**. Read only records (or files) changed since this source was last read. On by default. Has no effect on a Document Event run, which always reads the one record (or file) that triggered it. |
+| `read_attachments` | Check | Label **Files**. Also read the files attached to each record. See [Attachments](#attachments) below. Not available on a File Query source. |
 | `last_read` | Datetime (read-only) | Label **Read Up To**. How far this source has been read. Clear it to read everything again. |
-| `source_label` | Data (read-only) | Label **What**. Filled in for you: the record type or the address, and the number of filters (`Communication · 2 filters`). A grid column only — it does not appear when you open the row. |
+| `source_label` | Data (read-only) | Label **What**. Filled in for you: the record type, the address, or `Files`, and the number of filters (`Communication · 2 filters`). A grid column only — it does not appear when you open the row. |
 
 The result of the last run shows as a coloured indicator next to the task name at the
 top of the form. Open **Last Run** for the times, the result, and any error. Open
@@ -183,6 +188,37 @@ not skipped. A failed run moves no watermark at all — it reads the same record
 `last_run` is not a watermark. It is only the point the schedule counts from, and
 nothing moves it backwards.
 
+### File Query
+
+The source reads files that match `source_filters` — for example every unattached PDF
+uploaded in the last day, or every file attached to `Sales Invoice`. Each matching file
+goes through the same file-to-records pipeline as a robot-button import on a form: OCR
+(embedded text when a PDF has it, vision OCR when it does not), then a mapping onto
+`target_doctype`'s fields. The model decides how many records one file describes — one
+invoice is one record, a statement listing several invoices is several.
+
+A File Query source skips PLAN and EXTRACT — there is no shared plan to write, because
+each file is mapped against `target_doctype`'s own fields directly. This is also why
+`match_on` exists: with no plan, nothing else tells the task which field (or fields)
+identify "the same record" so that reading an invoice a second time updates it instead
+of importing a duplicate. Set **Match Records On** to a fieldname that will hold a
+stable value from the file — an invoice number, an email address — comma-separated if
+more than one field is needed together.
+
+A File Query source has two things the others don't:
+
+* **It cannot share a task with any other source.** A run either reads files into
+  records, or reads text — mixing the two has no single result to act on.
+* **It only supports `Create or Update Records`.** `Update the Records It Read` would
+  mean writing back to `File` itself; `No Changes` wants text to summarise, which this
+  path never produces.
+
+A file Crema cannot read — anything that is not a PDF or a picture — is skipped and
+noted in `last_result`, the same as an unreadable attachment. A file whose text trips
+the security scan is skipped and noted too, rather than failing the whole run; its
+siblings still import. See [security.md](security.md) for what the account in
+**Runs As** needs to be able to list files it does not own.
+
 ### Attachments
 
 Switch on **Files** and the source also reads the files attached to each record it
@@ -214,7 +250,8 @@ email case.
 ### Create or Update Records
 
 The task creates or updates records of `target_doctype`. This is the only action that
-creates records.
+creates records. It is also the only action a File Query source may use — see
+[File Query](#file-query) above for how a file is matched against an existing record.
 
 ### Update the Records It Read
 
@@ -365,6 +402,9 @@ after a doctype change, for example. The next run writes a new one.
   `last_result` holds at most 20,000 characters, and `last_error` 2,000.
 - At most 5 attachments per record, PDFs and pictures only. Each one is a separate,
   billed OCR call.
+- A File Query source cannot share a task with any other source, and only supports
+  `Create or Update Records`. It reads at most `source_limit` files per run — 10 by
+  default, 50 maximum — and each file is two billed calls (OCR, then extraction).
 - A task keeps only the result of its last run. For the record of each LLM call, see
   the Crema Log.
 
@@ -443,6 +483,29 @@ this task writes to, and nothing more.
 Crema installs this task for you, switched off, named **Example — invoice from email**,
 with `action` set to `No Changes` so it writes nothing until you point it at a record
 type. Edit it or delete it — Crema seeds it once and never puts it back.
+
+### Turn uploaded invoices into records
+
+Anyone attaches a supplier invoice to a **File** in the desk — the Attach button, a
+drag-and-drop, or an integration that uploads files directly — and this reads it into a
+record. Unlike [Turn an emailed invoice into a record](#turn-an-emailed-invoice-into-a-record),
+nothing needs to arrive by mail first.
+
+1. Create a task named `Invoices from Uploads`.
+2. Keep `trigger` as `Schedule` and pick the `Hourly` preset.
+3. Add a source row and set its `source_type` to `File Query`.
+4. Click the filter table and add `is_private` `=` `0` (or narrow to
+   `attached_to_doctype` if invoices always land on a particular doctype).
+5. Set `instruction` to `Take the supplier, the invoice number, the invoice date, the
+   due date, the currency, and the total from each invoice`.
+6. Keep `action` as `Create or Update Records`, set `target_doctype` to
+   `Purchase Invoice`, and set **Match Records On** to a field that will hold a stable
+   value — `bill_no`, for example.
+7. Pick the `extraction` AI profile, save, then click **Dry Run**.
+
+A file read a second time — reprocessed after a correction, or uploaded twice by
+mistake — updates the same record instead of creating a duplicate, because of the
+field set in **Match Records On**.
 
 ### Email an overdue-invoice digest
 

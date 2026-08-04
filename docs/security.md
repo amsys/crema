@@ -246,7 +246,17 @@ error log.
 - `automation._fetch` follows HTTP redirects and applies no private-IP or loopback
   block. This is an accepted risk today, because only a System Manager can set
   `source_url`. The **Dry Run** button also reaches it, from a web request rather
-  than only from the scheduler. See [ROADMAP.md](../ROADMAP.md) for the planned fix.
+  than only from the scheduler. See [Planned hardening](#planned-hardening) below.
+- A File Query source lists `File` rows under the account in **Runs As** — the task's
+  own if it has one, otherwise the AI profile's. Frappe's own File permission rule
+  narrows that listing to `owner = <account>` for any account that is not a "System
+  User" (one with desk access, i.e. at least one role beyond the automatic ones) —
+  `is_private` and every other condition are ignored for such an account. An account
+  with no role at all can therefore never see a File it does not own, however the
+  filters read, and a File Query task on it silently reads nothing every run. Give the
+  account a role with desk access — the seeded `Crema User` role is enough — before
+  pointing a File Query at it. This is a Frappe permission rule, not a Crema one;
+  the same account also needs ordinary read/create rights on `target_doctype`.
 - An automation task with a Document Query source reads records that ordinary users
   write. Any user who can edit a field on `source_doctype` can therefore put text in
   front of a model that runs as the interface's isolation user — usually more
@@ -272,6 +282,54 @@ error log.
   token. A model that drops it on ordinary replies produces a false block on
   `output_trap = Block`. There is no way to tell that apart from a real hijack
   syntactically; the Crema Log is what makes the real rate visible.
+
+## Planned hardening
+
+Work not yet done, kept here rather than in ROADMAP.md because each item is a gap in a
+guarantee this page already states.
+
+- **SSRF egress control for `automation._fetch`.** A deny-list for private and
+  loopback addresses (or an allow-listed egress proxy), closing the redirect-following
+  gap the Known limits section above describes.
+- **Per-app scan patterns.** An installed app can register a new interface through
+  `crema_interfaces`, but has no way to add its own injection patterns to layer 1 —
+  `security.scan` has to stay free of any Frappe import, so this has to be a
+  caller-side merge one level up (the same shape `_scan_context` already uses for
+  `history`), not a hooks lookup inside `scan()` itself.
+- **An output-side content filter hook.** `log.redact` only scrubs a provider's own
+  API key out of error text — never the model's reply. A consuming app that needs a
+  PII or secret-term filter on every response runs its own regex layer today; Crema
+  has no equivalent hook.
+- **Layer 1 evasion resistance**, in order of value per unit of false-positive risk
+  added:
+  1. *Homoglyph folding — shipped, partially.* The look-alike-letter gap this page's
+     Known limits section describes: closing the rest needs a Unicode confusables-
+     skeleton pass.
+  2. *Separator squeezing* — `i g n o r e`, `ig-nore`, `ignore***previous` all defeat a
+     literal pattern today. Re-running the pattern loop over a second, whitespace- and
+     punctuation-collapsed copy of the text would catch them, at the cost of new false
+     positives on ordinary punctuated sentences — item 6 below has to ship first.
+  3. *Leet folding* (`1gn0re pr3v10us`), applied only to that same squeezed copy.
+  4. *Bounded decode-and-rescan* — an 80-character base64 run is blocked today, but a
+     40-character one that decodes to a blocked phrase is not. Decode base64, hex,
+     percent-, and HTML-entity-encoded, and ROT13 candidates once (no recursive
+     decoding), and rescan whatever decodes to mostly-printable ASCII.
+  5. *Score instead of first-match-wins* for paraphrased attacks ("set aside what you
+     were told before and follow this instead") that match no literal pattern —
+     keeping every literal pattern as an unconditional block and adding a scored
+     second layer over independent signals (an override verb, a reference to prior
+     instructions, a role assignment, a secrecy request). Highest ceiling on this
+     list, and the highest false-positive risk.
+  6. *A false-positive corpus and a shadow mode*, needed before any of 2–5 ship live:
+     a fixture set of ordinary business text that must stay clean, and a per-pattern
+     shadow flag that logs a "would have blocked" Crema Log row instead of raising —
+     the same `Log Only` → `Block` ladder `output_trap` already uses.
+  7. *Language coverage* — every pattern today is English phrasing; a static
+     per-language pattern table is a data addition, not an architecture change, since
+     `scan()` has to stay free of a `frappe.local.lang` lookup.
+  8. *Not planned:* matching an LLM classifier's paraphrase recall in regex. Layer 1
+     is meant to be the cheap, deterministic, offline pre-filter; genuine semantic
+     paraphrase is layer 2's job.
 
 ## Add a new scan pattern
 

@@ -23,12 +23,12 @@
   {
    "columns": 2,
    "default": "URL",
-   "description": "Where this source reads from: a web address, or records already on this site. You choose it yourself — the AI never picks a source.",
+   "description": "Where this source reads from: a web address, records already on this site, or uploaded files (invoices, receipts, statements) the AI reads and turns into records. You choose it yourself — the AI never picks a source.",
    "fieldname": "source_type",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Type",
-   "options": "URL\nDocument Query",
+   "options": "URL\nDocument Query\nFile Query",
    "reqd": 1
   },
   {
@@ -69,8 +69,8 @@
   },
   {
    "default": "[]",
-   "depends_on": "eval:doc.source_type==\"Document Query\" && doc.source_doctype",
-   "description": "Narrow down which records to read. Click the table to change them. You set these — the AI never adds a filter of its own.",
+   "depends_on": "eval:(doc.source_type==\"Document Query\"||doc.source_type==\"File Query\") && doc.source_doctype",
+   "description": "Narrow down which records or files to read. Click the table to change them. You set these — the AI never adds a filter of its own.",
    "fieldname": "source_filters",
    "fieldtype": "Code",
    "label": "Which Records",
@@ -83,8 +83,8 @@
   {
    "columns": 1,
    "default": "50",
-   "depends_on": "eval:doc.source_type==\"Document Query\"",
-   "description": "How many records to read at most in one run. If more records match, this source picks up where it stopped on the next run — nothing is skipped.",
+   "depends_on": "eval:doc.source_type==\"Document Query\"||doc.source_type==\"File Query\"",
+   "description": "How many records — or files — to read at most in one run. Each file costs at least two AI calls, so a File Query source starts lower. If more match, this source picks up where it stopped on the next run — nothing is skipped.",
    "fieldname": "source_limit",
    "fieldtype": "Int",
    "in_list_view": 1,
@@ -93,7 +93,7 @@
   {
    "columns": 1,
    "default": "1",
-   "depends_on": "eval:doc.source_type==\"Document Query\" && parent.trigger!=\"Document Event\" && parent.trigger!=\"Incoming Email\"",
+   "depends_on": "eval:(doc.source_type==\"Document Query\"||doc.source_type==\"File Query\") && parent.trigger!=\"Document Event\" && parent.trigger!=\"Incoming Email\"",
    "description": "Read only records that changed since this source was last read. Keep this on: with it off, every run sends every matching record to the AI again and you pay for all of them again.",
    "fieldname": "incremental",
    "fieldtype": "Check",
@@ -110,7 +110,7 @@
    "label": "Files"
   },
   {
-   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "depends_on": "eval:doc.source_type==\"Document Query\"||doc.source_type==\"File Query\"",
    "description": "How far this source has been read. Records changed after this time are read on the next run. Clear it to read everything again.",
    "fieldname": "last_read",
    "fieldtype": "Datetime",

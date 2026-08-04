@@ -1,4 +1,4 @@
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 from crema.api import ask, ask_json, configure, extract, health, is_configured, ocr, transcribe, transform
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError

@@ -6,10 +6,11 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Frappe](https://img.shields.io/badge/frappe-v16-3B82F6)
 ![Python](https://img.shields.io/badge/python-3.14-yellow)
-![Status](https://img.shields.io/badge/status-alpha-orange)
+![Status](https://img.shields.io/badge/status-beta-yellow)
 
-> **Alpha.** Crema is version 0.0.1. The public API, the doctype fields, and the
-> interface set can change without a migration path. Do not run it in production yet.
+> **Beta.** Crema is version 0.1.0. The public API and the doctype fields are stable.
+> A change that breaks them will come with a migration path. Test Crema on a
+> non-production site before you deploy it.
 
 Frappe Crema gives every app in your bench one route to OpenAI-compatible LLM
 providers — OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Ollama, and more. Named

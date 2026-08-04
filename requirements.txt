@@ -1,0 +1,8 @@
+# Mirrors [project].dependencies in pyproject.toml — present so Snyk, which does
+# not read PEP 621 outside Poetry, can see the dependency set. Keep the two in
+# sync; .pre-commit-config.yaml enforces it. Nothing installs from this file:
+# bench installs the app from pyproject.toml and never reads requirements.txt.
+litellm
+pymupdf
+ftfy
+anyascii

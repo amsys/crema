@@ -63,6 +63,15 @@ repos:
                 crema/public/js/lib/.*
             )$
 
+  - repo: local
+    hooks:
+      - id: requirements-match-pyproject
+        name: "requirements.txt matches pyproject.toml dependencies"
+        language: system
+        entry: "python3 -c \"import tomllib,pathlib; r={l.strip() for l in pathlib.Path('requirements.txt').read_text().splitlines() if l.strip() and not l.startswith('#')}; p=set(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']); assert r==p, f'requirements.txt drift vs pyproject.toml: {r ^ p}'\""
+        files: ^(pyproject\.toml|requirements\.txt)$
+        pass_filenames: false
+
 ci:
     autoupdate_schedule: weekly
     skip: []

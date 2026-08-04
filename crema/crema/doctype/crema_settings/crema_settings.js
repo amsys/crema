@@ -26,7 +26,7 @@ frappe.ui.form.on("Crema Settings", {
 		fetch_usage(frm);
 		setup_assignments_grid(frm);
 		load_default_models(frm);
-		warn_if_not_a_crema_user(frm);
+		explain_crema_user_role(frm);
 		warn_if_no_providers(frm);
 	},
 	default_provider(frm) {
@@ -56,12 +56,23 @@ function fetch_usage(frm) {
 	});
 }
 
-// The desk's Ask Crema button (the robot) is gated on Crema User *or* System Manager, so
-// whoever is reading this form can always use Crema — but they may still be missing the
-// role every ordinary user needs. Say exactly that, rather than implying they are locked
-// out, and offer the one-click grant since only a System Manager can reach this form.
-function warn_if_not_a_crema_user(frm) {
-	if (frappe.user_roles.includes("Crema User")) return;
+// The desk's Ask Crema button (the robot) is gated on Crema User *or* System Manager. Only
+// a System Manager can reach this form, so they can always use Crema themselves — but
+// every other user needs the role explicitly, and this is the one page that can say so.
+// Always shown, not just when the reader lacks the role: the admin most likely to be
+// provisioning other people is the one who already has it, and would otherwise never see
+// the reminder.
+function explain_crema_user_role(frm) {
+	if (frappe.user_roles.includes("Crema User")) {
+		frm.dashboard.add_comment(
+			__(
+				"Other people need the Crema User role to see the Ask Crema robot button. Add the role on their User record."
+			),
+			"blue",
+			true
+		);
+		return;
+	}
 
 	frm.dashboard.add_comment(
 		__(

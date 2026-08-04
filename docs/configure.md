@@ -172,6 +172,17 @@ standing instructions, Runs As — stays a desk edit.
 | `default_monthly_budget_usd` | Currency | Used by any row that leaves its own monthly budget at 0. 0 here too means unlimited. |
 | `log_retention_days` | Int | Label **Keep Logs For (days)**. 30 by default. How long a Crema Log row survives before the daily cleanup job deletes it. |
 
+## Procedure E — give people access
+
+A provider and an interface are configured now, but the desk robot UI stays invisible
+to everyone except a System Manager until you grant the `Crema User` role. See
+[install.md](install.md) for what the role gates and how it fails.
+
+1. Open the **User** record for the person who needs access, go to the **Roles** tab,
+   and check **Crema User**.
+2. Ask them to reload Desk. The robot button appears on list views and forms, and
+   `Ask …` appears in the search bar.
+
 ## Reference — interfaces and the fallback chain
 
 | Interface | Use Case | Purpose | Fallback |

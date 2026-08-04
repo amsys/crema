@@ -43,9 +43,11 @@ See [docs/](docs/README.md) for full setup, usage, and automation guides.
 ## Desk UI
 
 A robot button on list views and on forms you may edit, plus `Ask …` in the search
-bar (the awesomebar). Your request runs under your own session. Document and file
-access inside a server call runs as the interface's isolation user — see
-[docs/security.md](docs/security.md).
+bar (the awesomebar). You need the `Crema User` role or `System Manager` to see any of
+it — without the role, the desk looks exactly as it did before Crema was installed. See
+[docs/install.md](docs/install.md) for how to grant the role. Your request runs under
+your own session. Document and file access inside a server call runs as the
+interface's isolation user — see [docs/security.md](docs/security.md).
 
 - **List → view.** Type a request to filter, sort, limit, group, or switch to Report or
   Kanban. If the result is empty and the request was a single text lookup, one more

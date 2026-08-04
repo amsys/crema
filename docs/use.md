@@ -271,11 +271,14 @@ already spent this month — see [security.md](security.md#budgets). All three a
 
 ## Desk UI
 
+Every surface below needs the `System Manager` role or the `Crema User` role — see
+[install.md](install.md) for how to grant it. Without either role, none of these
+surfaces appear.
+
 ### List view
 
 Open any doctype's list view. A robot button sits between the **Menu** button and
-**Add**. It needs the `System Manager` role or the `Crema User` role — see
-[install.md](install.md).
+**Add**.
 
 The button opens a dialog. Type what you want first — a request changes the current
 list view; if you also drop a document below, the same text guides how that document
@@ -316,10 +319,9 @@ can't, the dialog offers the request field alone.
 ### The search bar
 
 Skip the dialog entirely: open a list view, then type a prompt into the search bar
-at the top of Desk (Frappe's awesomebar). This needs the same role as the robot
-button. The option only appears while a list view is open and your text does not
-start with `#` (the search bar's own prefix for jumping to a doctype). An
-`Ask <your prompt>` option appears directly under the built-in
+at the top of Desk (Frappe's awesomebar). The option only appears while a list view is
+open and your text does not start with `#` (the search bar's own prefix for jumping to
+a doctype). An `Ask <your prompt>` option appears directly under the built-in
 `Search for <your prompt>` entry — click it to run the same request the dialog's
 **Go** button would, and switch the view immediately, with no dialog.
 

@@ -4,3 +4,23 @@
 import "../../../frappe/cypress/support/commands";
 
 Cypress.on("uncaught:exception", () => false);
+
+// Nothing in this suite may reach a real model. A spec's own cy.intercept is
+// registered after this one and so wins; anything left over lands here and fails
+// loudly rather than billing whatever provider the site happens to have configured.
+const BILLABLE_METHODS = [
+	"ask_api",
+	"extract_api",
+	"transform_api",
+	"dry_run_automation",
+	"run_automation_now",
+];
+
+beforeEach(() => {
+	for (const method of BILLABLE_METHODS) {
+		cy.intercept("POST", `/api/method/crema.api.${method}`, {
+			statusCode: 599,
+			body: { exc_type: "CremaUnstubbedCallError", _server_messages: JSON.stringify([]) },
+		});
+	}
+});

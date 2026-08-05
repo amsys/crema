@@ -9,28 +9,23 @@
 ![Status](https://img.shields.io/badge/status-beta-yellow)
 
 > **Beta.** Crema is version 0.1.0. The public API and the doctype fields are stable.
-> A change that breaks them will come with a migration path. Test Crema on a
-> non-production site before you deploy it.
+> Test Crema on a non-production site before you deploy it.
 
-Frappe Crema gives every app in your bench one route to OpenAI-compatible LLM
-providers — OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Ollama, and more. Named
-**interfaces** (one per use-case: translation, OCR, extraction, ...) bind a provider,
-a model, a system prompt, an isolation user, and a security layer. There is no other
-way to reach a provider from application code — every call goes through
-`from crema import ask`.
+Crema gives every app in your bench one route to OpenAI-compatible LLM providers —
+OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Ollama, and more. A named **interface**
+(one per use-case: translation, OCR, extraction, ...) binds a provider, a model, a
+system prompt, an isolation user, and a security layer. Application code never names
+a provider — every call is `from crema import ask`.
 
-Crema is a security and integration layer, not a conversational agent. Building a
-chatbot on top is explicitly out of scope — see [ROADMAP.md](ROADMAP.md).
+Crema is not a conversational agent, and a chatbot is out of scope — see
+[ROADMAP.md](ROADMAP.md).
 
 ## Quick start
 
 1. **Add a provider.** Open **Providers** — the first item in the Crema sidebar —
-   and click **New from Template**, pick a preset, paste your API key, and create.
-   This wizard also sets it as the default provider.
-2. **Set the default model.** Open **Crema Settings** and pick a **Default Model** above the Use Cases
-   grid. A **Default Runs-As User** is already filled in (install creates one for
-   you). Save — every interface now works; the grid stays collapsed unless you open a
-   row to override one interface's provider, model, or Runs As user individually.
+   click **New from Template**, pick a preset, paste your API key, and create.
+2. **Set the default model.** Open **Crema Settings**, pick a **Default Model**, and
+   save. Every interface now works.
 3. **Call it:**
 
    ```python
@@ -42,105 +37,54 @@ See [docs/](docs/README.md) for full setup, usage, and automation guides.
 
 ## Desk UI
 
-A robot button on list views and on forms you may edit, plus `Ask …` in the search
-bar (the awesomebar). You need the `Crema User` role or `System Manager` to see any of
-it — without the role, the desk looks exactly as it did before Crema was installed. See
-[docs/install.md](docs/install.md) for how to grant the role. Your request runs under
-your own session. Document and file access inside a server call runs as the
-interface's isolation user — see [docs/security.md](docs/security.md).
-
-A typed request on a list view resolves to one of five actions — which one is the
-model's own call:
-
-- **View.** Filter, sort, limit, group, or switch to Report or Kanban. If the result is
-  empty and the request was a single text lookup, one more database query probes up to
-  eight readable text fields to find which one holds your words — no second model call.
-- **Create.** One new record opens prefilled and unsaved, for you to save yourself;
-  several go through the same prefilled Data Import step a dropped document uses (needs
-  `System Manager`).
-- **Edit.** A request naming which records to change and what to change shows the
-  proposed diff, then opens the one matching record unsaved — or, for more than one
-  match, a dialog listing every record it would touch, before anything is applied.
-- **Delete.** Same confirm-first shape as edit: a dialog lists every matching record
-  before anything is deleted. A request naming no records is refused, never read as
-  "all of them".
-- **None.** Anything the list view can't do (export, email, a question with no view
-  answer, a different doctype) gets a plain refusal instead of a wrong-but-plausible
-  guess.
-
-A list view also takes a dropped document instead of typed text — one or more prefilled
-new records, the model decides how many. And a form you may edit has its own robot
-button: type an instruction to get a proposed diff for the open document.
-
-Creating or editing one record, or dropping a document, writes nothing until you save
-the result. Editing or deleting several records asks you to confirm first, listing every
-one, then writes immediately — the same fence Frappe's own bulk actions use. A blocked
-prompt, an exceeded monthly budget, or any other failure surfaces as a message — never a
-silent no-op.
+Users with the `Crema User` role get a robot button on list views and forms, plus
+`Ask …` in the search bar. Type a plain request and the model turns it into a view,
+a new record, an edit, or a delete — or refuses if the list view cannot do it. Drop
+a document on a list view and it becomes one or more prefilled records. Nothing is
+written until you save the result yourself, and a bulk edit or delete lists every
+affected record for you to confirm first. Full details in [docs/use.md](docs/use.md).
 
 ## Interfaces
 
-| Interface | Purpose | Fallback |
-|---|---|---|
-| `simple` | General-purpose, lightweight calls | none — end of the fallback chain |
-| `translation` | Faithful translation, preserving tone and meaning | `simple` |
-| `complex` | Careful, thorough reasoning for demanding tasks | `simple` |
-| `ocr` | Extract text from images / scanned PDFs | none |
-| `advanced_ocr` | Stronger retry when `ocr` is low-confidence | none — escalation target only |
-| `security` | Layer 2 guard: classifies a prompt's risk | none — fails loud if unresolved |
-| `extraction` | Pull structured data out of content | `complex` |
-| `classification` | Classify / label content | `simple` |
-| `summarization` | Concise, accurate summaries | `simple` |
-| `transform` | Propose a diff for an ERP document (never auto-writes) | `complex` |
-| `view` (List Assistant) | Turn a prompt into a view, a new record, or an edit/delete for the desk UI | `complex` |
-| `transcribe` | Speech-to-text for audio files | none |
+| Interface | Purpose |
+|---|---|
+| `simple` | General lightweight calls |
+| `translation` | Faithful translation |
+| `complex` | Careful reasoning for demanding tasks |
+| `ocr` | Text from images and scanned PDFs |
+| `advanced_ocr` | Stronger retry when `ocr` is unsure |
+| `security` | The guard: classifies a prompt's risk |
+| `extraction` | Structured data out of content |
+| `classification` | Classify or label content |
+| `summarization` | Short, accurate summaries |
+| `transform` | Propose a diff for a document |
+| `view` | The desk List Assistant |
+| `transcribe` | Speech-to-text for audio files |
+
+Most interfaces fall back to `simple` or `complex` when unconfigured, and other apps
+can register their own — see [docs/configure.md](docs/configure.md).
 
 ## Features
 
-- **One entry point** — no public function accepts a model, provider, or API key; only
-  an interface name. `ask()` also takes context, files (File URLs or in-memory
-  `(bytes, mime)` tuples), and multi-turn history.
-- **12 named interfaces** with an automatic fallback chain. Other apps register their
-  own interfaces through a `crema_interfaces` hook; a predefined name can never be
-  overridden.
-- **Three security layers** — a local regex/unicode prompt scan, an optional LLM guard
-  that classifies risk, and an output-trap nonce that catches a hijacked response.
-- **Isolation user sandbox** — document access inside a call runs as a dedicated
-  low-privilege Frappe user, the isolation user; Frappe's own permission engine
-  enforces it, not Crema's.
-- **OCR** for images, scanned PDFs, and text PDFs, with a confidence score. A
-  low-confidence result escalates to the `advanced_ocr` interface — when that
-  interface resolves to a different provider or model than `ocr` (see
-  [docs/configure.md](docs/configure.md)).
-- **Transcription** — `transcribe()` turns an audio file into text, with the same
-  budget checks and audit log as every other call.
-- **Propose, never write** — `extract()` proposes one or more new documents from a
-  file (how many is the model's own call); `transform()` proposes a diff for an
-  existing document. Neither writes anything; the caller applies the result.
-- **Automation** — a task reads one or more sources — any mix of URLs and
-  permission-fenced queries over your own records, optionally including the files
-  attached to each record (so an invoice that arrives by email can be read into a
-  record), or a permission-fenced query over uploaded files on their own (so an
-  invoice attached anywhere on the site can be read into a record, matched on a field
-  you choose so a re-read updates instead of duplicating) — self-plans once, and then
-  either creates or updates records, writes values back onto the records it read, or
-  changes nothing. Any task can email what it did. It runs on a cron schedule, on a
-  document event, or on an authenticated webhook call, and a Dry Run button shows what
-  it would do before it does it. The plan is data, never code.
-- **Health probe** — `health()` and `is_configured()` let a consuming app show its own
-  status page; the caller applies its own role check.
-- **Cost control and audit** — an optional monthly budget per interface and per
-  provider, response caching per interface or per call, and a usage dashboard. Every
-  call writes an audit row: interface, model, user, status, duration, tokens, cost,
-  and a request hash — never the prompt or document content itself.
-- **HTTP endpoints** for `ask`, `extract`, and `transform`, rate-limited per IP and
-  per user, plus System-Manager utility endpoints (see
-  [docs/use.md](docs/use.md)).
-- **Admin in one place** — Crema Settings holds the providers and the per-interface
-  model assignments. A template wizard creates a provider for OpenAI, OpenRouter,
-  Groq, Mistral, DeepSeek, or Ollama, with live model autocomplete and connection
-  checks. A default provider, model, and isolation user cover every interface out of
-  the box. A Desk workspace adds the doctypes and the usage report.
+- **One entry point** — no public function accepts a model, provider, or API key;
+  only an interface name.
+- **Three security layers** — a local prompt scan, an optional LLM guard, and an
+  output trap that catches a hijacked response
+  ([docs/security.md](docs/security.md)).
+- **Isolation user sandbox** — document access runs as a low-privilege user, fenced
+  by Frappe's own permission engine.
+- **OCR and transcription** — images, PDFs, and audio, with confidence scoring and
+  automatic escalation.
+- **Propose, never write** — `extract()` and `transform()` return proposals; the
+  caller applies them.
+- **Automation** — a task reads URLs, your own records, or uploaded files, plans
+  once, and creates or updates records on a schedule, a document event, or a webhook
+  ([docs/automation.md](docs/automation.md)).
+- **Cost control and audit** — monthly budgets, response caching, a usage dashboard,
+  and an audit row for every call — never the prompt or document content itself.
+- **HTTP endpoints and admin UI** — rate-limited endpoints for `ask`, `extract`, and
+  `transform`, and one settings page with a provider template wizard
+  ([docs/use.md](docs/use.md)).
 
 ## Requirements
 
@@ -150,9 +94,9 @@ silent no-op.
 | Python 3.14 | |
 | [`litellm`](https://github.com/BerriAI/litellm) | the provider call layer |
 | [`pymupdf`](https://github.com/pymupdf/PyMuPDF) | PDF text extraction and rendering |
-| [`ftfy`](https://github.com/rspeer/python-ftfy) | repairs damaged text before the prompt scan |
-| [`anyascii`](https://github.com/anyascii/anyascii) | folds look-alike letters to ASCII for the prompt scan |
-| `croniter` | validates automation schedules — ships with Frappe itself |
+| [`ftfy`](https://github.com/rspeer/python-ftfy) | repairs damaged text before the scan |
+| [`anyascii`](https://github.com/anyascii/anyascii) | folds look-alike letters to ASCII |
+| `croniter` | validates schedules — ships with Frappe |
 
 ## Documentation
 

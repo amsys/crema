@@ -427,7 +427,7 @@ def before_tests():
     frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 ```
 
-Idempotent and non-overriding: it fills in a `Crema Provider` and a `Crema Settings`
+Safe to re-run and non-overriding: it fills in a `Crema Provider` and a `Crema Settings`
 default only where one doesn't already exist, so calling it twice, or on a site an
 admin already configured by hand, changes nothing. See its docstring for the
 `base_url`/`model`/`isolation_user` arguments.

@@ -23,6 +23,9 @@ from crema.test_fixtures import (
 
 
 class IntegrationTestCremaAskApi(CremaFixtureTestCase):
+    """crema.api.ask_api — the whitelisted HTTP entry point: role gate, per-IP and
+    per-user rate limits, and the 417 blocked/budget/config error shapes."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -207,7 +210,7 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
 
         self.assertIsNone(frappe.cache.get_value(key))  # no request -> no counter created at all
 
-    def test_clean_prompt_returns_result(self):
+    def test_a_clean_prompt_returns_the_model_reply_under_a_result_key(self):
         with patch("crema.client._complete", return_value="ok") as mock_complete:
             result = ask_api("simple", "hello there")
 
@@ -224,6 +227,54 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
         with patch("crema.client._complete", return_value="ok") as mock_complete:
             ask_api("simple", "hello")
         self.assertIsNone(mock_complete.call_args.args[2])
+
+
+class IntegrationTestCremaGrantRole(CremaFixtureTestCase):
+    """crema.api.grant_crema_role — the one-click fix behind the Crema Settings notice.
+    System-Manager-only, since handing out a role is exactly what a Crema User must not
+    be able to do for themselves."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures(users=(TEST_PLAIN_USER,))
+
+    def tearDown(self) -> None:
+        frappe.set_user("Administrator")
+        super().tearDown()
+
+    def test_a_plain_user_cannot_grant_the_role(self):
+        from crema.api import grant_crema_role
+
+        frappe.set_user(TEST_PLAIN_USER)
+        with self.assertRaises(frappe.PermissionError):
+            grant_crema_role(TEST_PLAIN_USER)
+
+    def test_a_system_manager_grants_the_role_to_another_user(self):
+        from crema.api import grant_crema_role
+
+        target = _ensure_user(f"_test_crema_grant_target_{uuid.uuid4().hex[:8]}@example.com")
+        self.assertNotIn("Crema User", {r.role for r in frappe.get_doc("User", target).roles})
+
+        result = grant_crema_role(target)
+
+        self.assertEqual(result, target)
+        self.assertIn("Crema User", {r.role for r in frappe.get_doc("User", target).roles})
+
+    def test_no_arg_form_grants_the_role_to_the_calling_user(self):
+        from crema.api import grant_crema_role
+
+        # A System Manager who isn't Administrator, so the "grant to self" default has
+        # somewhere real to land (Administrator bypasses role bookkeeping entirely).
+        caller = _ensure_user(
+            f"_test_crema_grant_caller_{uuid.uuid4().hex[:8]}@example.com", roles=["System Manager"]
+        )
+        frappe.set_user(caller)
+
+        result = grant_crema_role()
+
+        self.assertEqual(result, caller)
+        self.assertIn("Crema User", {r.role for r in frappe.get_doc("User", caller).roles})
 
 
 class IntegrationTestCremaPackageExports(CremaFixtureTestCase):

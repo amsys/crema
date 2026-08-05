@@ -52,11 +52,14 @@ class IntegrationTestCremaFilterDiff(IntegrationTestCase):
         result = _filter_diff("Contact", {"child_set": {"email_ids": rows}})
         self.assertEqual(result["child_set"], {"email_ids": [{"email_id": "a@b.c"}]})
 
-    def test_defaults_to_empty_diff(self):
+    def test_an_empty_raw_dict_yields_an_empty_diff(self):
         self.assertEqual(_filter_diff("Contact", {}), {"set": {}, "child_set": {}})
 
 
 class IntegrationTestCremaTransform(CremaFixtureTestCase):
+    """crema.api.transform — reads a document, sends it as context, returns a
+    _filter_diff-sanitized diff, and never writes."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -112,6 +115,9 @@ class IntegrationTestCremaTransform(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaTransformApi(CremaFixtureTestCase):
+    """crema.api.transform_api — the whitelisted endpoint: role gate, rate limit, and
+    the 417 blocked-instruction shape, mirroring extract_api."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -152,7 +158,7 @@ class IntegrationTestCremaTransformApi(CremaFixtureTestCase):
         self.assertEqual(frappe.local.response.get("http_status_code"), 417)
         mock_complete.assert_not_called()
 
-    def test_happy_path_returns_filtered_diff(self):
+    def test_transform_api_returns_the_filtered_diff_to_the_caller(self):
         contact = self._make_contact()
         raw = {"set": {"company_name": "Acme Corp"}, "child_set": {}, "reason": "add company"}
         with patch("crema.client._complete", return_value=json.dumps(raw)):

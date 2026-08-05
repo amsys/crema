@@ -16,6 +16,8 @@ from frappe.utils import add_to_date, now_datetime
 
 
 class IntegrationTestCremaUsageReport(IntegrationTestCase):
+    """crema_usage.execute/_columns — the group_by whitelist and its default."""
+
     def setUp(self) -> None:
         super().setUp()
         frappe.set_user("Administrator")

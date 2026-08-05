@@ -35,15 +35,15 @@ from frappe.tests import UnitTestCase
 class UnitTestCremaOcrHelpers(UnitTestCase):
     """Pure-function helpers in crema._ocr / crema._json — no frappe, no DB."""
 
-    def test_sniff_mime_png(self):
+    def test_sniff_mime_recognises_a_png_header(self):
         self.assertEqual(_ocr._sniff_mime(_png_bytes()), "image/png")
 
-    def test_sniff_mime_jpeg(self):
+    def test_sniff_mime_recognises_a_jpeg_header(self):
         buf = io.BytesIO()
         PILImage.new("RGB", (10, 10)).save(buf, format="JPEG")
         self.assertEqual(_ocr._sniff_mime(buf.getvalue()), "image/jpeg")
 
-    def test_sniff_mime_gif(self):
+    def test_sniff_mime_recognises_a_gif_header(self):
         buf = io.BytesIO()
         PILImage.new("RGB", (10, 10)).save(buf, format="GIF")
         self.assertEqual(_ocr._sniff_mime(buf.getvalue()), "image/gif")
@@ -99,6 +99,9 @@ class UnitTestCremaOcrHelpers(UnitTestCase):
 
 
 class IntegrationTestCremaOcr(CremaFixtureTestCase):
+    """crema.api.ocr / crema._ocr.ocr — text-PDF vs scanned-PDF/vision routing,
+    low-confidence escalation to advanced_ocr, and the Crema Log audit row."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()

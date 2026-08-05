@@ -25,6 +25,9 @@ _AUDIO_BYTES = b"\x00\x01not really audio, just bytes"
 
 
 class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
+    """crema.api.transcribe — the audio verb, mirroring ocr()'s config/budget/log
+    plumbing but calling client._transcribe instead of client._complete."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -34,7 +37,7 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
         super().setUp()
         _clear_defaults()
 
-    def test_transcribes_raw_bytes(self):
+    def test_raw_audio_bytes_return_the_transcript_text(self):
         with patch(
             "crema.client._transcribe",
             return_value={"text": "hello world", "language": "en", "duration": 1.2},
@@ -44,7 +47,11 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
         self.assertEqual(result, {"text": "hello world", "language": "en", "duration": 1.2})
         mock_transcribe.assert_called_once()
 
-    def test_passes_language_hint_through(self):
+    def test_transcribe_passes_the_language_kwarg_through_to_client_transcribe(self):
+        """Sibling of test_transcribe_passes_language_to_litellm_when_given below, one
+        layer up: this mocks client._transcribe itself, proving api.transcribe forwards
+        the kwarg; that test mocks litellm.transcription, proving client._transcribe
+        forwards it the rest of the way."""
         with patch(
             "crema.client._transcribe", return_value={"text": "bonjour", "language": "fr", "duration": 0.9}
         ) as mock_transcribe:

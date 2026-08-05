@@ -145,6 +145,47 @@ function crema_visible_list_fields(doctype) {
 	return new Set(fields);
 }
 
+// The Table half of crema_field_line: crema_writable_fields excludes Table
+// (frappe.model.is_value_type), so it is never in the plain `writable` set and would
+// otherwise read [read-only] — contradicting the child_set shape the action contract
+// advertises for this same field.
+function crema_table_line(doctype, df, perm) {
+	const table_df = perm ? crema_writable_table(doctype, df.fieldname, perm) : null;
+	if (!table_df) return " [read-only]";
+	const child_perm = frappe.perm.get_perm(table_df.options);
+	const child_fields = crema_writable_fields(table_df.options, child_perm);
+	const preferred = child_fields.filter((c) => c.in_list_view);
+	const names = (preferred.length ? preferred : child_fields)
+		.slice(0, CREMA_MAX_CHILD_FIELDS)
+		.map((c) => c.fieldname);
+	return names.length ? ` [rows: ${names.join(", ")}]` : " [read-only]";
+}
+
+// One line of crema_view_prompt's field listing: name, type, a Link/Select's option
+// list, whether it is shown in the open list, and whether (and how) it may be written.
+function crema_field_line(doctype, df, { visible, writable, perm }) {
+	const shown = visible.has(df.fieldname) ? " [shown in list]" : "";
+	// A Link/Select value the model has to guess with no target doctype or option
+	// list will never match — give it what it needs to pick a real one.
+	let opts = "";
+	if (df.fieldtype === "Link") {
+		opts = ` -> ${df.options}`;
+	} else if (df.fieldtype === "Select") {
+		opts = ` [${(df.options || "").split("\n").filter(Boolean).join("|")}]`;
+	}
+	let write = "";
+	if (df.fieldtype === "Table") {
+		write = crema_table_line(doctype, df, perm);
+	} else if (writable) {
+		if (writable.has(df.fieldname)) {
+			write = df.reqd ? " [required]" : "";
+		} else {
+			write = " [read-only]";
+		}
+	}
+	return `- ${df.fieldname} (${df.fieldtype})${opts} ${df.label || ""}${shown}${write}`.trim();
+}
+
 // interfaces.DEFAULT_PROMPTS["view"] is now just a role statement — the output contract
 // itself lives here, in the per-request user turn (see patches/refresh_view_prompt.py
 // for why: a system prompt only seeds once, at install time, and never sees a later
@@ -161,61 +202,71 @@ function crema_view_prompt(doctype) {
 	const can_delete = frappe.perm.has_perm(doctype, 0, "delete");
 	// Writability only matters for create/edit; skip computing it for a read-only user —
 	// same reasoning crema_readable_fields' comment gives for staying permlevel-aware.
-	// Hoisted so the Table-field branch below can ask the same question with the same perm
-	// array, rather than each recomputing frappe.perm.get_perm(doctype).
+	// Hoisted so crema_table_line can ask the same question with the same perm array,
+	// rather than each recomputing frappe.perm.get_perm(doctype).
 	const perm = can_create || can_write ? frappe.perm.get_perm(doctype) : null;
 	const writable = perm
 		? new Set(crema_writable_fields(doctype, perm).map((df) => df.fieldname))
 		: null;
 
-	const lines = crema_readable_fields(doctype).map((df) => {
-		const shown = visible.has(df.fieldname) ? " [shown in list]" : "";
-		// A Link/Select value the model has to guess with no target doctype or option
-		// list will never match — give it what it needs to pick a real one.
-		let opts = "";
-		if (df.fieldtype === "Link") {
-			opts = ` -> ${df.options}`;
-		} else if (df.fieldtype === "Select") {
-			opts = ` [${(df.options || "").split("\n").filter(Boolean).join("|")}]`;
-		}
-		let write = "";
-		if (df.fieldtype === "Table") {
-			// crema_writable_fields excludes Table (frappe.model.is_value_type), so it is
-			// never in `writable` above and would otherwise read [read-only] — contradicting
-			// the child_set shape the action contract advertises for this same field.
-			const table_df = perm ? crema_writable_table(doctype, df.fieldname, perm) : null;
-			if (table_df) {
-				const child_perm = frappe.perm.get_perm(table_df.options);
-				const child_fields = crema_writable_fields(table_df.options, child_perm);
-				const preferred = child_fields.filter((c) => c.in_list_view);
-				const names = (preferred.length ? preferred : child_fields)
-					.slice(0, CREMA_MAX_CHILD_FIELDS)
-					.map((c) => c.fieldname);
-				write = names.length ? ` [rows: ${names.join(", ")}]` : " [read-only]";
-			} else {
-				write = " [read-only]";
-			}
-		} else if (writable) {
-			if (writable.has(df.fieldname)) {
-				write = df.reqd ? " [required]" : "";
-			} else {
-				write = " [read-only]";
-			}
-		}
-		return `- ${df.fieldname} (${df.fieldtype})${opts} ${
-			df.label || ""
-		}${shown}${write}`.trim();
-	});
+	const lines = crema_readable_fields(doctype).map((df) =>
+		crema_field_line(doctype, df, { visible, writable, perm })
+	);
 	// "name" is a standard docfield, never in meta.fields above, but crema_valid_filters
 	// accepts it as a filter target (the ID is the list's own first column) — listed here,
 	// read-only, so the model knows the field exists without being told it can write it.
 	lines.unshift("- name (Data) ID [shown in list] [read-only]");
 
+	// actions/shapes/rules grow together, one array entry per action the model may pick
+	// — the three permission `if`s below are the single place each optional entry is
+	// decided, rather than every caller of Array#join re-asking the same question as a
+	// ternary. Order matters: it is the order the model sees them in.
 	const actions = ['"view" — change what this list shows.'];
+	const shapes = [
+		'{"action": "view", "view": "List"|"Report"|"Kanban", ' +
+			'"filters": {fieldname: [operator, value]}, ' +
+			'"group_by": [fieldname, aggregate_fieldname, "count"|"sum"|"avg"] or null, ' +
+			'"order_by": "fieldname asc"|"fieldname desc" or null, "page_length": integer or null, ' +
+			'"columns": [fieldname, ...], "reason": "..."}',
+	];
+	const rules = [
+		"- If the request does not name a field, filter on a field marked [shown in list] " +
+			"(prefer a Data/Text field over a Link/Select).",
+		'- "starting with X" -> ["like", "X%"]. "containing X" or "with X" -> ["like", "%X%"]. ' +
+			'"ending with X" -> ["like", "%X"].',
+		"- Text matching is already case-insensitive on this system — never try to force a " +
+			"case-sensitive match, and do not mention case in the reason.",
+		'- Legal operators: "=", "!=", "like", "not like", "in", "not in", "is", ">", "<", ' +
+			'">=", "<=", "Between", "Timespan". "is" takes only "set" or "not set" as its value. ' +
+			'"Timespan" takes a relative phrase such as "last week", "yesterday", "this month". ' +
+			'"in"/"not in" take a list of values.',
+		"- Every filter is combined with AND — there is no way to OR across different fields. " +
+			"If the request implies an OR across fields, say so plainly in the reason instead of " +
+			"approximating it with AND.",
+		'- order_by sorts the whole list: "fieldname asc" or "fieldname desc".',
+		'- page_length is an integer row limit for requests like "top 10" or "first 5".',
+		'- columns only take effect when view is "Report" — set view to "Report" for a ' +
+			"request about which columns are shown.",
+		'- group_by requires view to be "Report" too.',
+		"- This works only on the doctype above — a request naming a different doctype is " +
+			'"none".',
+		'- A request to find or open one record is still "view": filter tightly enough ' +
+			'that one row matches, do not use "create" or "edit" for it.',
+	];
+
 	if (can_create) {
 		actions.push(
 			'"create" — make one or more new, unsaved records. Use every value the request ' +
 				"states and invent nothing else. Never set a [read-only] field."
+		);
+		shapes.push(
+			'{"action": "create", "records": [{"set": {fieldname: value}, ' +
+				'"child_set": {table_fieldname: [row dicts]}}, ...], "reason": "..."}'
+		);
+		rules.push(
+			'- A create request naming several records lists them all under "records" in ' +
+				"one create action; whether a required field is missing is checked when each " +
+				"record is created, not by you."
 		);
 	}
 	if (can_write) {
@@ -223,9 +274,20 @@ function crema_view_prompt(doctype) {
 			'"edit" — change existing records matched by "filters". child_set is honored ' +
 				"only when the filters match exactly one record."
 		);
+		shapes.push(
+			'{"action": "edit", "filters": {fieldname: [operator, value]}, ' +
+				'"set": {fieldname: value}, "child_set": {table_fieldname: [row dicts]}, ' +
+				'"reason": "..."}'
+		);
 	}
 	if (can_delete) {
 		actions.push('"delete" — remove existing records matched by "filters".');
+		shapes.push(
+			'{"action": "delete", "filters": {fieldname: [operator, value]}, "reason": "..."}'
+		);
+		rules.push(
+			'- "delete the ones that are X" is one delete action with filters, not a view.'
+		);
 	}
 	actions.push(
 		'"none" — anything this list cannot do: a bulk export, sending mail, a question ' +
@@ -233,66 +295,25 @@ function crema_view_prompt(doctype) {
 			"actions in one request. Say plainly, in one sentence, what you cannot do and " +
 			"what the user should do instead. Never approximate a request you cannot serve."
 	);
+	shapes.push('{"action": "none", "reason": "..."}');
+
+	if ((can_create || can_write) && lines.some((l) => l.includes("[rows: "))) {
+		rules.push(
+			"- A child_set row for a table field may only use the fieldnames listed after " +
+				'"rows:" for that field — invent nothing else.'
+		);
+	}
+	rules.push("- Pick exactly one action, even for a request that asks for more than one thing.");
 
 	return (
 		`Fields of doctype '${doctype}':\n${lines.join("\n")}\n\n` +
 		'Output ONLY one JSON object. Its "action" key picks exactly one of:\n' +
 		actions.map((a) => `- ${a}`).join("\n") +
 		"\n\n" +
-		'{"action": "view", "view": "List"|"Report"|"Kanban", ' +
-		'"filters": {fieldname: [operator, value]}, ' +
-		'"group_by": [fieldname, aggregate_fieldname, "count"|"sum"|"avg"] or null, ' +
-		'"order_by": "fieldname asc"|"fieldname desc" or null, "page_length": integer or null, ' +
-		'"columns": [fieldname, ...], "reason": "..."}\n' +
-		(can_create
-			? '{"action": "create", "records": [{"set": {fieldname: value}, ' +
-			  '"child_set": {table_fieldname: [row dicts]}}, ...], "reason": "..."}\n'
-			: "") +
-		(can_write
-			? '{"action": "edit", "filters": {fieldname: [operator, value]}, ' +
-			  '"set": {fieldname: value}, "child_set": {table_fieldname: [row dicts]}, ' +
-			  '"reason": "..."}\n'
-			: "") +
-		(can_delete
-			? '{"action": "delete", "filters": {fieldname: [operator, value]}, "reason": "..."}\n'
-			: "") +
-		'{"action": "none", "reason": "..."}\n\n' +
+		shapes.join("\n") +
+		"\n\n" +
 		"Rules for building the view specification:\n" +
-		"- If the request does not name a field, filter on a field marked [shown in list] " +
-		"(prefer a Data/Text field over a Link/Select).\n" +
-		'- "starting with X" -> ["like", "X%"]. "containing X" or "with X" -> ["like", "%X%"]. ' +
-		'"ending with X" -> ["like", "%X"].\n' +
-		"- Text matching is already case-insensitive on this system — never try to force a " +
-		"case-sensitive match, and do not mention case in the reason.\n" +
-		'- Legal operators: "=", "!=", "like", "not like", "in", "not in", "is", ">", "<", ' +
-		'">=", "<=", "Between", "Timespan". "is" takes only "set" or "not set" as its value. ' +
-		'"Timespan" takes a relative phrase such as "last week", "yesterday", "this month". ' +
-		'"in"/"not in" take a list of values.\n' +
-		"- Every filter is combined with AND — there is no way to OR across different fields. " +
-		"If the request implies an OR across fields, say so plainly in the reason instead of " +
-		"approximating it with AND.\n" +
-		'- order_by sorts the whole list: "fieldname asc" or "fieldname desc".\n' +
-		'- page_length is an integer row limit for requests like "top 10" or "first 5".\n' +
-		'- columns only take effect when view is "Report" — set view to "Report" for a ' +
-		"request about which columns are shown.\n" +
-		'- group_by requires view to be "Report" too.\n' +
-		"- This works only on the doctype above — a request naming a different doctype is " +
-		'"none".\n' +
-		'- A request to find or open one record is still "view": filter tightly enough ' +
-		'that one row matches, do not use "create" or "edit" for it.\n' +
-		(can_create
-			? '- A create request naming several records lists them all under "records" in ' +
-			  "one create action; whether a required field is missing is checked when each " +
-			  "record is created, not by you.\n"
-			: "") +
-		(can_delete
-			? '- "delete the ones that are X" is one delete action with filters, not a view.\n'
-			: "") +
-		((can_create || can_write) && lines.some((l) => l.includes("[rows: "))
-			? "- A child_set row for a table field may only use the fieldnames listed after " +
-			  '"rows:" for that field — invent nothing else.\n'
-			: "") +
-		"- Pick exactly one action, even for a request that asks for more than one thing."
+		rules.join("\n")
 	);
 }
 
@@ -696,7 +717,10 @@ function crema_apply_spec(doctype, data) {
 	crema_apply_view_spec(doctype, spec);
 }
 
-function crema_apply_view_spec(doctype, spec) {
+// Everything the model authored is validated here and nowhere else: view, filters,
+// group_by, columns, order_by, page_length, each checked against the readable-field
+// fence and its own legal shape before it ever reaches a live list or a route.
+function crema_view_state(doctype, spec) {
 	// name/creation/modified are standard docfields, never listed in meta.fields, but are
 	// always valid sort fields (frappe/public/js/frappe/ui/sort_selector.js).
 	const allowed = new Set(crema_readable_fields(doctype).map((df) => df.fieldname));
@@ -725,54 +749,48 @@ function crema_apply_view_spec(doctype, spec) {
 	const page_length = Number.isInteger(spec.page_length)
 		? Math.min(500, Math.max(1, spec.page_length))
 		: null;
-	const state = { columns, order_by, page_length };
 
-	// Already on the target list: skip the router entirely and let one refresh() be the
-	// only list query — FilterArea.set() deliberately does not refresh
-	// (frappe/list/base_list.js), and get_args() reads the sort from
-	// sort_selector.get_sql_string(), not sort_by, so seeding the sort/page_length before
-	// that one refresh is enough; going through frappe.set_route costs a second query
-	// (the route's own refresh, then on_sort_change/refresh() again). The final URL is
-	// identical either way — router.js's push_state drops the query string, and
-	// list_view.refresh() always rewrites it from the live filters — so this doesn't
-	// change what lands in the address bar. Report/Kanban/group_by keep the route path:
-	// _group_by only round-trips through frappe.route_options (report_view.js).
-	const live = typeof cur_list !== "undefined" && cur_list;
-	const fast =
-		live &&
-		live.doctype === doctype &&
-		live.view_name === "List" &&
-		view === "List" &&
-		live.filter_area &&
-		!group_by;
+	return { view, filters, group_by, columns, order_by, page_length };
+}
 
-	if (fast) {
-		crema_seed_list_state(live, doctype, view, state);
-		const rows = crema_filter_rows(doctype, filters);
-		// Clear even when the spec has no filters: "show me everything" must not inherit
-		// the previous prompt's filters. list_view.js's own before_refresh() skips the
-		// clear in exactly that case (its this.filters.length > 0 guard) — that quirk is
-		// the bug, not the model. filter_area.get() is checked first so an already-
-		// unfiltered list doesn't pay for a clear(): a standard-filter field (e.g. ToDo's
-		// status) fires a debounced refresh on its own set_value() regardless of
-		// clear(false)'s refresh flag, arming a spurious extra query 300ms later.
-		let apply = Promise.resolve();
-		if (rows.length || live.filter_area.get().length) {
-			apply = live.filter_area.clear(false);
-			if (rows.length) apply = apply.then(() => live.filter_area.set(rows));
-		}
-		apply
-			.then(() => {
-				live.start = 0;
-				return live.refresh();
-			})
-			.then(() => crema_after_view(doctype, spec, filters))
-			// filter_area.set/refresh rejecting would otherwise skip the reason alert and
-			// the zero-result widen fallback with nothing shown at all.
-			.catch(crema_show_error);
-		return;
+// Already on the target list: skip the router entirely and let one refresh() be the
+// only list query — FilterArea.set() deliberately does not refresh
+// (frappe/list/base_list.js), and get_args() reads the sort from
+// sort_selector.get_sql_string(), not sort_by, so seeding the sort/page_length before
+// that one refresh is enough; going through frappe.set_route costs a second query
+// (the route's own refresh, then on_sort_change/refresh() again). The final URL is
+// identical either way — router.js's push_state drops the query string, and
+// list_view.refresh() always rewrites it from the live filters — so this doesn't
+// change what lands in the address bar.
+function crema_refresh_live(live, doctype, view, state, filters, spec) {
+	crema_seed_list_state(live, doctype, view, state);
+	const rows = crema_filter_rows(doctype, filters);
+	// Clear even when the spec has no filters: "show me everything" must not inherit
+	// the previous prompt's filters. list_view.js's own before_refresh() skips the
+	// clear in exactly that case (its this.filters.length > 0 guard) — that quirk is
+	// the bug, not the model. filter_area.get() is checked first so an already-
+	// unfiltered list doesn't pay for a clear(): a standard-filter field (e.g. ToDo's
+	// status) fires a debounced refresh on its own set_value() regardless of
+	// clear(false)'s refresh flag, arming a spurious extra query 300ms later.
+	let apply = Promise.resolve();
+	if (rows.length || live.filter_area.get().length) {
+		apply = live.filter_area.clear(false);
+		if (rows.length) apply = apply.then(() => live.filter_area.set(rows));
 	}
+	apply
+		.then(() => {
+			live.start = 0;
+			return live.refresh();
+		})
+		.then(() => crema_after_view(doctype, spec, filters))
+		// filter_area.set/refresh rejecting would otherwise skip the reason alert and
+		// the zero-result widen fallback with nothing shown at all.
+		.catch(crema_show_error);
+}
 
+// The router path: a doctype change, Report/Kanban, or a group_by — _group_by only
+// round-trips through frappe.route_options (report_view.js).
+function crema_route_to_view(doctype, view, state, filters, group_by, spec) {
 	frappe.route_options = filters;
 	if (group_by) frappe.route_options._group_by = JSON.stringify(group_by);
 	frappe
@@ -790,6 +808,29 @@ function crema_apply_view_spec(doctype, spec) {
 			});
 		})
 		.catch(crema_show_error);
+}
+
+function crema_apply_view_spec(doctype, spec) {
+	const { view, filters, group_by, columns, order_by, page_length } = crema_view_state(
+		doctype,
+		spec
+	);
+	const state = { columns, order_by, page_length };
+
+	const live = typeof cur_list !== "undefined" && cur_list;
+	const fast =
+		live &&
+		live.doctype === doctype &&
+		live.view_name === "List" &&
+		view === "List" &&
+		live.filter_area &&
+		!group_by;
+
+	if (fast) {
+		crema_refresh_live(live, doctype, view, state, filters, spec);
+	} else {
+		crema_route_to_view(doctype, view, state, filters, group_by, spec);
+	}
 }
 
 // {fieldname: [op, value]} -> [[doctype, fieldname, op, value], ...] — same data,

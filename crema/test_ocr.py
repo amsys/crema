@@ -97,6 +97,9 @@ class UnitTestCremaOcrHelpers(UnitTestCase):
     def test_strip_fence_is_a_no_op_on_bare_json(self):
         self.assertEqual(strip_fence('{"a": 1}'), '{"a": 1}')
 
+    def test_strip_fence_removes_fence_with_no_language_tag(self):
+        self.assertEqual(strip_fence('```\n{"a": 1}\n```'), '{"a": 1}')
+
 
 class IntegrationTestCremaOcr(CremaFixtureTestCase):
     """crema.api.ocr / crema._ocr.ocr — text-PDF vs scanned-PDF/vision routing,

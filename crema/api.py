@@ -110,6 +110,21 @@ def _scan_context(context: str | None, history: list[dict] | None) -> str | None
     return f"{context}\n{turns}" if context else turns
 
 
+def _scan_or_block(
+    cfg: dict[str, Any], prompt: str, context: str | None, history: list[dict] | None, prompt_sha: str
+) -> None:
+    """Layer 1. scan() joins context+prompt and scans the join — see its docstring for
+    why it is handed the two fields rather than the delimiter-wrapped user_content that
+    layer 2 and the provider get. _scan_context widens that join to cover a
+    caller-supplied history too."""
+    if not cfg["enable_prompt_scan"]:
+        return
+    reason = security.scan(prompt, _scan_context(context, history))
+    if reason:
+        _log(cfg, "Blocked", reason, prompt_sha=prompt_sha)
+        raise CremaBlockedError(reason)
+
+
 def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
     """Permission-checked (as the calling user) content parts for vision models.
 
@@ -137,6 +152,28 @@ def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
 
         parts.extend(_ocr_impl.prep_parts(content, mime))
     return parts
+
+
+def _attach_files(cfg: dict[str, Any], messages: list[dict], files: list | None) -> list[dict]:
+    """Rewrite the last (user) turn to carry `files` as vision-model content parts, if
+    any given. Must run inside `sandbox.isolation(...)` — _resolve_files permission-
+    checks each File as the isolation user — and its own layer-1 scan is what stops
+    ask(files=[...]) from bypassing what extract() blocks: a text PDF's extracted text
+    only exists here, after layer 1 already ran on prompt/context. Image parts hold no
+    text to scan. Returns `messages` unchanged when there is nothing to attach."""
+    file_parts = _resolve_files(files) if files else []
+    if not file_parts:
+        return messages
+
+    if cfg["enable_prompt_scan"]:
+        # Scan it so the same bytes block on this path as on extract()'s, which hands
+        # the read text to layer 1 via context=.
+        reason = security.scan("\n".join(p["text"] for p in file_parts if p["type"] == "text"))
+        if reason:
+            raise CremaBlockedError(reason)
+
+    last = {"role": "user", "content": [{"type": "text", "text": messages[-1]["content"]}, *file_parts]}
+    return [*messages[:-1], last]
 
 
 def _log(
@@ -213,15 +250,7 @@ class _Ask:
         prompt_sha = _prompt_hash(cfg, prompt, context, response_format, history)
         user_content = _user_content(prompt, context)
 
-        if cfg["enable_prompt_scan"]:
-            # scan() joins context+prompt and scans the join — see its docstring for why
-            # it is handed the two fields rather than the delimiter-wrapped user_content
-            # that layer 2 and the provider get. _scan_context widens that join to cover
-            # a caller-supplied history too.
-            reason = security.scan(prompt, _scan_context(context, history))
-            if reason:
-                _log(cfg, "Blocked", reason, prompt_sha=prompt_sha)
-                raise CremaBlockedError(reason)
+        _scan_or_block(cfg, prompt, context, history, prompt_sha)
 
         # A call carrying files is never cached, read or write: _prompt_hash cannot see
         # the file bytes (it doubles as the audit log's prompt_sha, and a File URL's
@@ -244,59 +273,17 @@ class _Ask:
             _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha)
             raise
 
+        # phase 3: llm guard. Defense-in-depth, not the hard fence — layer 1 (scan,
+        # above) and User Permissions on the isolation user are.
         if cfg["enable_llm_guard"]:
-            # phase 3: llm guard. This is defense-in-depth, not the hard fence — layer 1
-            # (scan, above) and User Permissions on the isolation user are. A guard
-            # error or unparseable response therefore fails OPEN (proceeds), by design.
-            risk = None
-            try:
-                guard_raw = self("security", user_content)
-                risk = json.loads(strip_fence(guard_raw)).get("risk")
-            except CremaBlockedError:
-                # The nested call's own layer 1 flagged the content. Layer 1 fails
-                # CLOSED — reaching it through the guard's wrapper call doesn't earn
-                # it a pass into the fail-open branch below.
-                _log(cfg, "Blocked", "llm guard: layer-1 scan blocked the content", prompt_sha=prompt_sha)
-                raise
-            except CremaConfigError:
-                # An unresolvable "security" interface is a fail-loud admin
-                # misconfiguration (client._resolve) — not a guard runtime error.
-                raise
-            except Exception:
-                # Includes CremaBudgetError: the guard exhausting its own budget must
-                # not block legitimate traffic — it is defense-in-depth, not the fence.
-                _log(
-                    cfg,
-                    "Error",
-                    "llm guard error/unparseable — proceeding (fail-open)",
-                    prompt_sha=prompt_sha,
-                )
-
-            if risk == "malicious":
-                _log(cfg, "Blocked", "llm guard: malicious", prompt_sha=prompt_sha)
-                raise CremaBlockedError("blocked by security guard")
-            if risk == "suspicious":
-                _log(cfg, "Success", "llm guard: suspicious — proceeded", prompt_sha=prompt_sha)
+            self._guard(cfg, user_content, prompt_sha)
 
         messages = _build_messages(cfg, prompt, context, history)
 
         start = time.monotonic()
         try:
             with sandbox.isolation(cfg["isolation_user"]):
-                file_parts = _resolve_files(files) if files else []
-                if file_parts and cfg["enable_prompt_scan"]:
-                    # A text PDF's extracted text only exists here, after layer 1 already
-                    # ran on prompt/context. Scan it so the same bytes block on this path
-                    # as on extract()'s, which hands the read text to layer 1 via
-                    # context=. Image parts hold no text to scan.
-                    reason = security.scan("\n".join(p["text"] for p in file_parts if p["type"] == "text"))
-                    if reason:
-                        raise CremaBlockedError(reason)
-                if file_parts:
-                    messages[-1] = {
-                        "role": "user",
-                        "content": [{"type": "text", "text": messages[-1]["content"]}, *file_parts],
-                    }
+                messages = _attach_files(cfg, messages, files)
                 result = client._complete(cfg, messages, response_format)
         except CremaBlockedError as exc:
             # Two raisers: client._complete's layer-3 output trap (an "output_trap:
@@ -331,6 +318,34 @@ class _Ask:
 
         _log(cfg, "Success", None, prompt_sha=prompt_sha, duration_ms=duration_ms)
         return result
+
+    def _guard(self, cfg: dict[str, Any], user_content: str, prompt_sha: str) -> None:
+        """Layer 2. A guard error or unparseable response fails OPEN (proceeds), by
+        design — see the `# phase 3: llm guard` call site for why."""
+        risk = None
+        try:
+            guard_raw = self("security", user_content)
+            risk = json.loads(strip_fence(guard_raw)).get("risk")
+        except CremaBlockedError:
+            # The nested call's own layer 1 flagged the content. Layer 1 fails CLOSED —
+            # reaching it through the guard's wrapper call doesn't earn it a pass into
+            # the fail-open branch below.
+            _log(cfg, "Blocked", "llm guard: layer-1 scan blocked the content", prompt_sha=prompt_sha)
+            raise
+        except CremaConfigError:
+            # An unresolvable "security" interface is a fail-loud admin
+            # misconfiguration (client._resolve) — not a guard runtime error.
+            raise
+        except Exception:
+            # Includes CremaBudgetError: the guard exhausting its own budget must not
+            # block legitimate traffic — it is defense-in-depth, not the fence.
+            _log(cfg, "Error", "llm guard error/unparseable — proceeding (fail-open)", prompt_sha=prompt_sha)
+
+        if risk == "malicious":
+            _log(cfg, "Blocked", "llm guard: malicious", prompt_sha=prompt_sha)
+            raise CremaBlockedError("blocked by security guard")
+        if risk == "suspicious":
+            _log(cfg, "Success", "llm guard: suspicious — proceeded", prompt_sha=prompt_sha)
 
     def __getattr__(self, interface: str):
         if interface.startswith("_"):

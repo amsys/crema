@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import re
 
-_FENCE_RE = re.compile(r"(?:^```[\w-]*\n?)|(?:\n?```$)")
+# Two patterns, not one alternation: S5850 wants the alternatives explicitly grouped,
+# but grouping them non-capturing with no quantifier trips S6395 right back — there is
+# no single regex that satisfies both. Splitting into an open/close pair sub'd in order
+# does the same trim (leading fence, then trailing fence) and satisfies both rules.
+_OPEN_FENCE_RE = re.compile(r"^```[\w-]*\n?")
+_CLOSE_FENCE_RE = re.compile(r"\n?```$")
 
 
 def strip_fence(text: str) -> str:
     """Strip a markdown code fence (```json ... ```) some models wrap JSON in."""
-    return _FENCE_RE.sub("", text.strip()).strip()
+    return _CLOSE_FENCE_RE.sub("", _OPEN_FENCE_RE.sub("", text.strip())).strip()

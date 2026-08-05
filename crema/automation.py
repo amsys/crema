@@ -46,7 +46,7 @@ import html
 import mimetypes
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import requests
 from croniter import croniter
@@ -515,45 +515,68 @@ def _read_source(
         payload = None
 
     budget = _EXTRACT_CONTENT_CHARS // max(len(doc.sources) + (1 if payload else 0), 1)
-    blocks, allowed_names, notes, watermarks, failures, records = [], None, [], {}, [], []
+    blocks = [f"=== Source: webhook payload ===\n{payload[:budget]}"] if payload else []
 
-    if payload:
-        blocks.append(f"=== Source: webhook payload ===\n{payload[:budget]}")
-
+    reads, failures, records = [], [], []
     for source in doc.sources:
         try:
-            if source.source_type == "File Query":
-                narrow = doc_name if doc_doctype == _FILE_DOCTYPE else None
-                rows, note, read_up_to = _read_files(source, doc, cfg, started, narrow, preview)
-                records.extend(rows)
-                text, names = "", None
-            elif source.source_type != "Document Query":
-                text, names, note, read_up_to = _fetch(source.source_url)[:budget], None, "", None
-            else:
-                # An event run reads the one record that changed — but only from the
-                # source that watches its doctype; a second source is reference material
-                # and must still be read in full.
-                narrow = doc_name if source.source_doctype == doc_doctype else None
-                text, names, note, read_up_to = _read_documents(source, cfg, started, narrow, budget, preview)
+            read = _read_one(source, doc, cfg, started, doc_doctype, doc_name, budget, preview)
         except Exception as exc:
             failures.append(f"{source.heading() or source.source_type} failed — {_describe(exc)}")
             if doc.on_source_error:
                 raise
             continue
-
-        if text:
-            blocks.append(f"=== Source: {source.heading()} ===\n{text}")
-        if names is not None:
-            allowed_names = names if allowed_names is None else allowed_names | names
-        if note:
-            notes.append(f"{source.heading()}: {note}")
-        if read_up_to:
-            watermarks[source.name] = read_up_to
+        reads.append((source, read))
+        records.extend(read.records)
 
     if failures and len(failures) == len(doc.sources) and not payload:
         raise AutomationError("; ".join(failures))
 
+    blocks += [f"=== Source: {source.heading()} ===\n{r.text}" for source, r in reads if r.text]
+    name_sets = [r.names for _, r in reads if r.names is not None]
+    allowed_names = set().union(*name_sets) if name_sets else None
+    notes = [f"{source.heading()}: {r.note}" for source, r in reads if r.note]
+    watermarks = {source.name: r.read_up_to for source, r in reads if r.read_up_to}
+
     return "\n\n".join(blocks), allowed_names, "; ".join(notes + failures), watermarks, records
+
+
+class _SourceRead(NamedTuple):
+    """One source row's read, before _read_source assembles every row's into one
+    result. `records` is non-empty only for a File Query row (see _read_source's own
+    docstring); `text`/`names` are empty/None for one, since a File Query source never
+    mixes with any other (CremaAutomationTask._validate_sources)."""
+
+    text: str
+    names: set[str] | None
+    note: str
+    read_up_to: Any
+    records: list[dict]
+
+
+def _read_one(
+    source,
+    doc,
+    cfg: dict,
+    started,
+    doc_doctype: str | None,
+    doc_name: str | None,
+    budget: int,
+    preview: bool,
+) -> _SourceRead:
+    """Dispatch one source row to its reader — File Query / URL / Document Query."""
+    if source.source_type == "File Query":
+        narrow = doc_name if doc_doctype == _FILE_DOCTYPE else None
+        rows, note, read_up_to = _read_files(source, doc, cfg, started, narrow, preview)
+        return _SourceRead("", None, note, read_up_to, rows)
+    if source.source_type != "Document Query":
+        return _SourceRead(_fetch(source.source_url)[:budget], None, "", None, [])
+    # An event run reads the one record that changed — but only from the source that
+    # watches its doctype; a second source is reference material and must still be
+    # read in full.
+    narrow = doc_name if source.source_doctype == doc_doctype else None
+    text, names, note, read_up_to = _read_documents(source, cfg, started, narrow, budget, preview)
+    return _SourceRead(text, names, note, read_up_to, [])
 
 
 def _source_fields(doctype: str) -> list[str]:
@@ -1029,15 +1052,19 @@ def _upsert_files(doctype: str, records: list[dict], match_fields: list[str]) ->
             continue
 
         doc.update(values)
-        for fieldname, child_rows in child_set.items():
-            # The file is the whole truth for its own line items — replace, don't merge.
-            doc.set(fieldname, [])
-            for child_row in child_rows:
-                doc.append(fieldname, child_row)
+        _replace_children(doc, child_set)
         doc.save()
         counts["updated" if match else "created"] += 1
 
     return counts
+
+
+def _replace_children(doc, child_set: dict[str, list[dict]]) -> None:
+    """The file is the whole truth for its own line items — replace, don't merge."""
+    for fieldname, child_rows in child_set.items():
+        doc.set(fieldname, [])
+        for child_row in child_rows:
+            doc.append(fieldname, child_row)
 
 
 def _unchanged(doc, values: dict[str, Any]) -> bool:

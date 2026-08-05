@@ -1300,9 +1300,7 @@ function crema_open_dialog(doctype, prefill) {
 				label: __("What do you want to do?"),
 				description: can_create
 					? __(
-							"A request can change this list view, create a new record, or update or " +
-								"delete records it can find. If you also upload a document below, this " +
-								"text guides how the document is read."
+							"A request can change this list view, create a new record, or update or delete records it can find. If you also upload a document below, this text guides how the document is read."
 					  )
 					: undefined,
 				default: prefill || "",

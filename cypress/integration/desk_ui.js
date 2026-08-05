@@ -718,11 +718,74 @@ context("Crema desk UI", () => {
 		cy.wait("@ask");
 
 		cy.get(".modal-title").should("contain", "Delete 2 ToDo records");
+		cy.get(".modal").should("contain", "Records to delete");
 		cy.get(".modal table tbody tr").should("have.length", 2);
 		cy.get("@delete_items.all").should("have.length", 0);
 
 		cy.get(".modal").within(() => cy.get(".btn-modal-primary").click());
 		cy.wait("@delete_items");
+	});
+
+	it("matches an underscore literally instead of as a SQL wildcard", () => {
+		// "_" is a single-character SQL LIKE wildcard — unescaped, ["like", "_crema..."]
+		// would match every row with at least one leading character, not just this one.
+		cy.insert_doc("ToDo", { description: "_crema underscore target" }, true);
+		cy.insert_doc("ToDo", { description: "Xcrema underscore target" }, true);
+		cy.intercept("POST", "/api/method/crema.api.ask_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					result: JSON.stringify({
+						action: "delete",
+						filters: { description: ["like", "_crema underscore target"] },
+						reason: "deleting the underscore-prefixed todo",
+					}),
+				},
+			},
+		}).as("ask");
+
+		cy.get("[data-crema]").click();
+		cy.get(".modal").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"delete todos starting with an underscore"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@ask");
+
+		cy.get(".modal-title").should("contain", "Delete 1 ToDo record");
+		cy.get(".modal table tbody tr").should("have.length", 1);
+		cy.get(".modal table tbody").should("contain", "_crema underscore target");
+	});
+
+	it("accepts the record name (ID) as a filter field", () => {
+		cy.insert_doc("ToDo", { description: "crema name-filter target" }, true).then((doc) => {
+			cy.intercept("POST", "/api/method/crema.api.ask_api", {
+				statusCode: 200,
+				body: {
+					message: {
+						result: JSON.stringify({
+							action: "delete",
+							filters: { name: ["=", doc.name] },
+							reason: "deleting by id",
+						}),
+					},
+				},
+			}).as("ask");
+
+			cy.get("[data-crema]").click();
+			cy.get(".modal").within(() => {
+				cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+					`delete the todo with id ${doc.name}`
+				);
+				cy.get(".btn-modal-primary").click();
+			});
+			cy.wait("@ask");
+
+			cy.get(".modal-title").should("contain", "Delete 1 ToDo record");
+			cy.get(".modal table tbody tr").should("have.length", 1);
+			cy.get(".modal table tbody").should("contain", doc.name);
+		});
 	});
 
 	it("shows an action:none refusal as an orange message and leaves the list alone", () => {

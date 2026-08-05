@@ -299,7 +299,9 @@ model, and fields you cannot write never reach a save.
   request that switches to Kanban does not carry filters with it — Kanban always
   opens on the board's own, unfiltered records; ask for a List or Report view for a
   filtered result. A request cannot match text case-sensitively — matching is always
-  case-insensitive.
+  case-insensitive. An underscore in a request ("records starting with `_`") matches a
+  literal underscore, not any character. The record ID is a field like any other, so a
+  request can filter or find a record by it.
   And it cannot combine two different fields with OR: the system combines every filter
   with AND, so "starting with A or B" filters on neither field, and the alert says so
   instead of guessing.

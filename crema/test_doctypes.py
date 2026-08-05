@@ -26,7 +26,7 @@ from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.utils import validate_email_address
 
 
-class UnitTestIsLocalOrPrivate(UnitTestCase):
+class UnitTestCremaIsLocalOrPrivate(UnitTestCase):
     """Pure function, no frappe I/O."""
 
     def test_localhost_suffix_is_local(self):
@@ -54,7 +54,7 @@ class UnitTestIsLocalOrPrivate(UnitTestCase):
         self.assertFalse(_is_local_or_private(""))
 
 
-class UnitTestRefreshViewPromptPatch(UnitTestCase):
+class UnitTestCremaRefreshViewPromptPatch(UnitTestCase):
     """Pure string comparison, no frappe I/O. Guards patches.refresh_view_prompt's own
     doc comment: OLD_PROMPTS must be appended to on every future edit to
     DEFAULT_PROMPTS["view"], or the patch silently stops matching stale stored prompts
@@ -67,6 +67,8 @@ class UnitTestRefreshViewPromptPatch(UnitTestCase):
 
 
 class IntegrationTestCremaProvider(CremaFixtureTestCase):
+    """CremaProvider.validate/on_update/on_trash, get_presets, and the templates."""
+
     def test_enabled_public_provider_without_api_key_is_rejected(self):
         doc = frappe.new_doc("Crema Provider")
         doc.provider_name = f"_test_crema_provider_{uuid.uuid4().hex[:8]}"
@@ -170,6 +172,9 @@ class IntegrationTestCremaProvider(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
+    """CremaAutomationTask.validate — the per-save fences: trigger, sources, action,
+    match_on, and cron expression."""
+
     def setUp(self) -> None:
         super().setUp()
         frappe.set_user("Administrator")
@@ -408,6 +413,9 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
 
 
 class IntegrationTestCremaInstall(CremaFixtureTestCase):
+    """install.py — after_install/hooks.after_migrate: sync_interfaces,
+    sync_interface_options, sync_dashboard, sync_example_task."""
+
     def setUp(self) -> None:
         super().setUp()
         # Defaults are shared state on the Crema Settings Single: the real site's own
@@ -946,6 +954,38 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
             new_messages,
         )
 
+    def test_a_provider_with_no_isolation_user_anywhere_is_rejected(self):
+        """The invariant that a real provider call can never run un-sandboxed: a row
+        overriding only its provider, with no row isolation_user and no Default
+        Isolation User to fall back on, must not save."""
+        _ensure_provider()
+        _clear_defaults()
+        settings = frappe.get_single("Crema Settings")
+        row = next(r for r in settings.assignments if r.interface == "extraction")
+        row.provider = TEST_PROVIDER
+        row.isolation_user = ""
+
+        with self.assertRaises(frappe.ValidationError):
+            settings.save(ignore_permissions=True)
+
+    def test_a_provider_with_no_row_isolation_user_is_accepted_via_the_default(self):
+        """The same row as above is fine once Default Isolation User supplies the
+        other half of the pairing — the rule is evaluated on effective values."""
+        _ensure_user(TEST_ISOLATION_USER)
+        _ensure_provider()
+        settings = frappe.get_single("Crema Settings")
+        settings.default_isolation_user = TEST_ISOLATION_USER
+        row = next(r for r in settings.assignments if r.interface == "extraction")
+        row.provider = TEST_PROVIDER
+        row.isolation_user = ""
+
+        settings.save(ignore_permissions=True)  # must not raise
+
+        reloaded = next(
+            r for r in frappe.get_single("Crema Settings").assignments if r.interface == "extraction"
+        )
+        self.assertEqual(reloaded.provider, TEST_PROVIDER)
+
 
 class IntegrationTestCremaConfigure(CremaFixtureTestCase):
     """crema.api.configure() — the supported code-side setter for one interface's
@@ -1031,6 +1071,8 @@ class IntegrationTestCremaTesting(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaLogInsert(IntegrationTestCase):
+    """crema.log.insert — writes the audit row and degrades quietly on its own failure."""
+
     def setUp(self) -> None:
         super().setUp()
         frappe.set_user("Administrator")
@@ -1049,6 +1091,9 @@ class IntegrationTestCremaLogInsert(IntegrationTestCase):
 
 
 class IntegrationTestCremaLogMeta(IntegrationTestCase):
+    """Crema Log list/report metadata — title, columns, and app-registered interface
+    labels via interfaces.label_for()."""
+
     def test_list_shows_the_labelled_use_case_as_title_with_tokens_and_cost_beside_it(self):
         """The subject column is the label ("Default"), never the raw key ("simple") —
         the key stays stored, since month_spend/check_budget and Crema Usage group on it.
@@ -1093,12 +1138,12 @@ class IntegrationTestCremaLogMeta(IntegrationTestCase):
         )
 
 
-class IntegrationTestListColumnsSayEachThingOnce(IntegrationTestCase):
+class IntegrationTestCremaListColumns(IntegrationTestCase):
     """A field the list's get_indicator already renders, or that is the autoname source,
     must not also be a column — that is the same value twice on one row. See the list-view
     convention in CLAUDE.md, and the *_list.js files these mirror."""
 
-    def test_automation_task_list_columns(self):
+    def test_automation_task_list_does_not_column_what_the_indicator_reads(self):
         meta = frappe.get_meta("Crema Automation Task")
         # title_field, so the subject column header reads "Task Name" and not "ID";
         # crema_automation_task_list.js sets hide_name_column to stop frappe appending
@@ -1109,7 +1154,7 @@ class IntegrationTestListColumnsSayEachThingOnce(IntegrationTestCase):
             {"last_run", "trigger", "interface"},
         )
 
-    def test_provider_list_columns(self):
+    def test_provider_list_does_not_column_what_the_indicator_reads(self):
         meta = frappe.get_meta("Crema Provider")
         self.assertEqual(meta.title_field, "provider_name")
         self.assertEqual(
@@ -1173,6 +1218,8 @@ class IntegrationTestCremaLogTranscript(IntegrationTestCase):
 
 
 class IntegrationTestCremaSeededIsolationUser(IntegrationTestCase):
+    """The seeded isolation user's display name — install.py's _isolation_user_email."""
+
     def test_the_seeded_isolation_user_always_has_a_name(self):
         """A Link to User renders the document name — the email — because core User does
         not set show_title_field_in_link, and there is no per-field override. So "Runs As"

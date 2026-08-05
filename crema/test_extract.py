@@ -37,6 +37,9 @@ def _extraction_result_many(*records: dict, reason: str = "several records") -> 
 
 
 class IntegrationTestCremaExtract(CremaFixtureTestCase):
+    """crema.api.extract — OCR-then-map: extract() calls ocr() then the "extraction"
+    interface, filters through _filter_diff, and never writes."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -50,7 +53,7 @@ class IntegrationTestCremaExtract(CremaFixtureTestCase):
 
     # --- happy path ----------------------------------------------------------
 
-    def test_maps_fields_and_child_rows(self):
+    def test_one_file_maps_onto_parent_fields_and_child_rows_with_a_confidence(self):
         set_ = {"first_name": "John", "company_name": "Acme Corp"}
         child_set = {"email_ids": [{"email_id": "john@acme.example"}]}
         with patch(
@@ -83,7 +86,7 @@ class IntegrationTestCremaExtract(CremaFixtureTestCase):
         self.assertEqual(result["records"][0]["child_set"], {"email_ids": [{"email_id": "a@b.c"}]})
         self.assertNotIn("not_a_table", result["records"][0]["child_set"])
 
-    def test_multiple_records_from_one_file(self):
+    def test_one_file_can_yield_several_records(self):
         records = [
             {"set": {"first_name": "John"}, "child_set": {}},
             {"set": {"first_name": "Jane"}, "child_set": {}},
@@ -95,7 +98,7 @@ class IntegrationTestCremaExtract(CremaFixtureTestCase):
         self.assertEqual(result["records"][0]["set"], {"first_name": "John"})
         self.assertEqual(result["records"][1]["set"], {"first_name": "Jane"})
 
-    def test_no_records_found(self):
+    def test_a_file_with_nothing_to_extract_returns_an_empty_record_list(self):
         with patch(
             "crema.client._complete",
             side_effect=[_ocr_result(), _extraction_result_many(reason="nothing here")],
@@ -204,6 +207,9 @@ class IntegrationTestCremaExtract(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaExtractApi(CremaFixtureTestCase):
+    """crema.api.extract_api — the whitelisted endpoint: role gate, rate limit, and
+    the 417 blocked-document shape, mirroring transform_api."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()

@@ -112,10 +112,10 @@ CASES: list[tuple[str, str, str | None]] = [
 ]
 
 
-class UnitTestSecurity(UnitTestCase):
+class UnitTestCremaSecurityScan(UnitTestCase):
     """Table-driven tests for crema.security.scan — pure function, no database."""
 
-    def test_scan_table(self):
+    def test_scan_blocks_and_passes_every_documented_case(self):
         for label, text, expected_reason in CASES:
             with self.subTest(label=label):
                 result = security.scan(text)

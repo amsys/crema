@@ -159,6 +159,9 @@ def _todo_rows(marker: str) -> dict:
 
 
 class IntegrationTestCremaAutomation(CremaFixtureTestCase):
+    """automation.py's core pipeline: tick/enqueue_task/run_task/dry_run, the plan
+    schema fence, and the notify/log/watermark bookkeeping around a run."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -675,7 +678,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
     # --- Run Now endpoint ---------------------------------------------------
 
-    def test_run_automation_now_enqueues(self):
+    def test_run_automation_now_enqueues_the_task_for_a_worker(self):
         """job_id falls back to the deterministic f-string only when frappe.enqueue's
         return value has no usable .id (e.g. mocked as None, or RQ running in sync mode).
         The real `job.id` branch (enqueue.automation.py:113) is exercised separately
@@ -815,6 +818,9 @@ def _update_plan() -> dict:
 
 
 class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
+    """Crema Automation Source rows: the read fence (source_fields, watermarks,
+    on_source_error), Update the Records It Read, and notify."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -834,6 +840,18 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         )
         doc.insert(ignore_permissions=True)
         return doc.name
+
+    # --- source: save-time query fence ------------------------------------
+
+    def test_a_crema_module_doctype_is_refused_as_a_source(self):
+        """Load-bearing for security, not merely helpful: a task must never be able to
+        read — or be triggered by — crema's own audit rows."""
+        with self.assertRaises(frappe.ValidationError):
+            _make_task(sources=[_query_source(source_doctype="Crema Log")])
+
+    def test_a_source_limit_above_the_cap_is_clamped_not_rejected(self):
+        task = _make_task(sources=[_query_source(source_limit=100000)])
+        self.assertEqual(task.sources[0].source_limit, 200)  # _MAX_SOURCE_LIMIT
 
     # --- source: document query -----------------------------------------
 
@@ -1673,6 +1691,9 @@ class IntegrationTestCremaAutomationRunAs(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaAutomationWebhook(CremaFixtureTestCase):
+    """The Webhook trigger: api.trigger_automation, read_webhook_payload, and the
+    scheduler leaving Webhook tasks out of the cron sweep."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -1874,7 +1895,7 @@ class IntegrationTestCremaDryRunApi(CremaFixtureTestCase):
         self.assertEqual(result, {"blocked": False, "reason": "no provider"})
         self.assertEqual(frappe.local.response["http_status_code"], 417)
 
-    def test_returns_the_dry_run_result(self):
+    def test_dry_run_api_returns_the_plan_and_extracted_rows(self):
         from crema import api
 
         marker = uuid.uuid4().hex[:10]

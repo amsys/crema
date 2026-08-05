@@ -136,17 +136,20 @@ class UnitTestCremaAppInterfaces(UnitTestCase):
         with patch("crema.interfaces.app_interfaces", return_value=self._FAKE):
             self.assertEqual(interfaces.names(), [*interfaces.PREDEFINED, "_test_app_iface"])
 
-    def test_prompt_for_and_fallback_for_read_app_config(self):
+    def test_an_app_interface_supplies_its_own_prompt_and_fallback(self):
         with patch("crema.interfaces.app_interfaces", return_value=self._FAKE):
             self.assertEqual(interfaces.prompt_for("_test_app_iface"), "app prompt")
             self.assertEqual(interfaces.fallback_for("_test_app_iface"), "simple")
 
-    def test_unknown_name_prompt_and_fallback_are_blank(self):
+    def test_an_unknown_interface_has_an_empty_prompt_and_no_fallback(self):
         self.assertEqual(interfaces.prompt_for("_totally_unknown"), "")
         self.assertIsNone(interfaces.fallback_for("_totally_unknown"))
 
 
 class IntegrationTestCremaClient(CremaFixtureTestCase):
+    """crema.client — interface resolution/fallback, caching, budget, output trap
+    wiring, list_models/check_connection, and the ask() call boundary."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -413,13 +416,19 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
 
     # --- attribute-call sugar ---------------------------------------------
 
-    def test_attribute_sugar_matches_call_path(self):
+    def test_attribute_sugar_runs_the_same_call_path_as_the_string_form(self):
         prompt = f"unique attribute sugar prompt {uuid.uuid4().hex}"
-        with patch("crema.client._complete", return_value="attr result") as mock_complete:
+        with patch("crema.client._complete", return_value="attr result") as mock_attr:
             result = ask.simple(prompt)
+        with patch("crema.client._complete", return_value="attr result") as mock_string:
+            ask("simple", prompt)
 
         self.assertEqual(result, "attr result")
-        mock_complete.assert_called_once()
+        mock_attr.assert_called_once()
+        # __getattr__ is documented as pure sugar over ask("simple", prompt) — same
+        # interface config and messages must reach _complete either way.
+        self.assertEqual(mock_attr.call_args[0][0], mock_string.call_args[0][0])
+        self.assertEqual(mock_attr.call_args[0][1], mock_string.call_args[0][1])
 
     def test_attribute_sugar_rejects_private_names(self):
         with self.assertRaises(AttributeError):
@@ -1095,6 +1104,9 @@ class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaSandbox(CremaFixtureTestCase):
+    """crema.sandbox.isolation — runs as the isolation user, restores session state
+    on exit (the form_dict/session.sid/session.data footgun documented in CLAUDE.md)."""
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()

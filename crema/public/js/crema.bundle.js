@@ -27,8 +27,8 @@ function crema_allowed() {
 }
 
 function crema_strip_fence(text) {
-	const m = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec((text || "").trim());
-	return m ? m[1] : text;
+	const m = /^```(?:json)?([\s\S]*)```$/.exec((text || "").trim());
+	return m ? m[1].trim() : text;
 }
 
 // Fields this session user may at least read. frappe.get_meta is NOT permlevel-filtered
@@ -82,7 +82,7 @@ function crema_writable_fields(doctype, perm) {
 // docfield when this user may write rows into it, else null.
 function crema_writable_table(doctype, fieldname, perm) {
 	const df = frappe.meta.get_docfield(doctype, fieldname);
-	if (!df || df.fieldtype !== "Table" || df.hidden || df.read_only) return null;
+	if (df?.fieldtype !== "Table" || df.hidden || df.read_only) return null;
 	return frappe.perm.get_field_display_status(df, null, perm) === "Write" ? df : null;
 }
 
@@ -136,9 +136,7 @@ function crema_visible_list_fields(doctype) {
 		cur_list.doctype === doctype &&
 		cur_list.columns
 	) {
-		return new Set(
-			cur_list.columns.filter((c) => c.df && c.df.fieldname).map((c) => c.df.fieldname)
-		);
+		return new Set(cur_list.columns.filter((c) => c.df?.fieldname).map((c) => c.df.fieldname));
 	}
 	const meta = frappe.get_meta(doctype);
 	const fields = meta.fields.filter((df) => df.in_list_view).map((df) => df.fieldname);
@@ -174,12 +172,12 @@ function crema_view_prompt(doctype) {
 		const shown = visible.has(df.fieldname) ? " [shown in list]" : "";
 		// A Link/Select value the model has to guess with no target doctype or option
 		// list will never match — give it what it needs to pick a real one.
-		const opts =
-			df.fieldtype === "Link"
-				? ` -> ${df.options}`
-				: df.fieldtype === "Select"
-				? ` [${(df.options || "").split("\n").filter(Boolean).join("|")}]`
-				: "";
+		let opts = "";
+		if (df.fieldtype === "Link") {
+			opts = ` -> ${df.options}`;
+		} else if (df.fieldtype === "Select") {
+			opts = ` [${(df.options || "").split("\n").filter(Boolean).join("|")}]`;
+		}
 		let write = "";
 		if (df.fieldtype === "Table") {
 			// crema_writable_fields excludes Table (frappe.model.is_value_type), so it is
@@ -198,7 +196,11 @@ function crema_view_prompt(doctype) {
 				write = " [read-only]";
 			}
 		} else if (writable) {
-			write = writable.has(df.fieldname) ? (df.reqd ? " [required]" : "") : " [read-only]";
+			if (writable.has(df.fieldname)) {
+				write = df.reqd ? " [required]" : "";
+			} else {
+				write = " [read-only]";
+			}
 		}
 		return `- ${df.fieldname} (${df.fieldtype})${opts} ${
 			df.label || ""
@@ -343,9 +345,10 @@ function crema_diff_table(record) {
 			)
 		)
 		.join("");
+	const empty_row = `<tr><td colspan="2">${__("Nothing found")}</td></tr>`;
 	return `<table class="table table-bordered"><thead><tr><th>${__("Field")}</th><th>${__(
 		"Value"
-	)}</th></tr></thead>${rows || `<tr><td colspan="2">${__("Nothing found")}</td></tr>`}</table>`;
+	)}</th></tr></thead>${rows || empty_row}</table>`;
 }
 
 // Both create paths end here — a record read out of an uploaded document (Path A), and
@@ -429,14 +432,14 @@ function crema_records_to_csv(doctype, records) {
 		fields.forEach((f) => columns.push(`${table}.${f}`))
 	);
 
-	const csv_cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+	const csv_cell = (v) => `"${String(v ?? "").replaceAll('"', '""')}"`;
 	const lines = [columns.map(csv_cell).join(",")];
 
 	records.forEach((r) => {
 		const child_rows_by_table = Object.entries(child_tables).map(([table, fields]) => ({
 			table,
 			fields,
-			rows: (r.child_set || {})[table] || [],
+			rows: r.child_set?.[table] || [],
 		}));
 		const max_rows = Math.max(1, ...child_rows_by_table.map((t) => t.rows.length));
 
@@ -446,7 +449,7 @@ function crema_records_to_csv(doctype, records) {
 					// Every further row is a child-only continuation — parent columns blank.
 					if (parent_fields.includes(col)) return csv_cell("");
 				} else if (parent_fields.includes(col)) {
-					return csv_cell((r.set || {})[col]);
+					return csv_cell(r.set?.[col]);
 				}
 				const [table, field] = col.includes(".") ? col.split(/\.(.*)/s) : [null, null];
 				const t = child_rows_by_table.find((x) => x.table === table);
@@ -584,7 +587,7 @@ const CREMA_VALID_AGGREGATES = new Set(["count", "sum", "avg"]);
 // the model meant literally ("starting with _" -> ["like", "_%"]) silently matched every
 // record. Escape everything the model did not ask to be a wildcard; "%" is left alone.
 function crema_like_escape(value) {
-	return String(value ?? "").replace(/[\\_]/g, "\\$&");
+	return String(value ?? "").replace(/[\\_]/g, String.raw`\$&`);
 }
 
 // Fieldtypes worth probing when a text lookup came back empty. Link/Select are in on
@@ -780,10 +783,7 @@ function crema_apply_view_spec(doctype, spec) {
 			// only clears when the route carried filters, so a zero-filter spec would
 			// otherwise inherit the previous view's (Report/Kanban/group_by share one
 			// filter set with the List). A non-empty spec is already applied by then.
-			const stale =
-				!Object.keys(filters).length &&
-				cur_list.filter_area &&
-				cur_list.filter_area.get().length;
+			const stale = !Object.keys(filters).length && cur_list.filter_area?.get().length;
 			return (stale ? cur_list.filter_area.clear(false) : Promise.resolve()).then(() => {
 				if (seeded || stale) cur_list.refresh();
 				crema_after_view(doctype, spec, filters);
@@ -848,9 +848,10 @@ function crema_failed_term(doctype, filters) {
 
 	// crema_valid_filters already ran this value through crema_like_escape — undo it to
 	// get back the literal the user actually typed before probing other fields with it.
-	const term = String(value ?? "")
-		.replace(/^%+|%+$/g, "")
-		.replace(/\\([\\_])/g, "$1");
+	let bare = String(value ?? "");
+	while (bare.startsWith("%")) bare = bare.slice(1);
+	while (bare.endsWith("%")) bare = bare.slice(0, -1);
+	const term = bare.replace(/\\([\\_])/g, "$1");
 	if (!term || term.includes("%") || term.length < 2) return null;
 	return { fieldname, term };
 }
@@ -980,7 +981,7 @@ function crema_resolve_targets(doctype, raw_filters) {
 	const title_field = meta.title_field && meta.title_field !== "name" ? meta.title_field : null;
 	const fields = title_field ? ["name", title_field] : ["name"];
 	return frappe.db.get_list(doctype, { filters, fields, limit: 501 }).then((rows) => {
-		if (rows.length > 500) return Promise.reject(new Error("crema:too-many"));
+		if (rows.length > 500) throw new Error("crema:too-many");
 		return { filters, rows, title_field };
 	});
 }
@@ -1027,23 +1028,22 @@ function crema_confirm_records({
 }) {
 	const heading = (text) =>
 		text ? `<h5 class="text-muted">${frappe.utils.escape_html(text)}</h5>` : "";
-	const list_html =
-		rows && rows.length
-			? `${heading(
-					list_heading
-			  )}<div style="max-height: 40vh; overflow-y: auto; margin-bottom: 1rem;">
+	const list_html = rows?.length
+		? `${heading(
+				list_heading
+		  )}<div style="max-height: 40vh; overflow-y: auto; margin-bottom: 1rem;">
 					<table class="table table-bordered"><thead><tr><th>#</th><th>${__(
 						"Record"
 					)}</th></tr></thead><tbody>${rows
-					.map(
-						(r, i) =>
-							`<tr><td>${i + 1}</td><td>${frappe.utils.escape_html(
-								String((title_field ? r[title_field] : null) ?? r.name)
-							)}</td></tr>`
-					)
-					.join("")}</tbody></table>
+				.map(
+					(r, i) =>
+						`<tr><td>${i + 1}</td><td>${frappe.utils.escape_html(
+							String((title_field ? r[title_field] : null) ?? r.name)
+						)}</td></tr>`
+				)
+				.join("")}</tbody></table>
 				</div>`
-			: "";
+		: "";
 	const dialog = new frappe.ui.Dialog({
 		title,
 		size: "large",
@@ -1495,7 +1495,12 @@ function crema_usage_pill(usage) {
 	const spend = `$${crema_fmt_usd(usage.spend)}`;
 	if (!usage.budget) return `<span class="indicator-pill gray">${spend}</span>`;
 	const pct = Math.round((usage.spend / usage.budget) * 100);
-	const color = pct >= 100 ? "red" : pct >= 80 ? "orange" : "green";
+	let color = "green";
+	if (pct >= 100) {
+		color = "red";
+	} else if (pct >= 80) {
+		color = "orange";
+	}
 	return `<span class="indicator-pill ${color}" title="${spend} of $${crema_fmt_usd(
 		usage.budget
 	)}">${pct}%</span>`;

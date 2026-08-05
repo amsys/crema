@@ -618,7 +618,9 @@ def _query_rows(
     # A capped batch read the head of the backlog only, so the next run resumes at the
     # last row it actually handled; an uncapped one read everything up to the moment this
     # run started. `started`, not `now`: a record changed during a long run is not lost.
-    read_up_to = (rows[-1].get("modified") if len(rows) == limit else started) if incremental else None
+    read_up_to = None
+    if incremental:
+        read_up_to = rows[-1].get("modified") if len(rows) == limit else started
     return rows, read_up_to
 
 

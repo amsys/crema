@@ -72,7 +72,7 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "prompt injection: role override",
     ),
     (
-        re.compile(r"from\s+now\s+on\s*,?\s+you\s+(are|will|must|shall)\b", re.I | re.S),
+        re.compile(r"from\s+now\s+on(?:\s*,)?\s+you\s+(are|will|must|shall)\b", re.I | re.S),
         "prompt injection: role override",
     ),
     (re.compile(r"pretend\s+(you\s+are|to\s+be)\b", re.I | re.S), "prompt injection: pretend-to-be"),

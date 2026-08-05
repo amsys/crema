@@ -82,10 +82,10 @@ class CremaProvider(Document):
                 )
 
     def on_update(self) -> None:
-        cache.clear_provider(self.name)
+        cache.clear_provider()
 
     def on_trash(self) -> None:
-        cache.clear_provider(self.name)
+        cache.clear_provider()
 
 
 @frappe.whitelist()

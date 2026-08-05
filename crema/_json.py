@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-_FENCE_RE = re.compile(r"^```[\w-]*\n?|\n?```$")
+_FENCE_RE = re.compile(r"(?:^```[\w-]*\n?)|(?:\n?```$)")
 
 
 def strip_fence(text: str) -> str:

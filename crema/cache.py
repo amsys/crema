@@ -33,7 +33,7 @@ def clear_event_tasks() -> None:
     frappe.local.crema_event_tasks = None
 
 
-def clear_provider(name: str) -> None:
+def clear_provider() -> None:
     """Provider saved/deleted: nuke every resolved interface config (few providers,
     nuke-all is fine — cheap to rebuild) and the provider's cached model list."""
     frappe.cache.delete_keys("crema:iface:")

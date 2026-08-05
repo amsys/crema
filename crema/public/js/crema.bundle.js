@@ -204,6 +204,10 @@ function crema_view_prompt(doctype) {
 			df.label || ""
 		}${shown}${write}`.trim();
 	});
+	// "name" is a standard docfield, never in meta.fields above, but crema_valid_filters
+	// accepts it as a filter target (the ID is the list's own first column) — listed here,
+	// read-only, so the model knows the field exists without being told it can write it.
+	lines.unshift("- name (Data) ID [shown in list] [read-only]");
 
 	const actions = ['"view" — change what this list shows.'];
 	if (can_create) {
@@ -339,9 +343,9 @@ function crema_diff_table(record) {
 			)
 		)
 		.join("");
-	return `<table class="table table-bordered">${
-		rows || `<tr><td>${__("Nothing found")}</td></tr>`
-	}</table>`;
+	return `<table class="table table-bordered"><thead><tr><th>${__("Field")}</th><th>${__(
+		"Value"
+	)}</th></tr></thead>${rows || `<tr><td colspan="2">${__("Nothing found")}</td></tr>`}</table>`;
 }
 
 // Both create paths end here — a record read out of an uploaded document (Path A), and
@@ -575,6 +579,14 @@ const CREMA_VALID_OPERATORS = new Set([
 ]);
 const CREMA_VALID_AGGREGATES = new Set(["count", "sum", "avg"]);
 
+// MariaDB/Postgres LIKE treat "_" as a single-character wildcard and "\" as the escape
+// character, but crema_view_prompt only ever advertises "%" as a wildcard — so a value
+// the model meant literally ("starting with _" -> ["like", "_%"]) silently matched every
+// record. Escape everything the model did not ask to be a wildcard; "%" is left alone.
+function crema_like_escape(value) {
+	return String(value ?? "").replace(/[\\_]/g, "\\$&");
+}
+
 // Fieldtypes worth probing when a text lookup came back empty. Link/Select are in on
 // purpose — "todos for acme" often means a Link value, not a Data field.
 const CREMA_TEXTISH = new Set([
@@ -597,16 +609,29 @@ const CREMA_MAX_CHILD_FIELDS = 10;
 // fieldname isn't readable, whose condition isn't a well-formed [operator, value] pair,
 // or whose operator isn't in the whitelist. Shared by the view action and by edit/
 // delete's target resolution below — "delete the ones that are X" must not silently
-// expand into "every record" because a stray or malformed key survived.
+// expand into "every record" because a stray or malformed key survived. "name" is added
+// to the readable set here (not in crema_readable_fields itself) — it's a standard
+// docfield never listed in meta.fields, but it is the list's own first column and is
+// already a valid order_by target (crema_apply_view_spec). It stays out of the WRITE
+// fence (crema_filter_diff) on purpose: filterable, never writable.
 function crema_valid_filters(doctype, raw) {
-	const allowed = new Set(crema_readable_fields(doctype).map((df) => df.fieldname));
+	const allowed = new Set([...crema_readable_fields(doctype).map((df) => df.fieldname), "name"]);
 	const filters = {};
 	for (const [fieldname, cond] of Object.entries(raw || {})) {
 		if (!allowed.has(fieldname) || !Array.isArray(cond) || cond.length !== 2) continue;
 		if (!CREMA_VALID_OPERATORS.has(cond[0])) continue;
-		filters[fieldname] = cond; // always [operator, value] — a bare value round-trips
-		// broken through frappe.route_options (router.js JSON-stringifies it, but
-		// list_view.js only JSON.parses values starting with "[").
+		const [op, value] = cond;
+		filters[fieldname] =
+			op === "like" || op === "not like" ? [op, crema_like_escape(value)] : cond;
+		// always [operator, value] — a bare value round-trips broken through
+		// frappe.route_options (router.js JSON-stringifies it, but list_view.js only
+		// JSON.parses values starting with "[").
+	}
+	if (Object.keys(filters).length !== Object.keys(raw || {}).length) {
+		frappe.show_alert({
+			message: __("Crema named a condition this list cannot use — it was ignored."),
+			indicator: "orange",
+		});
 	}
 	return filters;
 }
@@ -821,7 +846,11 @@ function crema_failed_term(doctype, filters) {
 	const df = frappe.get_meta(doctype).fields.find((f) => f.fieldname === fieldname);
 	if (!df || !CREMA_TEXTISH.has(df.fieldtype)) return null;
 
-	const term = String(value ?? "").replace(/^%+|%+$/g, "");
+	// crema_valid_filters already ran this value through crema_like_escape — undo it to
+	// get back the literal the user actually typed before probing other fields with it.
+	const term = String(value ?? "")
+		.replace(/^%+|%+$/g, "")
+		.replace(/\\([\\_])/g, "$1");
 	if (!term || term.includes("%") || term.length < 2) return null;
 	return { fieldname, term };
 }
@@ -862,7 +891,7 @@ function crema_widen_if_empty(doctype, filters) {
 	frappe.db
 		.get_list(doctype, {
 			fields: candidates,
-			or_filters: candidates.map((f) => [f, "like", `%${term}%`]),
+			or_filters: candidates.map((f) => [f, "like", `%${crema_like_escape(term)}%`]),
 			limit: 20,
 		})
 		.then((rows) => {
@@ -889,7 +918,11 @@ function crema_widen_if_empty(doctype, filters) {
 			const best = candidates[best_i];
 			cur_list.filter_area
 				.clear(false)
-				.then(() => cur_list.filter_area.set([[doctype, best, "like", `%${term}%`]]))
+				.then(() =>
+					cur_list.filter_area.set([
+						[doctype, best, "like", `%${crema_like_escape(term)}%`],
+					])
+				)
 				.then(() => {
 					cur_list.start = 0;
 					return cur_list.refresh();
@@ -985,29 +1018,41 @@ function crema_confirm_records({
 	title,
 	rows,
 	title_field,
+	list_heading,
 	extra_html,
+	extra_heading,
 	primary_label,
 	danger,
 	onConfirm,
 }) {
+	const heading = (text) =>
+		text ? `<h5 class="text-muted">${frappe.utils.escape_html(text)}</h5>` : "";
 	const list_html =
 		rows && rows.length
-			? `<div style="max-height: 40vh; overflow-y: auto; margin-bottom: 1rem;">
-					<table class="table table-bordered"><tbody>${rows
-						.map(
-							(r, i) =>
-								`<tr><td>${i + 1}</td><td>${frappe.utils.escape_html(
-									String((title_field ? r[title_field] : null) ?? r.name)
-								)}</td></tr>`
-						)
-						.join("")}</tbody></table>
+			? `${heading(
+					list_heading
+			  )}<div style="max-height: 40vh; overflow-y: auto; margin-bottom: 1rem;">
+					<table class="table table-bordered"><thead><tr><th>#</th><th>${__(
+						"Record"
+					)}</th></tr></thead><tbody>${rows
+					.map(
+						(r, i) =>
+							`<tr><td>${i + 1}</td><td>${frappe.utils.escape_html(
+								String((title_field ? r[title_field] : null) ?? r.name)
+							)}</td></tr>`
+					)
+					.join("")}</tbody></table>
 				</div>`
 			: "";
 	const dialog = new frappe.ui.Dialog({
 		title,
 		size: "large",
 		fields: [
-			{ fieldtype: "HTML", fieldname: "body", options: `${list_html}${extra_html || ""}` },
+			{
+				fieldtype: "HTML",
+				fieldname: "body",
+				options: `${list_html}${heading(extra_heading)}${extra_html || ""}`,
+			},
 		],
 		primary_action_label: primary_label,
 		primary_action() {
@@ -1102,6 +1147,7 @@ function crema_apply_create_spec(doctype, spec) {
 		crema_confirm_records({
 			title: __("Create {0} {1} records?", [filtered.length, __(doctype)]),
 			rows: null,
+			extra_heading: __("Records to create"),
 			extra_html: filtered.map((r, i) => `<b>${i + 1}.</b>${crema_diff_table(r)}`).join(""),
 			primary_label: __("Create {0} Documents", [filtered.length]),
 			onConfirm: () => crema_import_records(doctype, filtered),
@@ -1155,6 +1201,8 @@ function crema_apply_edit_spec(doctype, spec) {
 					title: __("Update {0} {1} records?", [rows.length, __(doctype)]),
 					rows,
 					title_field,
+					list_heading: __("Records to update"),
+					extra_heading: __("Change applied to every record"),
 					extra_html: crema_diff_table({ set: diff.set }),
 					primary_label: __("Update {0} records", [rows.length]),
 					onConfirm: () => {
@@ -1207,6 +1255,7 @@ function crema_apply_delete_spec(doctype, spec) {
 				title: __("Delete {0} {1} records?", [rows.length, __(doctype)]),
 				rows,
 				title_field,
+				list_heading: __("Records to delete"),
 				primary_label: __("Delete {0} records", [rows.length]),
 				danger: true,
 				onConfirm: () => {

@@ -15,13 +15,43 @@ from frappe import _
 from frappe.model.document import Document
 
 # Apply-template presets: label -> base_url. User picks one, pastes their key, enables.
+# Sourced from litellm's own per-provider api_base defaults (the literals in
+# litellm_core_utils/get_llm_provider_logic.py and llms/*/transformation.py) — litellm
+# exposes no importable {provider: base_url} map, and resolving one at runtime hangs on
+# providers that do interactive auth. Corrected where litellm's value is not the
+# OpenAI-compatible base crema needs: DeepSeek (litellm says /beta), Ollama (no /v1),
+# NVIDIA (litellm's is the rerank host). LM Studio and Gemini are each vendor's own
+# published OpenAI-compatible default — litellm has no default for either.
 PRESETS = {
     "OpenAI": "https://api.openai.com/v1",
     "OpenRouter": "https://openrouter.ai/api/v1",
     "Groq": "https://api.groq.com/openai/v1",
     "Mistral": "https://api.mistral.ai/v1",
     "DeepSeek": "https://api.deepseek.com/v1",
+    "xAI": "https://api.x.ai/v1",
+    "Google Gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "Together AI": "https://api.together.xyz/v1",
+    "Fireworks AI": "https://api.fireworks.ai/inference/v1",
+    "Cerebras": "https://api.cerebras.ai/v1",
+    "DeepInfra": "https://api.deepinfra.com/v1/openai",
+    "Perplexity": "https://api.perplexity.ai",
+    "Nebius": "https://api.studio.nebius.ai/v1",
+    "Moonshot": "https://api.moonshot.ai/v1",
+    "SambaNova": "https://api.sambanova.ai/v1",
+    "NVIDIA NIM": "https://integrate.api.nvidia.com/v1",
+    "Alibaba DashScope": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "Vercel AI Gateway": "https://ai-gateway.vercel.sh/v1",
+    "GitHub Models": "https://models.inference.ai.azure.com",
+    "Hyperbolic": "https://api.hyperbolic.xyz/v1",
+    "Lambda": "https://api.lambda.ai/v1",
+    "Baseten": "https://inference.baseten.co/v1",
+    "Novita": "https://api.novita.ai/v3/openai",
+    "AI/ML API": "https://api.aimlapi.com/v1",
+    "Weights & Biases": "https://api.inference.wandb.ai/v1",
     "Ollama": "http://localhost:11434/v1",
+    "LM Studio": "http://localhost:1234/v1",
+    "llamafile": "http://127.0.0.1:8080/v1",
+    "Xinference": "http://127.0.0.1:9997/v1",
 }
 
 

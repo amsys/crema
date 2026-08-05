@@ -12,7 +12,7 @@
 > Test Crema on a non-production site before you deploy it.
 
 Crema gives every app in your bench one route to OpenAI-compatible LLM providers —
-OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Ollama, and more. A named **interface**
+OpenAI, OpenRouter, Groq, and about twenty more, hosted and local. A named **interface**
 (one per use-case: translation, OCR, extraction, ...) binds a provider, a model, a
 system prompt, an isolation user, and a security layer. Application code never names
 a provider — every call is `from crema import ask`.

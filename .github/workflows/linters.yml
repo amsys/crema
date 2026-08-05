@@ -25,14 +25,14 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
-      - uses: pre-commit/action@v3.0.1
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
 
       - name: Download Semgrep rules
         run: git clone --depth 1 https://github.com/frappe/semgrep-rules.git frappe-semgrep-rules
 
       - name: Run Semgrep rules
         run: |
-          pip install semgrep
+          pip install --only-binary :all: semgrep==1.172.0
           semgrep ci --config ./frappe-semgrep-rules/rules --config r/python.lang.correctness
 
   deps-vulnerable-check:
@@ -57,6 +57,6 @@ jobs:
 
       - name: Install and run pip-audit
         run: |
-          pip install pip-audit
+          pip install --only-binary :all: pip-audit==2.10.1
           cd ${GITHUB_WORKSPACE}
           pip-audit --desc on .

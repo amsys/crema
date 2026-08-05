@@ -25,7 +25,7 @@ context("Crema desk UI", () => {
 			cy.get(".menu-btn-group, [data-crema], .primary-action").then(($els) => {
 				const order = [...$els].map((el) => el.className);
 				const menu_idx = order.findIndex((c) => c.includes("menu-btn-group"));
-				const crema_idx = [...$els].findIndex((el) => el.hasAttribute("data-crema"));
+				const crema_idx = [...$els].findIndex((el) => "crema" in el.dataset);
 				const primary_idx = order.findIndex((c) => c.includes("primary-action"));
 				expect(menu_idx).to.be.lessThan(crema_idx);
 				expect(crema_idx).to.be.lessThan(primary_idx);
@@ -58,7 +58,7 @@ context("Crema desk UI", () => {
 			cy.get(".frappe-control[data-fieldname=batch]").should("not.exist");
 			// The drop zone is shrunk from frappe's stock 16rem so it doesn't dominate the dialog.
 			cy.get(".file-upload-area").should(($el) => {
-				expect(parseFloat($el.css("min-height"))).to.be.lessThan(200);
+				expect(Number.parseFloat($el.css("min-height"))).to.be.lessThan(200);
 			});
 		});
 		cy.get(".modal").within(() => cy.get(".btn-modal-close").click());

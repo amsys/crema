@@ -31,7 +31,7 @@ function prefetch(listview) {
 	const usage = frappe
 		.call({ method: "crema.api.get_usage" })
 		.then((r) => {
-			usage_cache = (r.message || {}).providers || {};
+			usage_cache = r.message?.providers || {};
 		})
 		.catch(() => {
 			usage_cache = {};

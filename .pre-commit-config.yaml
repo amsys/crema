@@ -63,6 +63,11 @@ repos:
                 crema/public/js/lib/.*
             )$
 
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.1
+    hooks:
+      - id: uv-lock
+
   - repo: local
     hooks:
       - id: requirements-match-pyproject

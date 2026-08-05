@@ -79,12 +79,12 @@ function crema_show_dry_run(frm, result) {
 	// A File Query dry run has no plan at all — each file was read straight into records
 	// by extract() — so "used_stored_plan" is absent rather than false, and the line
 	// below is skipped entirely instead of misreporting "a new plan was written".
-	const plan_line =
-		"used_stored_plan" in result
-			? result.used_stored_plan
-				? `<p class="text-muted small">${__("Using the stored plan.")}</p>`
-				: `<p class="text-muted small">${__("A new plan was written and saved.")}</p>`
-			: "";
+	let plan_line = "";
+	if ("used_stored_plan" in result) {
+		plan_line = result.used_stored_plan
+			? `<p class="text-muted small">${__("Using the stored plan.")}</p>`
+			: `<p class="text-muted small">${__("A new plan was written and saved.")}</p>`;
+	}
 	const header = [
 		`<p>${__("{0} row(s) {1}. Nothing was saved.", [result.row_count, verb])}</p>`,
 		plan_line,
@@ -97,7 +97,7 @@ function crema_show_dry_run(frm, result) {
 	// renders as-is (child rows included); a plan-based row is still a flat extracted
 	// object and needs wrapping the way it always has.
 	const rows = (result.rows || [])
-		.map((row) => crema_diff_table(row && row.set !== undefined ? row : { set: row }))
+		.map((row) => crema_diff_table(row?.set !== undefined ? row : { set: row }))
 		.join("");
 	frappe.msgprint({ title: __("Dry Run"), message: header + rows, wide: true });
 }
@@ -110,7 +110,7 @@ function crema_show_dry_run(frm, result) {
 // expanded" hook — before that the row's field wrapper does not exist.
 function crema_render_row_filters(frm, row) {
 	const grid_row = frm.fields_dict.sources.grid.grid_rows_by_docname[row.name];
-	const field = grid_row && grid_row.grid_form && grid_row.grid_form.fields_dict.source_filters;
+	const field = grid_row?.grid_form?.fields_dict.source_filters;
 	const is_query = row.source_type === "Document Query" || row.source_type === "File Query";
 	if (!field || !is_query || !row.source_doctype) return;
 
@@ -226,17 +226,19 @@ function crema_stamp_row(frm, row) {
 		count = 0;
 	}
 
-	const heading = file_query
-		? "Files"
-		: query
-		? row.source_doctype || ""
-		: (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "");
+	let heading;
+	if (file_query) {
+		heading = "Files";
+	} else if (query) {
+		heading = row.source_doctype || "";
+	} else {
+		heading = (row.source_url || "").replace(/^[a-z0-9+.-]+:\/\//i, "");
+	}
 
+	const plural = count > 1 ? "s" : "";
 	set(
 		"source_label",
-		(query || file_query) && count
-			? `${heading} · ${count} filter${count > 1 ? "s" : ""}`
-			: heading
+		(query || file_query) && count ? `${heading} · ${count} filter${plural}` : heading
 	);
 	if (file_query) {
 		set("read_attachments", 0); // the File Query IS the file read; nothing to attach

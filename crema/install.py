@@ -61,16 +61,14 @@ def _ensure_isolation_user() -> str:
     enforces on any other isolation user — in particular, it must never be given
     System Manager."""
     email = _isolation_user_email()
-    if frappe.db.exists("User", email):
-        return email
-
-    user = frappe.new_doc("User")
-    user.email = email
-    user.first_name = "Crema"
-    user.send_welcome_email = 0
-    user.enabled = 1
-    user.insert(ignore_permissions=True)
-    user.add_roles("Crema User")
+    if not frappe.db.exists("User", email):
+        user = frappe.new_doc("User")
+        user.email = email
+        user.first_name = "Crema"
+        user.send_welcome_email = 0
+        user.enabled = 1
+        user.insert(ignore_permissions=True)
+        user.add_roles("Crema User")
     return email
 
 

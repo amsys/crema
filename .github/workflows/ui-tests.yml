@@ -50,9 +50,6 @@ jobs:
           node-version: 24
           check-latest: true
 
-      - name: Add to Hosts
-        run: echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
-
       - name: Install MariaDB Client
         run: |
           sudo apt update
@@ -72,21 +69,36 @@ jobs:
           bench set-config -g admin_password admin
           bench get-app crema $GITHUB_WORKSPACE
           bench setup requirements --dev
-          bench new-site --db-root-password root --admin-password admin test_site
-          bench --site test_site install-app crema
-          bench build --app crema
+          bench new-site --db-root-password root --admin-password admin localhost
+          bench --site localhost install-app crema
+          # Without this, Installed Application.is_setup_complete stays 0 and
+          # frappe's router.js redirects every route to the setup wizard.
+          bench --site localhost execute frappe.utils.install.complete_setup_wizard
+          # Cypress drives the desk, so frappe's own bundles have to exist too —
+          # `bench build --app crema` writes an assets.json with only crema's entries,
+          # and bundled_asset() then silently 404s every frappe bundle without erroring.
+          bench build
         env:
           CI: 'Yes'
 
       - name: Run UI Tests
         working-directory: /home/runner/frappe-bench
         run: |
-          bench --site test_site set-config allow_tests true
+          bench --site localhost set-config allow_tests true
           bench start &>> ~/frappe-bench/bench_start.log &
+          timeout 120 bash -c 'until curl -sfo /dev/null http://localhost:8000/api/method/ping; do sleep 2; done'
           # run-ui-tests exports CYPRESS_baseUrl from the site's own URL (cypress.config.js sets none).
-          bench --site test_site run-ui-tests crema --headless
+          bench --site localhost run-ui-tests crema --headless
         env:
           TYPE: ui
+
+      - name: Upload screenshots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cypress-screenshots
+          path: /home/runner/frappe-bench/apps/crema/cypress/screenshots
+          if-no-files-found: ignore
 
       - name: Show bench output
         if: ${{ always() }}

@@ -1371,7 +1371,7 @@ function crema_open_dialog(doctype, prefill) {
 	// records the file holds is no longer asked up front — extract() decides that
 	// itself; see crema_show_extract_preview.
 	if (can_create) {
-		new frappe.ui.FileUploader({
+		const uploader = new frappe.ui.FileUploader({
 			wrapper: dialog.fields_dict.upload.$wrapper,
 			disable_file_browser: true,
 			allow_multiple: false,
@@ -1389,9 +1389,9 @@ function crema_open_dialog(doctype, prefill) {
 		});
 		// FileUploader's .file-upload-area is a Vue *scoped* style (min-height: 16rem),
 		// which a plain stylesheet rule can't outrank on specificity — an inline style
-		// can. app.mount() inside the FileUploader constructor is synchronous, so the
-		// element already exists here.
-		dialog.fields_dict.upload.$wrapper.find(".file-upload-area").css("min-height", "7rem");
+		// can. app.mount() inside the FileUploader constructor is synchronous, so
+		// `uploader.wrapper` (the mounted element) already exists here.
+		$(uploader.wrapper).find(".file-upload-area").css("min-height", "7rem");
 	}
 
 	dialog.show();

@@ -108,6 +108,18 @@ class IntegrationTestCremaProvider(CremaFixtureTestCase):
         self.assertIn("OpenAI", PRESETS)
         self.assertIn("Ollama", PRESETS)
 
+    def test_every_preset_url_is_https_or_a_private_address(self):
+        from urllib.parse import urlparse
+
+        for label, base_url in PRESETS.items():
+            parsed = urlparse(base_url)
+            self.assertTrue(parsed.scheme and parsed.hostname, f"{label}: not a URL: {base_url}")
+            if parsed.scheme != "https":
+                self.assertTrue(
+                    _is_local_or_private(base_url),
+                    f"{label}: non-https URL must be localhost/private: {base_url}",
+                )
+
     def test_get_presets_rejects_non_system_manager(self):
         _ensure_user(TEST_PLAIN_USER)
         frappe.set_user(TEST_PLAIN_USER)

@@ -15,9 +15,9 @@ Caution: the system refuses to enable a provider with no API key, unless the bas
 is a local or private address (for example, a local Ollama server).
 
 1. Open the **Providers** list and click **New from Template**.
-2. Pick a preset: OpenAI, OpenRouter, Groq, Mistral, DeepSeek, or Ollama. The system
-   fills in the provider name and base URL. The provider name must be unique — change
-   it when you add a second key for the same vendor.
+2. Pick a preset — OpenAI, OpenRouter, Groq, or one of about twenty more, hosted and
+   local. The system fills in the provider name and base URL. The provider name must be
+   unique — change it when you add a second key for the same vendor.
 3. Paste your API key into the **API Key** field.
 4. Leave **Enabled** ticked, and leave **Set as default provider** ticked unless you
    already have a default and are only adding a second provider.

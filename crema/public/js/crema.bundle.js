@@ -1241,6 +1241,16 @@ function crema_apply_edit_spec(doctype, spec) {
 					crema_edit_one(doctype, rows[0].name, diff, spec.reason);
 					return;
 				}
+				// frappe.desk.doctype.bulk_update.bulk_update.submit_cancel_or_update_docs
+				// refuses without the Bulk Actions permission (User.bulk_actions) — check it
+				// up front rather than let the user confirm into a PermissionError.
+				if (!frappe.boot.desk_settings?.bulk_actions) {
+					frappe.msgprint({
+						message: __("You are not allowed to perform bulk actions."),
+						indicator: "red",
+					});
+					return;
+				}
 				// Bulk edit carries only "set" — frappe's own bulk_update endpoint only
 				// overwrites a whole child table field uniformly, not per-row like child_set
 				// describes, so a multi-target edit's child_set is dropped rather than
@@ -1296,6 +1306,16 @@ function crema_apply_delete_spec(doctype, spec) {
 				frappe.msgprint({
 					message: __("Nothing in this list matches that."),
 					indicator: "orange",
+				});
+				return;
+			}
+			// frappe.desk.reportview.delete_items refuses without the Bulk Actions
+			// permission (User.bulk_actions), whatever the row count — check it up front
+			// rather than let the user confirm into a PermissionError.
+			if (!frappe.boot.desk_settings?.bulk_actions) {
+				frappe.msgprint({
+					message: __("You are not allowed to perform bulk actions."),
+					indicator: "red",
 				});
 				return;
 			}
@@ -1541,17 +1561,19 @@ function crema_open_transform_dialog(frm) {
 function crema_usage_pill(usage) {
 	if (!usage) return "";
 	const spend = `$${crema_fmt_usd(usage.spend)}`;
-	if (!usage.budget) return `<span class="indicator-pill gray">${spend}</span>`;
+	if (!usage.budget) return frappe.ui.badge.html({ label: spend, theme: "gray" });
 	const pct = Math.round((usage.spend / usage.budget) * 100);
-	let color = "green";
+	let theme = "green";
 	if (pct >= 100) {
-		color = "red";
+		theme = "red";
 	} else if (pct >= 80) {
-		color = "orange";
+		theme = "orange";
 	}
-	return `<span class="indicator-pill ${color}" title="${spend} of $${crema_fmt_usd(
-		usage.budget
-	)}">${pct}%</span>`;
+	return frappe.ui.badge.html({
+		label: `${pct}%`,
+		theme,
+		title: `${spend} of $${crema_fmt_usd(usage.budget)}`,
+	});
 }
 
 function crema_fmt_usd(value) {

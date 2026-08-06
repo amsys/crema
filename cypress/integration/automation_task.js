@@ -74,7 +74,7 @@ context("Crema Automation Task form", () => {
 		cy.wait("@interfaces");
 		// Never run yet, and disabled. The status lives in the page header indicator now
 		// rather than in an HTML field, so that is what has to say so.
-		cy.get(".page-head .indicator-pill").should("contain.text", "Never run");
+		cy.get(".page-head .page-indicator-pill").should("contain.text", "Never run");
 		cy.findByRole("button", { name: "Dry Run" }).should("exist");
 		cy.findByRole("button", { name: "Run Now" }).should("exist");
 	});

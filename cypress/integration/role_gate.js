@@ -124,7 +124,7 @@ context("Crema role gate", () => {
 		cy.contains("button", "Give Me the Crema User Role").should("be.visible");
 
 		cy.contains("button", "Give Me the Crema User Role").click();
-		cy.get(".desk-alert").should("contain", "Role added");
+		cy.get(".es-toast").should("contain", "Role added");
 
 		cy.reload();
 		cy.contains(

@@ -231,7 +231,8 @@ them is itself the fence:
 The write itself goes through Frappe's own bulk endpoints
 (`frappe.desk.doctype.bulk_update.bulk_update.submit_cancel_or_update_docs`,
 `frappe.desk.reportview.delete_items`) — the same code path the desk's own Actions
-menu uses, with the same permission check on every record.
+menu uses, with the same permission check on every record. Both endpoints also need
+the Bulk Actions permission on the user; without it, the write is refused.
 
 ## Budgets
 

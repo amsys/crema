@@ -735,6 +735,9 @@ context("Crema Settings", () => {
 
 	beforeEach(() => {
 		cy.visit("/app/crema-settings");
+		// A logged-out visit 301s to /login, where every should("not.exist") below passes
+		// vacuously — assert the form actually rendered.
+		cy.get('[data-fieldname="assignments"]').should("exist");
 	});
 
 	// The Use Cases grid always shows exactly one row per interfaces.names()

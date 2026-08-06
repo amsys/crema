@@ -22,7 +22,7 @@ context("Crema Automation Task form", () => {
 				sources: [
 					{
 						source_type: "Document Query",
-						source_doctype: "ToDo",
+						source_doctype: "Contact",
 						source_filters: "[]",
 						source_limit: 50,
 					},
@@ -43,7 +43,7 @@ context("Crema Automation Task form", () => {
 				sources: [
 					{
 						source_type: "Document Query",
-						source_doctype: "ToDo",
+						source_doctype: "Contact",
 						// The 3-element shape the server itself writes — no leading doctype.
 						source_filters: JSON.stringify([["status", "=", "Open"]]),
 						source_limit: 50,
@@ -87,13 +87,13 @@ context("Crema Automation Task form", () => {
 					used_stored_plan: false,
 					row_count: 2,
 					rows: [
-						{ id: "TODO-0001", prio: "High" },
-						{ id: "TODO-0002", prio: "Low" },
+						{ id: "CONT-0001", prio: "High" },
+						{ id: "CONT-0002", prio: "Low" },
 					],
 					plan: {
 						extract: { prompt: "Copy each name through." },
 						map: {
-							doctype: "ToDo",
+							doctype: "Contact",
 							match_fields: ["name"],
 							field_map: { id: "name" },
 						},
@@ -109,7 +109,7 @@ context("Crema Automation Task form", () => {
 
 		cy.get(".modal-body").should("contain.text", "would be updated");
 		cy.get(".modal-body").should("contain.text", "Nothing was saved");
-		cy.get(".modal-body").should("contain.text", "TODO-0001");
+		cy.get(".modal-body").should("contain.text", "CONT-0001");
 	});
 
 	it("routes a 417 from the dry run through crema_show_error", () => {
@@ -155,11 +155,13 @@ context("Crema Automation Task form", () => {
 	it("summarises each source in the grid", () => {
 		cy.visit(`/app/crema-automation-task/${TASK}`);
 		cy.wait("@interfaces");
-		// What the row reads and how, without opening it.
-		cy.get('[data-fieldname="sources"] .grid-row').first().as("row");
+		// What the row reads and how, without opening it. .grid-row also matches the
+		// heading row nested inside .grid-heading-row (grid.js) — data rows live in
+		// .grid-body .rows.
+		cy.get('[data-fieldname="sources"] .grid-body .rows > .grid-row').first().as("row");
 		cy.get("@row").should("contain.text", "Document Query");
 		// What carries the record type and, when there is one, the filter count.
-		cy.get("@row").should("contain.text", "ToDo");
+		cy.get("@row").should("contain.text", "Contact");
 		// The limit is its own cell now, not part of a "· 50/run ·" summary string.
 		cy.get("@row").find('[data-fieldname="source_limit"]').should("contain.text", "50");
 	});
@@ -168,7 +170,10 @@ context("Crema Automation Task form", () => {
 		cy.visit(`/app/crema-automation-task/${TASK}`);
 		cy.wait("@interfaces");
 		// The widget is rendered by form_render, so the row has to be expanded first.
-		cy.get('[data-fieldname="sources"] .grid-row').first().find(".btn-open-row").click();
+		cy.get('[data-fieldname="sources"] .grid-body .rows > .grid-row')
+			.first()
+			.find(".btn-open-row")
+			.click();
 		cy.get('[data-fieldname="source_filters"] table').should(
 			"contain.text",
 			"Click to set filters"
@@ -188,7 +193,10 @@ context("Crema Automation Task form", () => {
 	it("round-trips a filter stored without a leading doctype", () => {
 		cy.visit(`/app/crema-automation-task/${FILTERED_TASK}`);
 		cy.wait("@interfaces");
-		cy.get('[data-fieldname="sources"] .grid-row').first().find(".btn-open-row").click();
+		cy.get('[data-fieldname="sources"] .grid-body .rows > .grid-row')
+			.first()
+			.find(".btn-open-row")
+			.click();
 
 		// The table reads the same shape the dialog does.
 		cy.get('[data-fieldname="source_filters"] table').as("table");

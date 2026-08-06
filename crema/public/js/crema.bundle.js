@@ -152,8 +152,10 @@ function crema_visible_list_fields(doctype) {
 function crema_table_line(doctype, df, perm) {
 	const table_df = perm ? crema_writable_table(doctype, df.fieldname, perm) : null;
 	if (!table_df) return " [read-only]";
-	const child_perm = frappe.perm.get_perm(table_df.options);
-	const child_fields = crema_writable_fields(table_df.options, child_perm);
+	// Reuse the PARENT's perm array, same as crema_filter_diff does — a child doctype
+	// carries no DocPerm rows of its own, so frappe.perm.get_perm(child) always comes
+	// back permission-less and every child field reads as unwritable.
+	const child_fields = crema_writable_fields(table_df.options, perm);
 	const preferred = child_fields.filter((c) => c.in_list_view);
 	const names = (preferred.length ? preferred : child_fields)
 		.slice(0, CREMA_MAX_CHILD_FIELDS)

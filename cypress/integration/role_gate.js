@@ -15,7 +15,12 @@
 // earlier ones create, same as the fixture reuse in automation_task.js.
 //
 // Run with: bench --site fcr.local run-ui-tests crema --headless
-const PASSWORD = "cypress-crema-role-gate-pw-1";
+// Generated per run rather than committed: a literal reads as a hard-coded credential
+// to static analysis, and both users are created and deleted inside this file's own
+// before/after — nothing outside the run needs the value. Cypress._ is lodash, bundled
+// with cypress; crypto.randomUUID() needs a secure context, which this bench site
+// (plain http, non-localhost host fcr.local) doesn't have.
+const PASSWORD = `cypress-${Cypress._.random(1e15)}`;
 const NO_ROLE_USER = "cypress-crema-no-role@example.com";
 const SYS_MGR_USER = "cypress-crema-sysmgr@example.com";
 const THROWAWAY_ROLE = "_cypress_crema_no_perm";

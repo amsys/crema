@@ -1005,7 +1005,12 @@ function crema_after_view(doctype, spec, filters) {
 	if (spec.reason) {
 		frappe.show_alert({ message: frappe.utils.escape_html(spec.reason), indicator: "blue" });
 	}
-	crema_widen_if_empty(doctype, filters);
+	// live.refresh() can be a no-op: filter_area's own debounced refresh (300ms,
+	// base_list.js) may have already fired by the time crema_refresh_live calls it, and
+	// no_change() then hands back an already-resolved promise while that query is still
+	// in flight — cur_list.data is still the previous page of rows here. Settle before
+	// deciding the list came back empty, or the fallback probe never fires.
+	frappe.after_ajax(() => crema_widen_if_empty(doctype, filters));
 }
 
 // ---- Path B continued: prompt -> create / edit / delete ----------------------------

@@ -183,7 +183,10 @@ context("Crema Automation Task form", () => {
 		// An unfiltered source seeds one blank row, so the field-name autocomplete is on
 		// screen rather than behind "Add a Filter" — what the list view's popover does.
 		cy.get(".modal .fieldname-select-area input").should("exist");
-		cy.get(".modal").should("not.contain.text", "No filters selected");
+		// toggle_empty_filters(false) only CSS-hides .empty-filters (jQuery .toggle()) —
+		// the "No filters selected" text node is still in the DOM either way, and
+		// jQuery's .text() (what "contain.text" reads) doesn't care about visibility.
+		cy.get(".modal .empty-filters").should("not.be.visible");
 	});
 
 	// The regression the 3-element shape caused: source_filters written by the server

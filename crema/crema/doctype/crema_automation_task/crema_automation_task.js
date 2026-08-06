@@ -179,24 +179,31 @@ function crema_render_row_filters(frm, row) {
 		});
 		// Local, not on frm: two expanded rows share one form, and a single slot would have
 		// the older dialog's Set write the newer row's filters.
-		const filter_group = new frappe.ui.FilterGroup({
-			parent: dialog.get_field("filter_area").$wrapper,
-			doctype: row.source_doctype,
-			on_change: () => {},
+		let filter_group;
+		// FieldSelect.build_options reads frappe.get_meta(row.source_doctype) directly
+		// (frappe/public/js/frappe/ui/filters/field_select.js) with no fallback — on a
+		// doctype this session has never loaded, that throws instead of returning
+		// undefined. Nothing upstream of this click guarantees the meta is loaded.
+		frappe.model.with_doctype(row.source_doctype, () => {
+			filter_group = new frappe.ui.FilterGroup({
+				parent: dialog.get_field("filter_area").$wrapper,
+				doctype: row.source_doctype,
+				on_change: () => {},
+			});
+			if (filters.length) {
+				filter_group.add_filters_to_filter_group(filters);
+			} else {
+				// The two lines the list view's own filter popover runs when it opens on an
+				// unfiltered list (filter_list.js set_popover_events): seed one blank row, so
+				// the field-name autocomplete — frappe.ui.FieldSelect, the same control the
+				// list view types into — is on screen instead of behind an "Add a Filter" the
+				// user has to find first. get_filters() drops a row with no value, so leaving
+				// it untouched and pressing Set still stores nothing.
+				filter_group.toggle_empty_filters(false);
+				filter_group.add_filter(row.source_doctype, "name");
+			}
+			dialog.show();
 		});
-		if (filters.length) {
-			filter_group.add_filters_to_filter_group(filters);
-		} else {
-			// The two lines the list view's own filter popover runs when it opens on an
-			// unfiltered list (filter_list.js set_popover_events): seed one blank row, so
-			// the field-name autocomplete — frappe.ui.FieldSelect, the same control the
-			// list view types into — is on screen instead of behind an "Add a Filter" the
-			// user has to find first. get_filters() drops a row with no value, so leaving
-			// it untouched and pressing Set still stores nothing.
-			filter_group.toggle_empty_filters(false);
-			filter_group.add_filter(row.source_doctype, "name");
-		}
-		dialog.show();
 	});
 }
 
@@ -251,6 +258,15 @@ function crema_stamp_row(frm, row) {
 
 frappe.ui.form.on("Crema Automation Source", {
 	form_render: (frm, cdt, cdn) => crema_render_row_filters(frm, locals[cdt][cdn]),
+
+	// "Stop if a Source Fails" only means something once there are two sources, and its
+	// depends_on is not re-evaluated when a grid row is added. grid.js fires <fieldname>_add
+	// / _remove against the CHILD doctype (script_manager.trigger(fieldname + "_add",
+	// d.doctype, d.name)), not the parent — so this has to live here, not on
+	// "Crema Automation Task", or it never fires at all and the field stays hidden until
+	// the next save.
+	sources_add: (frm) => frm.layout.refresh_dependency(),
+	sources_remove: (frm) => frm.layout.refresh_dependency(),
 
 	source_type(frm, cdt, cdn) {
 		// For File Query, crema_stamp_row's own source_doctype="File" set_value re-enters
@@ -361,12 +377,6 @@ frappe.ui.form.on("Crema Automation Task", {
 			error: crema_show_error,
 		});
 	},
-
-	// "Stop if a Source Fails" only means something once there are two sources, and its
-	// depends_on is not re-evaluated when a grid row is added — without this it appears
-	// only after the next save or field change.
-	sources_add: (frm) => frm.layout.refresh_dependency(),
-	sources_remove: (frm) => frm.layout.refresh_dependency(),
 
 	// Mirrors CremaAutomationTask._apply_email_trigger, which appends the same row in
 	// validate(). The server stays the source of truth; doing it here too means the row

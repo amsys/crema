@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/python-3.14-yellow)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
 
-> **Beta.** Crema is version 0.1.0. The public API and the doctype fields are stable.
+> **Beta.** Crema is version 16.0.1. The public API and the doctype fields are stable.
 > Test Crema on a non-production site before you deploy it.
 
 Crema gives every app in your bench one route to OpenAI-compatible LLM providers —

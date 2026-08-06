@@ -11,12 +11,14 @@ virtual environment sets it automatically when you activate it.
 1. Get the app onto your bench:
 
    ```bash
-   bench get-app crema <repository-url>
+   bench get-app --branch develop crema <repository-url>
    ```
 
-   This command gets the `version-16` branch. It works with a bench on Frappe
-   `version-16`. A `develop` branch also exists. It follows Frappe `develop`. Do not use
-   it yet.
+   This command gets the `develop` branch. It works with a bench on Frappe `develop`,
+   the future v17 — not released yet. This branch needs heavy testing before its first
+   release; do not use it on a production site. For a bench on Frappe `version-16`, get
+   the `version-16` branch instead (the default — a plain `bench get-app crema
+   <repository-url>` gets it).
 
 2. Install the app on your site:
 

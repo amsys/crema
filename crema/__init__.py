@@ -1,4 +1,4 @@
-__version__ = "16.0.1"
+__version__ = "17.0.0-dev"
 
 from crema.api import ask, ask_json, configure, extract, health, is_configured, ocr, transcribe, transform
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError

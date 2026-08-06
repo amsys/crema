@@ -179,10 +179,7 @@ context("Crema desk UI", () => {
 		// crema_valid_filters' warning (frappe.show_alert, default 7s) auto-dismisses —
 		// check it before the location assertions below, not after, or a slow retry on
 		// those can outlive it. The message is generic (doesn't name the dropped field).
-		cy.get(".desk-alert").should(
-			"contain.text",
-			"Crema named a condition this list cannot use"
-		);
+		cy.get(".es-toast").should("contain.text", "Crema named a condition this list cannot use");
 		// list_view.js's get_search_params only JSON.stringifies a non-"=" operator; "="
 		// is written as the bare value.
 		cy.location("search").should("contain", "status=Open");
@@ -369,7 +366,7 @@ context("Crema desk UI", () => {
 		});
 
 		cy.location("pathname").should("contain", "/contact/new-contact-");
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 		cy.get(".frappe-control[data-fieldname=first_name] input").should(
 			"have.value",
 			"Call Acme back"
@@ -441,7 +438,7 @@ context("Crema desk UI", () => {
 		crema_prompt("create a contact to call Acme back");
 
 		cy.location("pathname").should("contain", "/contact/new-contact-");
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 		cy.get(".frappe-control[data-fieldname=first_name] input").should(
 			"have.value",
 			"Call Acme back"
@@ -497,7 +494,7 @@ context("Crema desk UI", () => {
 		crema_modal().within(() => cy.get(".btn-modal-primary").contains("Apply").click());
 
 		cy.location("pathname").should("contain", "crema%20edit-one%20target");
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 	});
 
 	it("refuses an edit spec whose only proposed field is read-only", () => {
@@ -611,11 +608,11 @@ context("Crema desk UI", () => {
 		crema_stub_ask({ view: "List", reason: "<img src=x onerror=alert(1)>" });
 		crema_prompt("show open contacts");
 
-		cy.get(".desk-alert .alert-message").should(
+		cy.get(".es-toast .es-toast__message").should(
 			"contain.text",
 			"<img src=x onerror=alert(1)>"
 		);
-		cy.get(".desk-alert .alert-message img").should("not.exist");
+		cy.get(".es-toast .es-toast__message img").should("not.exist");
 	});
 
 	it("offers an Ask … option in the awesomebar on a list view", () => {
@@ -669,7 +666,7 @@ context("Crema desk UI — form view", () => {
 		cy.wait("@transform");
 		crema_modal().within(() => cy.get(".btn-modal-primary").contains("Apply").click());
 
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 	});
 });
 

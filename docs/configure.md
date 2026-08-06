@@ -9,6 +9,9 @@ workspace sidebar. Interfaces live on **Crema Settings**, below it in the same
 sidebar: the defaults and a **Use Cases** grid. Crema Settings tells you when no
 provider is switched on, because nothing on that page can work until one is.
 
+The Crema workspace is part of the app. If you change its layout, the system saves
+your change apart from it, not into it.
+
 ## Procedure A — add a provider
 
 Caution: the system refuses to enable a provider with no API key, unless the base URL

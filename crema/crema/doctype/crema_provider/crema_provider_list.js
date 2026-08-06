@@ -84,12 +84,15 @@ frappe.listview_settings["Crema Provider"] = {
 
 	formatters: {
 		enabled(value, df, doc) {
-			if (!doc.enabled) return `<span class="indicator-pill gray">${__("Disabled")}</span>`;
+			if (!doc.enabled)
+				return frappe.ui.badge.html({ label: __("Disabled"), theme: "gray" });
 			const status = connection_cache[doc.name];
 			if (!status) return `<span class="text-muted">${__("Checking…")}</span>`;
-			return `<span class="indicator-pill ${
-				status.ok ? "green" : "red"
-			}">${frappe.utils.escape_html(status.detail)}</span>`;
+			// badge.html HTML-escapes the label itself.
+			return frappe.ui.badge.html({
+				label: status.detail,
+				theme: status.ok ? "green" : "red",
+			});
 		},
 
 		monthly_budget_usd(value, df, doc) {

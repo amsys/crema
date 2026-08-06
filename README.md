@@ -2,15 +2,17 @@
 
 > A hardened LLM interface and security layer for Frappe apps — not a chatbot.
 
-[![CI](https://github.com/amsys/crema/actions/workflows/ci.yml/badge.svg)](https://github.com/amsys/crema/actions/workflows/ci.yml)
+[![CI](https://github.com/amsys/crema/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/amsys/crema/actions/workflows/ci.yml?query=branch%3Adevelop)
 [![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=amsys_crema&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=amsys_crema)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Frappe](https://img.shields.io/badge/frappe-v16-3B82F6)
+![Frappe](https://img.shields.io/badge/frappe-develop-3B82F6)
 ![Python](https://img.shields.io/badge/python-3.14-yellow)
-![Status](https://img.shields.io/badge/status-beta-yellow)
+![Status](https://img.shields.io/badge/status-alpha-orange)
 
-> **Beta.** Crema is version 16.0.1. The public API and the doctype fields are stable.
-> Test Crema on a non-production site before you deploy it.
+> **Alpha.** This branch is version 17.0.0-dev. It follows Frappe `develop`, the future
+> v17 — not released yet. It needs a bench on Frappe `develop`, and it needs heavy
+> testing before its first release. For a Frappe v16 bench, use the `version-16` branch
+> instead.
 
 Crema gives every app in your bench one route to OpenAI-compatible LLM providers —
 OpenAI, OpenRouter, Groq, and about twenty more, hosted and local. A named **interface**
@@ -91,7 +93,7 @@ can register their own — see [docs/configure.md](docs/configure.md).
 
 | Requirement | Notes |
 |---|---|
-| Frappe v16 | installed and managed by bench |
+| Frappe develop (pre-release v17) | installed and managed by bench |
 | Python 3.14 | |
 | [`litellm`](https://github.com/BerriAI/litellm) | the provider call layer |
 | [`pymupdf`](https://github.com/pymupdf/PyMuPDF) | PDF text extraction and rendering |

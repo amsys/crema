@@ -17,6 +17,14 @@ required_apps = ["frappe"]
 app_include_css = "crema.bundle.css"
 app_include_js = "crema.bundle.js"
 
+# Desk Apps Screen
+# ----------------
+
+# Frappe develop (v17) defaults a fresh site's desktop to the Apps screen, which lists
+# only apps that opt in here. No logo -- desktop_icon.html falls back to a lettered tile
+# built from the title.
+add_to_apps_screen = [{"name": "crema", "title": "Crema", "route": "/desk/crema"}]
+
 # Installation
 # ------------
 

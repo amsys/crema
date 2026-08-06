@@ -1,9 +1,27 @@
 name: UI Tests
 
-# Manual only. Cypress is not routine verification for this app (see CLAUDE.md);
-# bench build plus the Python suite is what CI checks on every push.
+# Cypress is not routine verification for this app (see CLAUDE.md) — bench build plus
+# the Python suite is what CI checks on every push. This workflow also runs automatically,
+# but only when a push/PR actually touches JS or cypress files, so an unrelated Python
+# change doesn't pay for it.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - version-16
+    paths:
+      - "crema/**/*.js"
+      - "crema/public/**"
+      - "cypress/**"
+      - "cypress.config.js"
+      - ".github/workflows/ui-tests.yml"
+  pull_request:
+    paths:
+      - "crema/**/*.js"
+      - "crema/public/**"
+      - "cypress/**"
+      - "cypress.config.js"
+      - ".github/workflows/ui-tests.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

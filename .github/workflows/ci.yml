@@ -4,10 +4,11 @@ on:
   push:
     branches:
       - version-16
+      - develop
   pull_request:
 
 concurrency:
-  group: version-16-crema-${{ github.event.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -89,7 +90,7 @@ jobs:
       - name: Setup
         run: |
           pip install --only-binary :all: frappe-bench==5.31.0
-          bench init --skip-redis-config-generation --skip-assets --frappe-branch version-16 --python "$(which python)" ~/frappe-bench
+          bench init --skip-redis-config-generation --skip-assets --frappe-branch "${{ github.base_ref || github.ref_name }}" --python "$(which python)" ~/frappe-bench
 
       - name: Install
         working-directory: /home/runner/frappe-bench

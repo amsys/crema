@@ -14,6 +14,10 @@ virtual environment sets it automatically when you activate it.
    bench get-app crema <repository-url>
    ```
 
+   This command gets the `version-16` branch. It works with a bench on Frappe
+   `version-16`. A `develop` branch also exists. It follows Frappe `develop`. Do not use
+   it yet.
+
 2. Install the app on your site:
 
    ```bash

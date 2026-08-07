@@ -86,6 +86,53 @@ class CremaProvider(Document):
 
     def on_trash(self) -> None:
         cache.clear_provider()
+        _release_from_settings(self.name)
+
+
+def _settings_references(name: str) -> tuple[bool, list[str]]:
+    """(is `name` the Default Provider, labels of the use cases naming it directly) —
+    the two Link fields (Crema Settings.default_provider, Crema Model Assignment.provider)
+    that make frappe's own check_if_doc_is_linked refuse to delete a Crema Provider
+    still in use."""
+    settings = frappe.get_cached_doc("Crema Settings")
+    is_default = settings.default_provider == name
+    use_cases = [row.interface_label or row.interface for row in settings.assignments if row.provider == name]
+    return is_default, use_cases
+
+
+def _release_from_settings(name: str) -> None:
+    """Frappe runs on_trash before its own link check (frappe/model/delete_doc.py),
+    so clearing every Link field pointing at this provider here is what lets the
+    delete through at all. Clearing the assignment rows is not optional — they are
+    the other half of the same link check, not a courtesy."""
+    is_default, use_cases = _settings_references(name)
+    if not is_default and not use_cases:
+        return
+
+    settings = frappe.get_single("Crema Settings")
+    if is_default:
+        settings.default_provider = ""
+        settings.default_model = ""
+    for row in settings.assignments:
+        if row.provider == name:
+            row.provider = ""
+            row.model = ""
+
+    # Same reasoning as create_from_template: this save sets/clears default_provider
+    # on the admin's behalf, not because they edited the form themselves.
+    settings.flags.crema_skip_model_warning = True
+    settings.save()
+
+    cleared = []
+    if is_default:
+        cleared.append(_("Default Provider and Default Model"))
+    if use_cases:
+        cleared.append(_("use case(s) {0}").format(", ".join(f"'{u}'" for u in use_cases)))
+    frappe.msgprint(
+        _("'{0}' was deleted. Cleared: {1}.").format(name, "; ".join(cleared)),
+        indicator="orange",
+        title=_("AI Service Removed"),
+    )
 
 
 @frappe.whitelist()
@@ -93,6 +140,17 @@ def get_presets() -> dict[str, str]:
     """Data source for the "New from Template" list action dialog."""
     frappe.only_for("System Manager")
     return PRESETS
+
+
+@frappe.whitelist()
+def get_settings_references(provider: str) -> dict:
+    """Data source for the pre-delete warning banner on the Crema Provider form
+    (crema_provider.js) — the same two-Link-field question _release_from_settings
+    answers on_trash, read here before the delete so the admin sees the consequence
+    first."""
+    frappe.only_for("System Manager")
+    is_default, use_cases = _settings_references(provider)
+    return {"is_default": is_default, "use_cases": use_cases}
 
 
 @frappe.whitelist()
@@ -140,6 +198,10 @@ def create_from_template(
     if set_as_default:
         settings = frappe.get_single("Crema Settings")
         settings.default_provider = doc.name
+        # A brand-new site has no model anywhere yet, so _warn_missing_models would
+        # list every use case on a save the admin did not make. It still fires when
+        # they save Crema Settings themselves, which is where it belongs.
+        settings.flags.crema_skip_model_warning = True
         settings.save()
 
     return doc.name

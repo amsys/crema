@@ -11,7 +11,13 @@ from unittest.mock import patch
 
 import frappe
 from crema import api, cache, client, interfaces, log, policy, testing
-from crema.crema.doctype.crema_provider.crema_provider import PRESETS, _is_local_or_private, get_presets
+from crema.crema.doctype.crema_provider.crema_provider import (
+    PRESETS,
+    _is_local_or_private,
+    _settings_references,
+    create_from_template,
+    get_presets,
+)
 from crema.exceptions import CremaConfigError
 from crema.test_fixtures import (
     TEST_ISOLATION_USER,
@@ -977,11 +983,161 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         before = len(frappe.message_log)
         settings.save(ignore_permissions=True)  # must not raise
 
+        # The warning line reads row.interface_label ("Extraction"), not the raw key
+        # ("extraction") — see test_missing_model_warning_reports_the_label_not_the_key
+        # below for the assertion that pins that shape.
         new_messages = [str(m.get("message", m)) for m in frappe.message_log[before:]]
         self.assertTrue(
-            any("extraction" in msg for msg in new_messages),
+            any("extraction" in msg.lower() for msg in new_messages),
             new_messages,
         )
+
+    def test_missing_model_warning_reports_the_label_not_the_key(self):
+        """The warning line reads from row.interface_label — stamped by
+        _reconcile_assignments before _warn_missing_models runs — not the raw
+        interface key, matching every other place the desk shows an interface name."""
+        _ensure_user(TEST_ISOLATION_USER)
+        _ensure_provider()
+        _clear_defaults()
+        settings = frappe.get_single("Crema Settings")
+        row = next(r for r in settings.assignments if r.interface == "extraction")
+        row.provider = TEST_PROVIDER
+        row.model = ""
+        row.isolation_user = TEST_ISOLATION_USER
+        before = len(frappe.message_log)
+        settings.save(ignore_permissions=True)
+
+        missing_model = [m for m in frappe.message_log[before:] if m.get("title") == "Missing Model"]
+        self.assertTrue(missing_model, frappe.message_log[before:])
+        message = str(missing_model[0]["message"])
+        self.assertIn(row.interface_label, message)
+        self.assertNotIn(f"'{row.interface}':", message)
+        self.assertEqual(missing_model[0].get("indicator"), "orange")
+
+    def test_create_from_template_as_default_with_no_models_emits_no_missing_model_warning(self):
+        """The nested Crema Settings save inside create_from_template must not
+        surface _warn_missing_models — the admin just clicked "New from Template",
+        not "save settings", and a brand-new site has no model anywhere, so every
+        interface would otherwise qualify as missing.
+
+        Default Isolation User is left set (install.after_install seeds a real site's
+        with a dedicated account before any provider exists) — _clear_defaults() would
+        also blank it, which fails this save for an unrelated reason
+        (_validate_provider_isolation_pairing) before _warn_missing_models is ever
+        reached."""
+        _ensure_user(TEST_ISOLATION_USER)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_provider = ""
+        settings.default_model = ""
+        settings.default_isolation_user = TEST_ISOLATION_USER
+        settings.flags.crema_skip_model_warning = True
+        settings.save(ignore_permissions=True)
+
+        before = len(frappe.message_log)
+        name = create_from_template(
+            preset="Ollama",
+            provider_name=f"_test_crema_wizard_{uuid.uuid4().hex[:8]}",
+            base_url=PRESETS["Ollama"],
+            enabled=True,
+            set_as_default=True,
+        )
+
+        new_messages = [str(m.get("message", m)) for m in frappe.message_log[before:]]
+        self.assertFalse(
+            any("no Model set" in msg for msg in new_messages),
+            new_messages,
+        )
+        self.assertEqual(frappe.get_single("Crema Settings").default_provider, name)
+
+    def test_deleting_the_default_provider_clears_default_provider_and_model(self):
+        _ensure_provider()
+        settings = frappe.get_single("Crema Settings")
+        settings.default_provider = TEST_PROVIDER
+        settings.default_model = "test-model"
+        settings.flags.crema_skip_model_warning = True
+        settings.save(ignore_permissions=True)
+
+        frappe.delete_doc("Crema Provider", TEST_PROVIDER, ignore_permissions=True)
+
+        reloaded = frappe.get_single("Crema Settings")
+        self.assertEqual(reloaded.default_provider, "")
+        self.assertEqual(reloaded.default_model, "")
+
+    def test_deleting_a_provider_named_only_on_one_assignment_row_clears_that_row(self):
+        _ensure_provider()
+        _ensure_user(TEST_ISOLATION_USER)
+        _clear_defaults()
+        settings = frappe.get_single("Crema Settings")
+        row = next(r for r in settings.assignments if r.interface == "extraction")
+        row.provider = TEST_PROVIDER
+        row.model = "test-model"
+        row.isolation_user = TEST_ISOLATION_USER
+        other_row = next(r for r in settings.assignments if r.interface == "simple")
+        other_row_provider = other_row.provider
+        settings.save(ignore_permissions=True)
+
+        frappe.delete_doc("Crema Provider", TEST_PROVIDER, ignore_permissions=True)
+
+        reloaded = frappe.get_single("Crema Settings")
+        reloaded_row = next(r for r in reloaded.assignments if r.interface == "extraction")
+        self.assertEqual(reloaded_row.provider, "")
+        self.assertEqual(reloaded_row.model, "")
+        reloaded_other = next(r for r in reloaded.assignments if r.interface == "simple")
+        self.assertEqual(reloaded_other.provider, other_row_provider)
+
+    def test_deleting_an_unreferenced_provider_does_not_touch_settings(self):
+        name = f"_test_crema_unreferenced_{uuid.uuid4().hex[:8]}"
+        doc = frappe.new_doc("Crema Provider")
+        doc.provider_name = name
+        doc.base_url = "http://localhost:11434/v1"
+        doc.enabled = 0
+        doc.insert(ignore_permissions=True)
+
+        before_modified = frappe.get_single("Crema Settings").modified
+        frappe.delete_doc("Crema Provider", name, ignore_permissions=True)
+        after_modified = frappe.get_single("Crema Settings").modified
+
+        self.assertEqual(before_modified, after_modified)
+
+    def test_deleting_the_security_provider_is_refused_while_a_use_case_still_guards_on_it(self):
+        """A delete that would leave an enabled AI Guard pointing at nothing must be
+        refused, same as CremaSettings._apply_security_guard_rules refuses a direct
+        edit that does the same thing — the on_trash cleanup save runs through the
+        same validate()."""
+        _ensure_provider()
+        _ensure_user(TEST_ISOLATION_USER)
+        settings = frappe.get_single("Crema Settings")
+        security_row = next(r for r in settings.assignments if r.interface == "security")
+        security_row.provider = TEST_PROVIDER
+        security_row.model = "test-model"
+        security_row.isolation_user = TEST_ISOLATION_USER
+        guarded_row = next(r for r in settings.assignments if r.interface == "extraction")
+        guarded_row.provider = TEST_PROVIDER
+        guarded_row.model = "test-model"
+        guarded_row.isolation_user = TEST_ISOLATION_USER
+        guarded_row.enable_llm_guard = 1
+        settings.flags.crema_skip_model_warning = True
+        settings.save(ignore_permissions=True)
+
+        with self.assertRaises(frappe.ValidationError) as ctx:
+            frappe.delete_doc("Crema Provider", TEST_PROVIDER, ignore_permissions=True)
+        self.assertIn("extraction", str(ctx.exception))
+        self.assertTrue(frappe.db.exists("Crema Provider", TEST_PROVIDER))
+
+    def test_settings_references_reports_default_flag_and_use_case_labels(self):
+        _ensure_provider()
+        settings = frappe.get_single("Crema Settings")
+        settings.default_provider = TEST_PROVIDER
+        row = next(r for r in settings.assignments if r.interface == "extraction")
+        row.provider = TEST_PROVIDER
+        settings.flags.crema_skip_model_warning = True
+        settings.save(ignore_permissions=True)
+        frappe.clear_document_cache("Crema Settings")
+
+        is_default, use_cases = _settings_references(TEST_PROVIDER)
+
+        self.assertTrue(is_default)
+        self.assertIn("Extraction", use_cases)
 
     def test_a_provider_with_no_isolation_user_anywhere_is_rejected(self):
         """The invariant that a real provider call can never run un-sandboxed: a row

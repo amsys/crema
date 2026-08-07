@@ -79,9 +79,17 @@ class CremaSettings(Document):
         """A provider with no model still resolves (client._load_from_db has no fence
         here) and produces a broken litellm model string at call time — warn at save
         time rather than block, since a mid-setup save (provider chosen, model not
-        picked yet) is a normal, valid state."""
+        picked yet) is a normal, valid state.
+
+        Skipped when crema_skip_model_warning is set — the nested settings.save()
+        inside crema_provider.create_from_template (and CremaProvider.on_trash) sets
+        default_provider (or clears it) on the admin's behalf; with no model anywhere
+        yet, every interface would qualify as "missing" on a save the admin never
+        made. A save the admin actually makes on this form still warns."""
+        if self.flags.crema_skip_model_warning:
+            return
         missing = [
-            row.interface
+            row.interface_label or row.interface
             for row in self.assignments
             if (row.provider or self.default_provider) and not (row.model or self.default_model)
         ]

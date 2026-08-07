@@ -1759,6 +1759,15 @@ function crema_new_provider_dialog(on_created) {
 						freeze: true,
 						callback() {
 							dialog.hide();
+							if (values.set_as_default) {
+								// create_from_template's nested Crema Settings save bumped that
+								// doc's `modified`. A copy already in locals — an earlier visit
+								// to the Settings form this session — is now stale, and
+								// frappe.model.with_doc short-circuits on a cached doc, so
+								// navigating there would not refetch it; saving it would then
+								// fail frappe's own timestamp check.
+								frappe.model.remove_from_locals("Crema Settings", "Crema Settings");
+							}
 							if (on_created) on_created();
 						},
 						error: crema_show_error,

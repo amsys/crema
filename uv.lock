@@ -199,7 +199,7 @@ dependencies = [
 requires-dist = [
     { name = "anyascii" },
     { name = "ftfy" },
-    { name = "litellm" },
+    { name = "litellm", specifier = ">=1.83,<2" },
     { name = "pymupdf" },
 ]
 

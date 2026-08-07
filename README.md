@@ -73,7 +73,8 @@ can register their own — see [docs/configure.md](docs/configure.md).
   output trap that catches a hijacked response
   ([docs/security.md](docs/security.md)).
 - **Isolation user sandbox** — document access runs as a low-privilege user, fenced
-  by Frappe's own permission engine.
+  by Frappe's own permission engine, plus a site-wide blocked-doctype list for the
+  automation and desk write paths ([docs/security.md](docs/security.md)).
 - **OCR and transcription** — images, PDFs, and audio, with confidence scoring and
   automatic escalation.
 - **Propose, never write** — `extract()` and `transform()` return proposals; the
@@ -82,7 +83,8 @@ can register their own — see [docs/configure.md](docs/configure.md).
   once, and creates or updates records on a schedule, a document event, or a webhook
   ([docs/automation.md](docs/automation.md)).
 - **Cost control and audit** — monthly budgets, response caching, a usage dashboard,
-  and an audit row for every call — never the prompt or document content itself.
+  and a tamper-evident audit row for every call — never the prompt or document
+  content itself.
 - **HTTP endpoints and admin UI** — rate-limited endpoints for `ask`, `extract`, and
   `transform`, and one settings page with a provider template wizard
   ([docs/use.md](docs/use.md)).

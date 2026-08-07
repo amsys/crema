@@ -213,7 +213,7 @@ context("Crema Automation Task form", () => {
 		cy.get(".msgprint, .modal-body").should("not.contain.text", "Invalid filter");
 
 		// Set without touching anything keeps the filter rather than clearing it.
-		cy.get(".modal .btn-primary").contains("Set").click();
+		cy.get(".modal .btn-modal-primary").contains("Set").click();
 		cy.get('[data-fieldname="source_filters"] table').should("contain.text", "Open");
 	});
 

@@ -616,7 +616,7 @@ context("Crema desk UI", () => {
 	});
 
 	it("offers an Ask … option in the awesomebar on a list view", () => {
-		cy.get("#navbar-modal-search").click();
+		cy.get(".navbar-modal-search-mobile:visible").click();
 		cy.get("#navbar-search").type("overdue items");
 		cy.wait(400);
 		// .awesomplete also matches other link controls on the page (e.g. a sidebar field)

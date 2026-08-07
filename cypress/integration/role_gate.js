@@ -81,7 +81,7 @@ context("Crema role gate", () => {
 
 		cy.get("[data-crema]").should("not.exist");
 
-		cy.get("#navbar-modal-search").click();
+		cy.get(".navbar-modal-search-mobile:visible").click();
 		cy.get("#navbar-search").type("overdue items");
 		cy.wait(400);
 		cy.get("#navbar-search")
@@ -103,7 +103,7 @@ context("Crema role gate", () => {
 
 		cy.get("[data-crema]").should("be.visible");
 
-		cy.get("#navbar-modal-search").click();
+		cy.get(".navbar-modal-search-mobile:visible").click();
 		cy.get("#navbar-search").type("overdue items");
 		cy.wait(400);
 		cy.get("#navbar-search")

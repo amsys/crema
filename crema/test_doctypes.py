@@ -1103,9 +1103,15 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         """A delete that would leave an enabled AI Guard pointing at nothing must be
         refused, same as CremaSettings._apply_security_guard_rules refuses a direct
         edit that does the same thing — the on_trash cleanup save runs through the
-        same validate()."""
+        same validate().
+
+        Blanks the defaults first: the real site this suite runs against may already
+        have a Default Provider set, which would silently cover for the deleted
+        provider (security_provider falls back to it) and defeat the point of this
+        test — same reasoning as _clear_defaults()'s other callers in this class."""
         _ensure_provider()
         _ensure_user(TEST_ISOLATION_USER)
+        _clear_defaults()
         settings = frappe.get_single("Crema Settings")
         security_row = next(r for r in settings.assignments if r.interface == "security")
         security_row.provider = TEST_PROVIDER

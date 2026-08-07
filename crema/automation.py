@@ -52,7 +52,7 @@ import requests
 from croniter import croniter
 
 import frappe
-from crema import _ocr, api, client, log, sandbox, security
+from crema import _ocr, api, client, log, policy, sandbox, security
 from frappe.model import data_fieldtypes
 from frappe.utils import add_days, cint, now_datetime, strip_html
 
@@ -884,6 +884,10 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
     if doctype != target_doctype:
         raise AutomationError(f"plan.map.doctype '{doctype}' is not the task's target '{target_doctype}'")
 
+    blocked = policy.blocked_doctypes()
+    if doctype in blocked:
+        raise AutomationError(f"'{doctype}' is on this site's blocked doctype list — see Crema Settings.")
+
     meta = frappe.get_meta(doctype)
     _validate_field_maps(mapping["match_fields"], mapping["field_map"], meta, "plan.map")
 
@@ -893,6 +897,11 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
         child_df = meta.get_field(child["fieldname"])
         if not child_df or child_df.fieldtype != "Table":
             raise AutomationError(f"plan.map.child_table.fieldname '{child['fieldname']}' is not a table")
+        if child_df.options in blocked:
+            raise AutomationError(
+                f"'{child_df.options}' (plan.map.child_table) is on this site's blocked doctype list "
+                "— see Crema Settings."
+            )
         _validate_field_maps(
             child["match_fields"],
             child["field_map"],

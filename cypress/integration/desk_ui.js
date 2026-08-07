@@ -308,6 +308,46 @@ context("Crema desk UI", () => {
 		cy.get(".list-row-container .list-row").its("length").should("be.gte", 1);
 	});
 
+	it("widens to an exact match when the probe finds one, in one query", () => {
+		// The term is the whole first_name, not a substring of it — the widen probe's
+		// own results already prove an exact hit, at no extra query.
+		crema_insert_contact({ first_name: "crema exact probe" });
+		cy.intercept("GET", "/api/method/frappe.desk.reportview.get_list*").as("probe");
+		crema_stub_ask({
+			view: "List",
+			filters: { designation: ["like", "%crema exact probe%"] },
+			reason: "contacts referencing crema exact probe",
+		});
+		crema_prompt("contacts referencing crema exact probe");
+		cy.wait("@probe");
+
+		cy.get("@probe.all").should("have.length", 1);
+		// list_view.js's get_search_params only JSON.stringifies a non-"=" operator;
+		// "=" is written as the bare "field=value" pair (see the view-spec test above).
+		cy.location("search").should("contain", "first_name=crema+exact+probe");
+		cy.get(".list-row-container .list-row").its("length").should("eq", 1);
+	});
+
+	it("widens to a word from the term when the whole term matches nowhere", () => {
+		// "Acme Corp One" (the search term) is nowhere in "Acme Corporation One" (the
+		// stored value) as one substring — the whole-term probe below must come back
+		// empty before a second, per-word probe finds "Acme".
+		crema_insert_contact({ first_name: "Acme Corporation One" });
+		cy.intercept("GET", "/api/method/frappe.desk.reportview.get_list*").as("probe");
+		crema_stub_ask({
+			view: "List",
+			filters: { designation: ["like", "%Acme Corp One%"] },
+			reason: "contacts about Acme Corp One",
+		});
+		crema_prompt("contacts about Acme Corp One");
+		cy.wait("@probe");
+		cy.wait("@probe");
+
+		cy.get("@probe.all").should("have.length", 2);
+		cy.location("search").should("contain", encodeURIComponent('["like","%Acme%"]'));
+		cy.get(".list-row-container .list-row").its("length").should("be.gte", 1);
+	});
+
 	it("leaves an empty list alone when nothing matches anywhere", () => {
 		crema_stub_ask({
 			view: "List",
@@ -479,6 +519,25 @@ context("Crema desk UI", () => {
 
 		cy.location("pathname").should("contain", "/contact/new-contact-");
 		cy.window().its("cur_frm.doc.email_id").should("not.eq", "bogus@example.com");
+	});
+
+	it("refuses a create spec for a doctype this site has blocked", () => {
+		// frappe.boot.crema_blocked_doctypes is what crema.policy.extend_bootinfo
+		// publishes from Crema Settings' Blocked Doctypes table — set directly here
+		// rather than configuring a real Crema Settings row, the same way other tests
+		// stub state at the boundary they actually touch.
+		cy.window().then((win) => {
+			win.frappe.boot.crema_blocked_doctypes = ["Contact"];
+		});
+		crema_stub_ask({
+			action: "create",
+			records: [{ set: { first_name: "Call Acme back" }, child_set: {} }],
+			reason: "creating a contact",
+		});
+		crema_prompt("create a contact to call Acme back");
+
+		cy.get(".msgprint").should("contain", "You cannot create a Contact");
+		cy.location("pathname").should("not.contain", "/contact/new-contact-");
 	});
 
 	it("resolves an edit spec to one record, shows the diff, then leaves the form dirty", () => {

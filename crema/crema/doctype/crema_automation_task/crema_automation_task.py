@@ -25,7 +25,7 @@ from urllib.parse import quote
 from croniter import croniter
 
 import frappe
-from crema import client, interfaces, sandbox
+from crema import client, interfaces, policy, sandbox
 from crema.crema.doctype.crema_model_assignment.crema_model_assignment import validate_isolation_user
 from frappe import _
 from frappe.model.document import Document
@@ -87,6 +87,7 @@ class CremaAutomationTask(Document):
 
         self._validate_sources()
         self._validate_action()
+        self._validate_target_doctype()
         self._validate_trigger()
 
         if self._plan_shape_changed():
@@ -273,6 +274,18 @@ class CremaAutomationTask(Document):
             frappe.throw(_("Create or Update Records needs a Record Type to Write."))
         else:
             self.match_on = None
+
+    def _validate_target_doctype(self) -> None:
+        """Convenience, not the fence — automation._validate_plan is the gate every
+        actual run passes through, and it re-checks the same list at run time in case a
+        System Manager blocks a doctype after this task was already pointed at it. This
+        just fails the save immediately instead of only at the next run."""
+        if self.target_doctype and self.target_doctype in policy.blocked_doctypes():
+            frappe.throw(
+                _("'{0}' is on this site's blocked doctype list — see Crema Settings.").format(
+                    self.target_doctype
+                )
+            )
 
     def _validate_match_on(self) -> None:
         """Which field(s) identify "the same record" across runs — admin-entered, not

@@ -66,11 +66,19 @@ beforeEach(() => {
 	// next context's own login. Re-probe before every test and only pay for a real
 	// cy.login() (which cy.session then usually serves from cache anyway) on a mismatch.
 	if (logged_in_as) {
-		cy.request({ url: "/api/method/frappe.auth.get_logged_user", failOnStatusCode: false })
-			.its("body.message")
-			.then((user) => {
-				if (user !== logged_in_as[0]) cy.login(...logged_in_as);
-			});
+		// .its("body.message") throws outright when body has no "message" key at all —
+		// a truly dead session can come back as a login-page redirect or an error body
+		// with no "message", not just a JSON body naming the wrong user. .its() throwing
+		// mid-beforeEach aborts the whole spec (uncaught, not just a failed assertion),
+		// unlike cy.session's own `validate` above, which treats the same throw as
+		// "invalid, please re-login". Read the response defensively instead, so a
+		// malformed body re-logs in exactly like a wrong-user body would.
+		cy.request({
+			url: "/api/method/frappe.auth.get_logged_user",
+			failOnStatusCode: false,
+		}).then((response) => {
+			if (response.body?.message !== logged_in_as[0]) cy.login(...logged_in_as);
+		});
 	}
 
 	for (const method of BILLABLE_METHODS) {

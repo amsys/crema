@@ -17,6 +17,14 @@ required_apps = ["frappe"]
 app_include_css = "crema.bundle.css"
 app_include_js = "crema.bundle.js"
 
+# Boot
+# ----
+
+# Publishes frappe.boot.crema_blocked_doctypes so the desk UI can fence its own write
+# shapes -- Crema Settings (where the list is entered) is System-Manager read-only, so
+# this is the only way an ordinary Crema User sees it at all. See crema/policy.py.
+extend_bootinfo = "crema.policy.extend_bootinfo"
+
 # Installation
 # ------------
 

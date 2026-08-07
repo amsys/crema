@@ -31,6 +31,11 @@ Enabled/Disabled — green with a model count on success, red with the error oth
 (unauthorized, timeout, unreachable host). The page checks it fresh on every load,
 with no cache, so a revoked key shows red immediately.
 
+Deleting a provider that Crema Settings names — as the Default Provider, or on a
+use case's own row — clears that reference instead of blocking the delete. The
+provider's form warns you first, and a message names what it cleared once the
+delete is done.
+
 ### Crema Provider fields
 
 | Field | Type | Notes |

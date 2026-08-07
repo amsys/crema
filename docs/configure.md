@@ -174,6 +174,21 @@ standing instructions, Runs As — stays a desk edit.
 | `default_isolation_user` | Link (User) | Label **Default Runs-As User**. Used by any row that leaves Runs As blank. Seeded on install/migrate — see [install.md](install.md). |
 | `default_monthly_budget_usd` | Currency | Used by any row that leaves its own monthly budget at 0. 0 here too means unlimited. |
 | `log_retention_days` | Int | Label **Keep Logs For (days)**. 30 by default. How long a Crema Log row survives before the daily cleanup job deletes it. |
+| `blocked_doctypes` | Table | Label **Blocked Doctypes**. Empty by default. Record types the AI may never create, edit, or delete — see "Block a doctype outright" below. |
+
+## Block a doctype outright
+
+The Blocked Doctypes table under **Restrictions** is the site's own red line: a record
+type listed there is refused by every automation task and by the desk assistant's
+write actions, whatever an interface's own Runs As account could otherwise reach. Add a
+row, pick the doctype, and save — no migrate, no restart. The rule applies immediately
+to automation (the next run checks it) and to the desk (the next page load picks it up).
+
+This does not touch reading. A blocked doctype still appears in list views, in a
+Document Query source, and in what the desk assistant's "view" action can filter and
+show — only create, edit, and delete are refused. See
+[docs/security.md](security.md#a-site-wide-write-block) for the full guarantee and its
+limits.
 
 ## Procedure E — give people access
 

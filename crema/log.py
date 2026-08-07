@@ -145,6 +145,55 @@ def insert(
         frappe.log_error(title="Crema Log insert failed")
 
 
+def verify_chain() -> dict[str, Any]:
+    """Walk every Crema Log row in true insertion order and recompute its chain_sha
+    from its predecessor, confirming no row's audit fields — or its very presence —
+    changed since it was written. `bench execute crema.log.verify_chain`.
+
+    Ordered by chain_seq, not creation — see CremaLog._tail_chain_state's own comment
+    for why creation can't be trusted to break a tie between rows written close
+    together. A row with no chain_seq at all predates this feature; it sorts first
+    (nothing chained yet ever produced one) and is skipped, resetting the chain for
+    whatever comes after it, the same way a row missing entirely would.
+
+    Anchors on the oldest surviving chained row's own stored chain_sha rather than an
+    empty string: `automation.cleanup_logs` deletes a prefix of the table (rows older
+    than Crema Settings.log_retention_days), so the oldest surviving row's real
+    predecessor is usually already gone — a break there is undetectable, by
+    construction, and this does not try to report one.
+
+    Returns {"checked": <rows actually verified>, "ok": <bool>,
+    "first_break": <name of the first row whose stored and recomputed hashes disagree,
+    or None>}.
+    """
+    from crema.crema.doctype.crema_log.crema_log import CHAIN_FIELDS, chain_hash
+
+    # fields is built from CHAIN_FIELDS, a fixed module-level constant -- no user input
+    # reaches this query. chain_seq is one of CHAIN_FIELDS, so it's already included.
+    fields = ", ".join(["name", "chain_sha", *CHAIN_FIELDS])
+    rows = frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
+        f"select {fields} from `tabCrema Log` order by chain_seq asc", as_dict=True
+    )
+
+    checked = 0
+    previous: str | None = None
+    for row in rows:
+        if not row.chain_sha:
+            previous = None
+            continue
+        if previous is None:
+            # The anchor row (see the docstring): its predecessor is legitimately gone
+            # (retention cleanup) or never chained (a pre-feature row), so its own hash
+            # cannot be recomputed — trust its stored chain_sha and verify from here on.
+            previous = row.chain_sha
+            continue
+        checked += 1
+        if chain_hash(row, previous) != row.chain_sha:
+            return {"checked": checked, "ok": False, "first_break": row.name}
+        previous = row.chain_sha
+    return {"checked": checked, "ok": True, "first_break": None}
+
+
 def month_spend() -> dict[str, dict[str, float]]:
     """Every interface's and every provider's total cost_usd since the start of the
     current calendar month, in one query — used by check_budget (both ceilings) and

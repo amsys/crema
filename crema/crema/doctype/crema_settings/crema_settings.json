@@ -15,7 +15,9 @@
   "section_assignments",
   "assignments",
   "section_logging",
-  "log_retention_days"
+  "log_retention_days",
+  "section_restrictions",
+  "blocked_doctypes"
  ],
  "fields": [
   {
@@ -79,10 +81,22 @@
    "fieldname": "log_retention_days",
    "fieldtype": "Int",
    "label": "Keep Logs For (days)"
+  },
+  {
+   "fieldname": "section_restrictions",
+   "fieldtype": "Section Break",
+   "label": "Restrictions"
+  },
+  {
+   "description": "Record types the AI may never create, edit, or delete — not through an automation task, and not through the desk assistant's write actions — whatever an interface's own Runs As account could otherwise reach.",
+   "fieldname": "blocked_doctypes",
+   "fieldtype": "Table",
+   "label": "Blocked Doctypes",
+   "options": "Crema Blocked Doctype"
   }
  ],
  "links": [],
- "modified": "2026-07-29 00:00:00.000000",
+ "modified": "2026-08-07 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Settings",

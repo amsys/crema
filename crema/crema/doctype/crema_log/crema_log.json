@@ -20,6 +20,8 @@
   "model",
   "provider",
   "prompt_sha",
+  "chain_seq",
+  "chain_sha",
   "column_break_diag",
   "duration_ms",
   "llm_calls",
@@ -124,6 +126,20 @@
    "read_only": 1
   },
   {
+   "description": "This row's position in the tamper-evidence chain — creation timestamps can tie, so this is what fixes the true order. Blank on a row written before this field existed.",
+   "fieldname": "chain_seq",
+   "fieldtype": "Int",
+   "label": "Chain Order",
+   "read_only": 1
+  },
+  {
+   "description": "A fingerprint of this row chained to the one before it, so an edited or deleted row becomes evident. Blank on a row written before this field existed.",
+   "fieldname": "chain_sha",
+   "fieldtype": "Data",
+   "label": "Chain Fingerprint",
+   "read_only": 1
+  },
+  {
    "fieldname": "column_break_diag",
    "fieldtype": "Column Break"
   },
@@ -154,7 +170,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-28 00:00:00.000000",
+ "modified": "2026-08-07 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Log",

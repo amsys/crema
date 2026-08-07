@@ -170,6 +170,8 @@ its `llm_calls` says 2 — both provider calls are billed under it.
 | `user` | The session user. On a row an automation task writes, this is the interface's isolation user — the whole run happens inside the sandbox. |
 | `status` | `Success`, `Cached`, `Blocked`, or `Error`. |
 | `prompt_sha` | A SHA-256 fingerprint of the full request: interface, model, prompts, context, history, and response format. On an OCR or transcription row: a hash of the file bytes. For correlation only — two identical requests carry the same hash. |
+| `chain_seq` | This row's position in the tamper-evidence chain. See "A tamper-evident chain" below. Blank on a row written before this field existed. |
+| `chain_sha` | A SHA-256 of this row's own audit fields plus the row before it's `chain_sha`. Blank on a row written before this field existed. |
 | `duration_ms` | |
 | `detail` | A block reason or an error class. Never the prompt or document content. |
 | `llm_calls` | Provider calls billed for this row. Usually 1. |
@@ -180,8 +182,42 @@ No field of the log stores the prompt text, the context text, or document conten
 
 On the Crema Log form, `interface_label`, `user`, `status`, `detail`, `total_tokens`, and
 `cost_usd` are always visible. `interface`, `model`, `provider`, `prompt_sha`,
-`duration_ms`, `llm_calls`, `prompt_tokens`, and `completion_tokens` are in a
-**Details** section. Grouping the fields does not change what is stored.
+`chain_seq`, `chain_sha`, `duration_ms`, `llm_calls`, `prompt_tokens`, and
+`completion_tokens` are in a **Details** section. Grouping the fields does not change
+what is stored.
+
+### A tamper-evident chain
+
+Each row's `chain_sha` is a SHA-256 of its own audit fields (everything in the table
+above except `chain_sha` itself, plus `creation`) chained to the row written before it —
+the same shape a blockchain's block hash uses, one row deep. Editing a row's field, or
+deleting it outright, changes the hash every row after it was computed from, so the
+break is visible the next time someone checks. `chain_seq` fixes the row's true position
+in that chain — a plain counter, assigned under the same lock as `chain_sha` — because
+two rows can share the same `creation` timestamp down to the microsecond (a burst of
+calls in the same instant) and the database gives no other reliable way to tell which
+one came first.
+
+Run the check with:
+
+```bash
+bench execute crema.log.verify_chain
+```
+
+which returns `{"checked": <n>, "ok": <bool>, "first_break": <row name, or null>}`.
+`first_break` names the first row that no longer matches what its stored `chain_sha`
+says it should — the row itself if a field on it changed, or the row right after a
+deleted one (a deleted row has no name left to report).
+
+This is not a signature, and there is no anchor for it outside this database — a
+system administrator with a database console can rewrite a whole chain from a deleted
+row forward and `verify_chain` will not see it. What it catches is an edit or a
+deletion that leaves the rest of the chain in place, which is the ordinary case: a
+change made through the desk, a script, or a compromised account, not a full database
+rebuild. It is also bounded by retention: the daily job below deletes the oldest rows
+outright, and the oldest surviving row's own predecessor is gone with them —
+`verify_chain` starts from that row's stored `chain_sha` and cannot check further back
+than it.
 
 ### The one exception: developer mode
 
@@ -208,8 +244,10 @@ default).
 The list-view assistant (see [use.md](use.md#list-view)) can propose creating,
 editing, or deleting records, not only changing the view. Frappe's own permission
 engine is the fence, exactly as it is everywhere else in Crema — the desk UI adds no
-permission logic of its own. Three things sit in front of that fence, and none of
-them is itself the fence:
+*permission* logic of its own. It does add one policy check on top: a doctype on
+Crema Settings' Blocked Doctypes table is refused regardless of what Frappe's own
+permission engine would allow — see "A site-wide write block" below. Three more
+things sit in front of the permission fence, and none of them is itself the fence:
 
 - **The create/edit/delete shapes only appear in the prompt at all** when the session
   user already has that permission on the doctype (`frappe.model.can_create`,
@@ -233,6 +271,32 @@ The write itself goes through Frappe's own bulk endpoints
 `frappe.desk.reportview.delete_items`) — the same code path the desk's own Actions
 menu uses, with the same permission check on every record. Both endpoints also need
 the Bulk Actions permission on the user; without it, the write is refused.
+
+## A site-wide write block
+
+Crema Settings' Blocked Doctypes table (see
+[configure.md](configure.md#block-a-doctype-outright)) is a System Manager's own red
+line, checked on top of — not instead of — every other fence on this page. A doctype
+listed there is refused for creating, editing, or deleting a record, no matter what
+permission an interface's own Runs As account holds:
+
+- **`automation._validate_plan`** refuses a plan whose target doctype, or child-table
+  target, is on the list. This runs on every automation task run, so it is the real
+  fence for automation — not a save-time convenience.
+- **`CremaAutomationTask.validate`** refuses a task whose Target Doctype is already on
+  the list, at save time — a task cannot even be pointed at a blocked doctype, let
+  alone run against one.
+- **The desk assistant's write actions** (above) fold the same check into the same
+  create/write/delete gate the session user's own permissions already sit behind —
+  `crema_writable_fields` returns nothing, and the create/edit/delete shapes never
+  reach the prompt at all.
+
+Like the permission checks it sits beside, this is not silent: a blocked automation
+run fails with a plain reason in `last_error`, and a blocked desk action shows a red
+message naming the doctype. It only covers create/edit/delete — a blocked doctype is
+still readable everywhere Crema reads records today (a Document Query source, the
+desk assistant's "view" action), since reading was never the concern this list
+answers.
 
 ## Budgets
 
@@ -271,6 +335,13 @@ request, inside `crema/client.py` only, and never writes it to redis or any othe
 cache. `log.redact` scrubs every provider key touched in the request out of error
 text before that text reaches a Crema Log row, a task's `last_error`, or the site
 error log.
+
+Every provider call routes through `litellm`, the one dependency with a direct line to
+a provider's network address. `pyproject.toml` pins it to `>=1.83,<2` — a floor that
+rules out the two compromised releases (1.82.7 and 1.82.8, since pulled from PyPI), and
+a ceiling that stops an unreviewed major version from arriving on a routine dependency
+bump. `pip-audit`, part of `linters.yml`, is the other half of this control: it flags a
+known vulnerability inside that range, the pin flags the range itself.
 
 ## Known limits
 

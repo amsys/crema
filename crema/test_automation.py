@@ -582,6 +582,33 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
         with self.assertRaises(automation.AutomationError):
             automation._validate_plan(plan, "ToDo")
 
+    def test_validate_plan_rejects_a_doctype_this_site_has_blocked(self):
+        """INSPIRATION.md item 6 — a System Manager's own red line, not a permission
+        question: the isolation user could otherwise write ToDo just fine."""
+        plan = _todo_plan()  # map.doctype == "ToDo"
+        with patch("crema.automation.policy.blocked_doctypes", return_value={"ToDo"}):
+            with self.assertRaises(automation.AutomationError):
+                automation._validate_plan(plan, "ToDo")
+
+    def test_validate_plan_rejects_a_blocked_child_table_target(self):
+        plan = {
+            "version": 1,
+            "extract": {"prompt": EXTRACT_PROMPT},
+            "map": {
+                "doctype": "Contact",
+                "match_fields": ["first_name"],
+                "field_map": {"t": "first_name"},
+                "child_table": {
+                    "fieldname": "email_ids",  # Contact Email — a real Table field
+                    "match_fields": ["email_id"],
+                    "field_map": {"e": "email_id"},
+                },
+            },
+        }
+        with patch("crema.automation.policy.blocked_doctypes", return_value={"Contact Email"}):
+            with self.assertRaises(automation.AutomationError):
+                automation._validate_plan(plan, "Contact")
+
     # --- _validate_field_maps branches ----------------------------------------
 
     def test_validate_field_maps_rejects_empty_field_map(self):

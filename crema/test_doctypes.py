@@ -10,7 +10,7 @@ import uuid
 from unittest.mock import patch
 
 import frappe
-from crema import api, cache, client, interfaces, log, testing
+from crema import api, cache, client, interfaces, log, policy, testing
 from crema.crema.doctype.crema_provider.crema_provider import PRESETS, _is_local_or_private, get_presets
 from crema.exceptions import CremaConfigError
 from crema.test_fixtures import (
@@ -249,6 +249,23 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         doc.target_doctype = "ToDo"
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
+
+    def test_a_blocked_target_doctype_is_rejected(self):
+        """Convenience, not the fence — automation._validate_plan re-checks the same
+        list at run time (test_automation.py) — but a save should fail immediately
+        rather than only surface at the next run."""
+        doc = frappe.new_doc("Crema Automation Task")
+        doc.task_name = f"_test_crema_task_{uuid.uuid4().hex[:8]}"
+        doc.append("sources", {"source_type": "URL", "source_url": "https://example.invalid/source"})
+        doc.schedule = "0 3 * * *"
+        doc.instruction = "do something"
+        doc.target_doctype = "ToDo"
+        with patch(
+            "crema.crema.doctype.crema_automation_task.crema_automation_task.policy.blocked_doctypes",
+            return_value={"ToDo"},
+        ):
+            with self.assertRaises(frappe.ValidationError):
+                doc.insert(ignore_permissions=True)
 
     def test_update_source_records_needs_exactly_one_document_query(self):
         """Two would leave `allowed_names` — one flat set of record names — fencing a plan
@@ -1148,6 +1165,130 @@ class IntegrationTestCremaLogMeta(IntegrationTestCase):
             {df.fieldname for df in meta.fields if df.fieldtype in free_text},
             {"detail"},
         )
+
+
+class IntegrationTestCremaLogChain(CremaFixtureTestCase):
+    """CremaLog.before_insert's hash chain and crema.log.verify_chain — tamper-evidence
+    for the audit log, INSPIRATION.md item 2.
+
+    Subclasses CremaFixtureTestCase for its per-test savepoint alone (no
+    _ensure_user/_ensure_provider/_ensure_interface call here): verify_chain walks the
+    whole table, so one test method's rows surviving into the next — plain
+    IntegrationTestCase's only rollback is per-class, not per-method — would corrupt
+    every later method's own "clean chain" precondition.
+    """
+
+    @staticmethod
+    def _insert(prompt_sha: str) -> str:
+        log.insert("simple", "test-model", "Success", None, prompt_sha=prompt_sha)
+        return frappe.get_doc("Crema Log", {"prompt_sha": prompt_sha}).name
+
+    def test_freshly_inserted_rows_chain_together_and_verify_clean(self):
+        tag = uuid.uuid4().hex
+        first = self._insert(f"chain-clean-a-{tag}")
+        second = self._insert(f"chain-clean-b-{tag}")
+        third = self._insert(f"chain-clean-c-{tag}")
+
+        rows = [frappe.db.get_value("Crema Log", n, "chain_sha") for n in (first, second, third)]
+        self.assertTrue(all(rows), "every fresh row must carry a chain_sha")
+        self.assertEqual(len(set(rows)), 3, "each row's chain_sha must differ from the others")
+
+        result = log.verify_chain()
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["first_break"])
+
+    def test_editing_a_row_field_makes_verify_chain_report_that_row(self):
+        tag = uuid.uuid4().hex
+        self._insert(f"chain-edit-a-{tag}")
+        middle = self._insert(f"chain-edit-b-{tag}")
+        self._insert(f"chain-edit-c-{tag}")
+        self.assertTrue(log.verify_chain()["ok"], "must be clean before the tamper")
+
+        frappe.db.set_value("Crema Log", middle, "detail", "tampered after the fact")
+
+        result = log.verify_chain()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_break"], middle)
+
+    def test_deleting_a_mid_chain_row_makes_verify_chain_report_its_successor(self):
+        """A mid-chain deletion, not the oldest row — deleting the oldest is the one
+        deletion verify_chain deliberately cannot see (the next test)."""
+        tag = uuid.uuid4().hex
+        self._insert(f"chain-del-a-{tag}")
+        middle = self._insert(f"chain-del-b-{tag}")
+        third = self._insert(f"chain-del-c-{tag}")
+        self.assertTrue(log.verify_chain()["ok"], "must be clean before the deletion")
+
+        frappe.db.delete("Crema Log", {"name": middle})
+
+        result = log.verify_chain()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_break"], third)
+
+    def test_deleting_the_oldest_row_keeps_the_chain_clean(self):
+        """automation.cleanup_logs deletes the oldest rows daily, so verify_chain
+        anchors on the oldest survivor's stored chain_sha (docs/security.md: a break
+        before it is undetectable by construction) — routine retention must never
+        read as tampering."""
+        tag = uuid.uuid4().hex
+        first = self._insert(f"chain-old-a-{tag}")
+        self._insert(f"chain-old-b-{tag}")
+        self._insert(f"chain-old-c-{tag}")
+        self.assertTrue(log.verify_chain()["ok"], "must be clean before the deletion")
+
+        frappe.db.delete("Crema Log", {"name": first})
+
+        result = log.verify_chain()
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["first_break"])
+
+    def test_a_row_with_real_usage_numbers_survives_the_database_round_trip(self):
+        """before_insert hashes python values; verify_chain re-reads the database's own:
+        cost_usd goes through a decimal(21,9) column, and client._record_usage's float
+        accumulation routinely carries artifacts past 9 decimals (0.1 + 0.2). chain_hash
+        canonicalises both views to one string — without that, every row with a real
+        cost reads as tampered. The plain row first matters: the table's oldest row is
+        the trusted anchor, so only a row after it is actually verified."""
+        self._insert(f"chain-cost-anchor-{uuid.uuid4().hex}")
+        frappe.get_doc(
+            {
+                "doctype": "Crema Log",
+                "interface": "simple",
+                "model": "test-model",
+                "user": frappe.session.user,
+                "status": "Success",
+                "prompt_sha": f"chain-cost-{uuid.uuid4().hex}",
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "llm_calls": 2,
+                "cost_usd": 0.1 + 0.2,  # 0.30000000000000004 — the classic float artifact
+            }
+        ).insert(ignore_permissions=True)
+
+        result = log.verify_chain()
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["first_break"])
+
+
+class IntegrationTestCremaPolicy(CremaFixtureTestCase):
+    """crema.policy against a real Crema Settings row. Every other blocked-doctype test
+    (here and in test_automation.py) patches policy.blocked_doctypes to test its own
+    gate in isolation — so this is the one place a typo in the child table's fieldname,
+    its document_type column, or extend_bootinfo's boot key would actually fail.
+    CremaFixtureTestCase's own tearDown already rolls the settings edit back and clears
+    the get_cached_doc copy blocked_doctypes() reads."""
+
+    def test_blocked_doctypes_reads_the_settings_table_and_extend_bootinfo_publishes_it(self):
+        settings = frappe.get_doc("Crema Settings")
+        settings.append("blocked_doctypes", {"document_type": "ToDo"})
+        settings.save()
+
+        self.assertIn("ToDo", policy.blocked_doctypes())
+
+        bootinfo = frappe._dict()
+        policy.extend_bootinfo(bootinfo)
+        self.assertIn("ToDo", bootinfo.crema_blocked_doctypes)
 
 
 class IntegrationTestCremaListColumns(IntegrationTestCase):

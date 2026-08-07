@@ -17,13 +17,23 @@ required_apps = ["frappe"]
 app_include_css = "crema.bundle.css"
 app_include_js = "crema.bundle.js"
 
-# Desk Apps Screen
-# ----------------
+# Desk workspace dock
+# --------------------
 
-# Frappe develop (v17) defaults a fresh site's desktop to the Apps screen, which lists
-# only apps that opt in here. No logo -- desktop_icon.html falls back to a lettered tile
-# built from the title.
-add_to_apps_screen = [{"name": "crema", "title": "Crema", "route": "/desk/crema"}]
+# Crema is a layer inside the framework, not an app of its own -- pin its workspace into
+# Framework's rail (frappe.boot.get_app_rail_map) instead of taking its own apps-screen
+# slot. on_apps_screen is False for a dock app (boot.py: "the dock hook wins"), and
+# app_route/app_title then fall back to the workspace's own route ("/desk/crema") and to
+# app_title above -- nothing here is lost by dropping add_to_apps_screen.
+add_to_workspace_dock = [{"app": "frappe", "workspace": "Crema"}]
+
+# Boot
+# ----
+
+# Publishes frappe.boot.crema_blocked_doctypes so the desk UI can fence its own write
+# shapes -- Crema Settings (where the list is entered) is System-Manager read-only, so
+# this is the only way an ordinary Crema User sees it at all. See crema/policy.py.
+extend_bootinfo = "crema.policy.extend_bootinfo"
 
 # Installation
 # ------------

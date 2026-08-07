@@ -385,6 +385,9 @@ after a doctype change, for example. The next run writes a new one.
 - The task turns itself off after 5 runs in a row fail.
 - `target_doctype` is the only doctype a task can write to. The plan cannot name a
   different one.
+- A record type on Crema Settings' Blocked Doctypes table can never be a task's
+  target, or a plan's child-table target — checked at save time and on every run. See
+  [docs/security.md](security.md#a-site-wide-write-block).
 - Only a System Manager sets the source rows. The LLM never supplies a URL, a doctype,
   or a filter, and never adds a source.
 - A run that fails part way through keeps the records it already wrote. For a record

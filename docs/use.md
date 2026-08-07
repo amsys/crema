@@ -280,11 +280,11 @@ surfaces appear.
 Open any doctype's list view. A robot button sits between the **Menu** button and
 **Add**.
 
-The button opens a dialog. Type what you want first — a request can change the current
-list view, create a record, or update or delete records it can find; if you also drop
-a document below, the same text guides how that document is read. The upload area only
-appears if you may create a `doctype` document; if you can't, the dialog offers the
-request field alone.
+The button opens a dialog. Type what you want: a request can change the current list
+view, create a record, or update or delete records it can find. It does only what your
+permissions allow. If you may create a `doctype` document, the dialog also offers an
+**Add a document** area below the request field — drop a file there and the same typed
+text guides how Crema reads it. If you can't, the dialog offers the request field alone.
 
 A typed request does exactly one of five things. Which one is the model's own call,
 made from the same field schema either way — fields you cannot read never reach the
@@ -307,10 +307,14 @@ model, and fields you cannot write never reach a save.
   instead of guessing.
 
   If the filtered view finds no records, the system does one more database query. It
-  looks for the same words in every text field you can read, then applies the one
-  field that holds them, and an alert tells you which field it used. This is a
-  widening of one filter, not an OR: the result shows one field, not two. The system
-  does not ask the model a second time.
+  looks for the same text in every text field you can read, then applies the one
+  field that holds it, and an alert tells you which field it used. This is a
+  widening of one filter, not an OR: the result shows one field, not two. When a
+  record's own value matches exactly, the system narrows to that exact match instead
+  of a partial one. When nothing holds the whole phrase, the system tries each word in
+  it on its own — "Acme Corp" finds a record named "Acme Corporation" this way, through
+  the word "Acme". The system does not ask the model a second time, whichever of these
+  it needed.
 - **Create a record.** "Create a company called Acme" opens a new, unsaved form with
   its fields filled in — nothing is written until you save it yourself. A request
   naming several new records at once goes through the same **Import N Documents** step
@@ -378,9 +382,9 @@ server error) shows a message too — nothing in the desk UI fails without telli
 
 ### Usage and the workspace
 
-Open **Crema** in the Desk app list — the icon is a robot. The sidebar holds **Crema
-Settings**, **Home**, a **Configuration** section (Crema Provider, Crema Automation
-Task), and a **Monitoring** section (Crema Log, Crema Usage).
+Open **Crema** from Framework's app dock — the icon is a robot. The sidebar holds
+**Crema Settings**, **Home**, a **Configuration** section (Crema Provider, Crema
+Automation Task), and a **Monitoring** section (Crema Log, Crema Usage).
 
 The workspace home shows three number cards, all-time totals: **Crema Calls**, **Crema
 Cost (USD)**, and **Crema Blocked**.

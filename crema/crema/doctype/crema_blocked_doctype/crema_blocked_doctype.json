@@ -1,0 +1,33 @@
+{
+ "actions": [],
+ "creation": "2026-08-07 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "document_type"
+ ],
+ "fields": [
+  {
+   "description": "A System Manager may never let an automation task, or the desk assistant's write actions, create, edit, or delete a record of this type — whatever an interface's own isolation user could otherwise reach.",
+   "fieldname": "document_type",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "DocType",
+   "options": "DocType",
+   "reqd": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-08-07 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Blocked Doctype",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

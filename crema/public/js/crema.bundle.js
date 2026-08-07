@@ -31,6 +31,15 @@ function crema_strip_fence(text) {
 	return m ? m[1].trim() : text;
 }
 
+// The site's own red-line doctypes (Crema Settings' Blocked Doctypes table, published
+// to frappe.boot by crema.policy.extend_bootinfo). An interface's own isolation user
+// might still be able to write one of these; the desk assistant's write actions never
+// may. Read-only browsing (the "view" action) is unaffected — this only gates
+// create/edit/delete.
+function crema_blocked(doctype) {
+	return (frappe.boot.crema_blocked_doctypes || []).includes(doctype);
+}
+
 // Fields this session user may at least read. frappe.get_meta is NOT permlevel-filtered
 // server-side (frappe.desk.form.load.getdoctype has no permission check at all), so this
 // is what stops a user's prompt — and the model's answer — from touching fields they
@@ -62,8 +71,9 @@ function crema_writable_fields(doctype, perm) {
 	// A child doctype's meta only arrives bundled with its parent's
 	// (frappe.desk.form.load.get_meta_bundle, one level deep) and frappe.model.with_doctype
 	// short-circuits on a doctype already in locals — so it can genuinely be missing here.
-	// Fail closed: no meta means no field is provably writable.
-	if (!meta) return [];
+	// Fail closed: no meta means no field is provably writable. Same fail-closed shape
+	// for a doctype this site has blocked outright.
+	if (!meta || crema_blocked(doctype)) return [];
 	return meta.fields.filter(
 		(df) =>
 			df.fieldname &&
@@ -83,6 +93,7 @@ function crema_writable_fields(doctype, perm) {
 function crema_writable_table(doctype, fieldname, perm) {
 	const df = frappe.meta.get_docfield(doctype, fieldname);
 	if (df?.fieldtype !== "Table" || df.hidden || df.read_only) return null;
+	if (crema_blocked(doctype) || crema_blocked(df.options)) return null;
 	return frappe.perm.get_field_display_status(df, null, perm) === "Write" ? df : null;
 }
 
@@ -199,9 +210,10 @@ function crema_field_line(doctype, df, { visible, writable, perm }) {
 // like "items starting with foo", and no way to know "like" is its only substring tool.
 function crema_view_prompt(doctype) {
 	const visible = crema_visible_list_fields(doctype);
-	const can_create = frappe.model.can_create(doctype);
-	const can_write = frappe.perm.has_perm(doctype, 0, "write");
-	const can_delete = frappe.perm.has_perm(doctype, 0, "delete");
+	const blocked = crema_blocked(doctype);
+	const can_create = !blocked && frappe.model.can_create(doctype);
+	const can_write = !blocked && frappe.perm.has_perm(doctype, 0, "write");
+	const can_delete = !blocked && frappe.perm.has_perm(doctype, 0, "delete");
 	// Writability only matters for create/edit; skip computing it for a read-only user —
 	// same reasoning crema_readable_fields' comment gives for staying permlevel-aware.
 	// Hoisted so crema_table_line can ask the same question with the same perm array,
@@ -627,6 +639,10 @@ const CREMA_TEXTISH = new Set([
 	"Read Only",
 ]);
 const CREMA_FALLBACK_FIELD_CAP = 8;
+// Words worth trying individually when the whole failed term matches nowhere — capped
+// so the per-word probe's or_filters (candidates x words) stays a bounded scan, same
+// reasoning as CREMA_FALLBACK_FIELD_CAP above.
+const CREMA_FALLBACK_WORD_CAP = 4;
 // How many child-table fieldnames crema_view_prompt lists per table field — a wide child
 // doctype (e.g. Sales Invoice Item) would otherwise balloon every prompt built against it.
 const CREMA_MAX_CHILD_FIELDS = 10;
@@ -912,8 +928,58 @@ function crema_fallback_candidates(doctype) {
 		.slice(0, CREMA_FALLBACK_FIELD_CAP);
 }
 
-// The zero-result fallback: no second LLM call, one probe query. Fires only when the
-// list just rendered zero rows for a single text-lookup filter.
+// or_filters only says a row matched, not which field matched it — this is how both
+// probe stages below turn a flat row list back into "which candidate actually held
+// `needle`": count real per-field substring hits, highest count wins, ties break on
+// candidate order (visible columns first, from crema_fallback_candidates).
+function crema_rank_candidate(candidates, rows, needle) {
+	const counts = candidates.map(
+		(f) =>
+			rows.filter((r) =>
+				String(r[f] ?? "")
+					.toLowerCase()
+					.includes(needle)
+			).length
+	);
+	const best_i = counts.reduce((best, c, i) => (c > counts[best] ? i : best), 0);
+	return { field: candidates[best_i], count: counts[best_i] };
+}
+
+// The failed term split into words worth trying individually — "Acme Corp Ltd" against
+// a record named "Acme Corporation" fails a whole-term substring probe outright, but
+// "Acme" alone finds it. Words under 2 characters are noise (a stray "a"/"of" would
+// match almost every row and win on volume, not relevance).
+function crema_term_words(term) {
+	return term
+		.split(/\s+/)
+		.filter((w) => w.length >= 2)
+		.slice(0, CREMA_FALLBACK_WORD_CAP);
+}
+
+// The clear-then-set-then-refresh idiom both probe stages below apply their winning
+// filter through, plus the alert that names what happened — list_view.js's own
+// before_refresh() uses the same clear-then-set shape.
+function crema_apply_widened_filter(doctype, fieldname, operator, value, message) {
+	cur_list.filter_area
+		.clear(false)
+		.then(() => cur_list.filter_area.set([[doctype, fieldname, operator, value]]))
+		.then(() => {
+			cur_list.start = 0;
+			return cur_list.refresh();
+		})
+		.then(() => frappe.show_alert({ message, indicator: "orange" }))
+		.catch(() =>
+			frappe.show_alert({
+				message: __("Could not search other fields."),
+				indicator: "orange",
+			})
+		);
+}
+
+// The zero-result fallback: no second LLM call. Fires only when the list just rendered
+// zero rows for a single text-lookup filter. One probe for the whole term (exact match
+// is free from its results — a `=` hit is also a substring hit — falling back to
+// substring); a second probe, word by word, only if that first one matches nowhere.
 function crema_widen_if_empty(doctype, filters) {
 	if (
 		typeof cur_list === "undefined" ||
@@ -931,62 +997,75 @@ function crema_widen_if_empty(doctype, filters) {
 	if (!candidates.length) return;
 	const { term } = failed;
 	const label = (f) => frappe.meta.get_docfield(doctype, f)?.label || f;
+	const needle = term.toLowerCase();
 
-	frappe.db
-		.get_list(doctype, {
+	const probe = (words) =>
+		frappe.db.get_list(doctype, {
 			fields: candidates,
-			or_filters: candidates.map((f) => [f, "like", `%${crema_like_escape(term)}%`]),
+			or_filters: candidates.flatMap((f) =>
+				words.map((w) => [f, "like", `%${crema_like_escape(w)}%`])
+			),
 			limit: 20,
-		})
+		});
+
+	const giveUp = () =>
+		frappe.show_alert({
+			message: __('Nothing contains "{0}" in this list.', [term]),
+			indicator: "orange",
+		});
+
+	probe([term])
 		.then((rows) => {
-			// or_filters only says a row matched, not which field matched it — count how
-			// many returned rows actually contain the term per candidate; highest count
-			// wins, ties break on candidate order (visible columns first).
-			const needle = term.toLowerCase();
-			const counts = candidates.map(
-				(f) =>
-					rows.filter((r) =>
-						String(r[f] ?? "")
-							.toLowerCase()
-							.includes(needle)
-					).length
-			);
-			const best_i = counts.reduce((best, c, i) => (c > counts[best] ? i : best), 0);
-			if (!counts[best_i]) {
-				frappe.show_alert({
-					message: __('Nothing contains "{0}" in this list.', [term]),
-					indicator: "orange",
-				});
+			const { field, count } = crema_rank_candidate(candidates, rows, needle);
+			if (count) {
+				// A row whose winning field equals the term outright is a tighter filter
+				// than the substring probe that found it, at no extra query.
+				const exact = rows.some((r) => String(r[field] ?? "").toLowerCase() === needle);
+				const [operator, value] = exact
+					? ["=", term]
+					: ["like", `%${crema_like_escape(term)}%`];
+				crema_apply_widened_filter(
+					doctype,
+					field,
+					operator,
+					value,
+					__('No match in {0}. Showing rows where {1} {2} "{3}".', [
+						label(failed.fieldname),
+						label(field),
+						exact ? "is" : "contains",
+						term,
+					])
+				);
 				return;
 			}
-			const best = candidates[best_i];
-			cur_list.filter_area
-				.clear(false)
-				.then(() =>
-					cur_list.filter_area.set([
-						[doctype, best, "like", `%${crema_like_escape(term)}%`],
+
+			const words = crema_term_words(term);
+			if (!words.length) return giveUp();
+
+			return probe(words).then((word_rows) => {
+				// Rank every (field, word) pair independently, not just field — a word
+				// that never appears in a given field must not win it by default just
+				// because a different word matched a different candidate there.
+				let best = null;
+				for (const word of words) {
+					const ranked = crema_rank_candidate(candidates, word_rows, word.toLowerCase());
+					if (ranked.count && (!best || ranked.count > best.count)) {
+						best = { ...ranked, word };
+					}
+				}
+				if (!best) return giveUp();
+				crema_apply_widened_filter(
+					doctype,
+					best.field,
+					"like",
+					`%${crema_like_escape(best.word)}%`,
+					__('No match in {0}. Showing rows where {1} contains "{2}".', [
+						label(failed.fieldname),
+						label(best.field),
+						best.word,
 					])
-				)
-				.then(() => {
-					cur_list.start = 0;
-					return cur_list.refresh();
-				})
-				.then(() => {
-					frappe.show_alert({
-						message: __('No match in {0}. Showing rows where {1} contains "{2}".', [
-							label(failed.fieldname),
-							label(best),
-							term,
-						]),
-						indicator: "orange",
-					});
-				})
-				.catch(() =>
-					frappe.show_alert({
-						message: __("Could not search other fields."),
-						indicator: "orange",
-					})
 				);
+			});
 		})
 		.catch(() =>
 			frappe.show_alert({
@@ -1006,11 +1085,15 @@ function crema_after_view(doctype, spec, filters) {
 		frappe.show_alert({ message: frappe.utils.escape_html(spec.reason), indicator: "blue" });
 	}
 	// live.refresh() can be a no-op: filter_area's own debounced refresh (300ms,
-	// base_list.js) may have already fired by the time crema_refresh_live calls it, and
-	// no_change() then hands back an already-resolved promise while that query is still
-	// in flight — cur_list.data is still the previous page of rows here. Settle before
-	// deciding the list came back empty, or the fallback probe never fires.
-	frappe.after_ajax(() => crema_widen_if_empty(doctype, filters));
+	// base_list.js) may not yet have fired — or may have JUST fired — by the time
+	// crema_refresh_live calls it, and no_change() then hands back an already-resolved
+	// promise while the real query is still in flight, or not even dispatched yet.
+	// frappe.after_ajax only catches a query already under way (it checks
+	// frappe.request.ajax_count synchronously) — a debounced refresh whose setTimeout
+	// hasn't fired at all yet slips past that check with cur_list.data still the
+	// previous page of rows. Outlast the debounce window itself before checking, so a
+	// not-yet-dispatched debounced refresh can't slip past frappe.after_ajax either.
+	setTimeout(() => frappe.after_ajax(() => crema_widen_if_empty(doctype, filters)), 300);
 }
 
 // ---- Path B continued: prompt -> create / edit / delete ----------------------------
@@ -1144,7 +1227,7 @@ function crema_apply_create_spec(doctype, spec) {
 	// An affordance check, not the fence — stops an unsaveable form/import rather than an
 	// unauthorised write; frappe.model.get_new_doc + save (single) or Data Import (many)
 	// still enforce for real. Same gate the dialog's own upload area already uses.
-	if (!frappe.model.can_create(doctype)) {
+	if (!frappe.model.can_create(doctype) || crema_blocked(doctype)) {
 		frappe.msgprint({
 			message: __("You cannot create a {0}.", [__(doctype)]),
 			indicator: "red",
@@ -1204,7 +1287,7 @@ function crema_apply_create_spec(doctype, spec) {
 }
 
 function crema_apply_edit_spec(doctype, spec) {
-	if (!frappe.perm.has_perm(doctype, 0, "write")) {
+	if (!frappe.perm.has_perm(doctype, 0, "write") || crema_blocked(doctype)) {
 		frappe.msgprint({
 			message: __("You cannot edit {0} records.", [__(doctype)]),
 			indicator: "red",
@@ -1293,7 +1376,7 @@ function crema_apply_edit_spec(doctype, spec) {
 }
 
 function crema_apply_delete_spec(doctype, spec) {
-	if (!frappe.perm.has_perm(doctype, 0, "delete")) {
+	if (!frappe.perm.has_perm(doctype, 0, "delete") || crema_blocked(doctype)) {
 		frappe.msgprint({
 			message: __("You cannot delete {0} records.", [__(doctype)]),
 			indicator: "red",
@@ -1350,8 +1433,33 @@ function crema_apply_delete_spec(doctype, spec) {
 
 // ---- Dialog ---------------------------------------------------------------------------
 
+// Ctrl+Enter (Cmd+Enter on macOS folds into the same "ctrl+" prefix —
+// frappe.ui.keys.get_key merges ctrlKey/metaKey) submits without the mouse. Plain Enter
+// can't do this: both dialogs put the request in a Small Text textarea, where Enter has
+// to stay a newline.
+function crema_bind_go_shortcut(dialog) {
+	const shortcut = frappe.ui.keys.get_shortcut_label("ctrl+enter");
+	dialog.get_primary_btn().attr("title", shortcut);
+	dialog.$wrapper.on("keydown", (e) => {
+		if (frappe.ui.keys.get_key(e) === "ctrl+enter") {
+			e.preventDefault();
+			dialog.get_primary_btn().trigger("click");
+		}
+	});
+}
+
+// Bootstrap/frappe draw a hairline under the header, above the footer, and between
+// every Section Break past the first — none of them carry information in a two-field
+// dialog, just visual noise. Scoped to this dialog's own $wrapper (inline, matching the
+// min-width/min-height overrides above) rather than the shared stylesheet, so no other
+// dialog in the desk loses its border.
+function crema_strip_dialog_borders(dialog) {
+	dialog.$wrapper.find(".modal-header, .modal-footer").css("border", "none");
+	dialog.$wrapper.find(".form-section").css("border-top", "none");
+}
+
 function crema_open_dialog(doctype, prefill) {
-	const can_create = frappe.model.can_create(doctype);
+	const can_create = !crema_blocked(doctype) && frappe.model.can_create(doctype);
 
 	// Instruction first, upload second: the instruction isn't an alternative to the
 	// upload, it steers it (on_success below passes it straight into extract_api) — so
@@ -1361,21 +1469,19 @@ function crema_open_dialog(doctype, prefill) {
 		title: __("Ask Crema about {0}", [__(doctype)]),
 		size: "large",
 		fields: [
-			{ fieldtype: "Section Break", label: __("What do you want to do?") },
 			{
 				fieldtype: "Small Text",
 				fieldname: "instruction",
 				label: __("What do you want to do?"),
-				description: can_create
-					? __(
-							"A request can change this list view, create a new record, or update or delete records it can find. If you also upload a document below, this text guides how the document is read."
-					  )
-					: undefined,
+				placeholder: __("e.g. show only the ones added this month"),
+				description: __(
+					"Crema can change what this list shows, or add, change, or delete records. It does only what your permissions allow."
+				),
 				default: prefill || "",
 			},
 			...(can_create
 				? [
-						{ fieldtype: "Section Break", label: __("Upload a document") },
+						{ fieldtype: "Section Break", label: __("Add a document (optional)") },
 						{ fieldtype: "HTML", fieldname: "upload" },
 				  ]
 				: []),
@@ -1419,8 +1525,20 @@ function crema_open_dialog(doctype, prefill) {
 		// can. app.mount() inside the FileUploader constructor is synchronous, so
 		// `uploader.wrapper` (the mounted element) already exists here.
 		$(uploader.wrapper).find(".file-upload-area").css("min-height", "7rem");
+		// A Section Break's own `description` sits in a Bootstrap col with different
+		// left padding than the section's bold title above it — visibly out of line. A
+		// plain .help-box (the same class the instruction field's description above
+		// uses) reads correctly under a control, so put it under the uploader instead,
+		// as a sibling appended after the Vue-mounted drop zone rather than inside it.
+		$(
+			`<div class="help-box small text-extra-muted">${__(
+				"Crema reads it and proposes new records, guided by the text above."
+			)}</div>`
+		).appendTo(dialog.fields_dict.upload.$wrapper);
 	}
 
+	crema_bind_go_shortcut(dialog);
+	crema_strip_dialog_borders(dialog);
 	dialog.show();
 }
 
@@ -1469,6 +1587,8 @@ function crema_open_transform_dialog(frm) {
 			});
 		},
 	});
+	crema_bind_go_shortcut(dialog);
+	crema_strip_dialog_borders(dialog);
 	dialog.show();
 }
 
@@ -1488,14 +1608,20 @@ function crema_open_transform_dialog(frm) {
 		// secondary_action is null for every core list-family view (base_list.js), so the
 		// .btn-secondary slot is free — but don't stomp a view that claims it for itself.
 		if (!crema_allowed() || this.secondary_action) return;
-		// set_secondary_action always renders "<icon> <span>{label}</span>" (page.js
-		// get_icon_label), so an empty label still lays out a hidden span and the
-		// button's min-width padding makes it wider than the square reload button next
-		// to it. Force the same .icon-btn geometry the reload button uses instead.
+		// v17's page.html pre-renders this slot as an .es-button, not a .btn, so
+		// set_action's frappe.ui.button.dress() runs instead of the old get_icon_label
+		// path. dress() already squares an icon-with-no-label button via
+		// data-icon-button="true" (width: var(--es-bt-h) = 28px) — but
+		// .page-actions .secondary-action carries its own unconditional
+		// "min-width: 40px" (desk/page.scss), and min-width beats width regardless of
+		// selector specificity. Override min-width inline (highest specificity) to match
+		// the square reload button next to it. .icon-btn/.html() overrides from the old
+		// .btn-based fix are gone: .icon-btn only matches a .btn (common/buttons.scss)
+		// so it's inert here, and overwriting .html() would wipe dress()'s own
+		// .es-spinner markup that the busy state needs.
 		this.page
 			.set_secondary_action("", () => crema_open_dialog(this.doctype), "bot")
-			.addClass("icon-btn")
-			.html(frappe.utils.icon("bot", "sm"))
+			.css("min-width", "var(--btn-height)")
 			.attr("title", __("Ask Crema"))
 			.attr("data-crema", "1");
 	};

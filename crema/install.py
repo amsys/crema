@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import frappe
+from crema import guardrails as _guardrails
 from crema import interfaces
 from frappe.utils import validate_email_address
 
@@ -12,11 +13,15 @@ from frappe.utils import validate_email_address
 def after_install() -> None:
     """Idempotently create the 'Crema User' role, then seed interfaces (which also
     seeds the default isolation user — see sync_interfaces), the Crema Automation Task
-    interface picker's options (sync_interface_options), and the workspace's usage
-    dashboard."""
+    interface picker's options (sync_interface_options), the guardrail picker's options
+    (sync_guardrail_options), the default guardrail rows (sync_guardrails), and the
+    workspace's usage dashboard."""
     _ensure_crema_user_role()
     sync_interfaces()
     sync_interface_options()
+    sync_guardrail_options()
+    sync_guardrails()
+    sync_notification()
     sync_dashboard()
     sync_example_task()
 
@@ -101,9 +106,9 @@ def sync_interface_options() -> None:
     autonames deterministically and its validate() deletes the prior row when is_new(),
     so each run replaces rather than duplicates, and it clears the doctype cache itself.
     This has teeth: frappe validates Select options server-side on every save, so a
-    site with an existing task whose interface is "security" or "advanced_ocr" would
-    find that task unsavable after this runs — verified to affect zero records on the
-    developer's own site, but a fresh site should not assume the same.
+    site with an existing task whose interface is "advanced_ocr" would find that task
+    unsavable after this runs — verified to affect zero records on the developer's own
+    site, but a fresh site should not assume the same.
     """
     frappe.make_property_setter(
         {
@@ -116,6 +121,69 @@ def sync_interface_options() -> None:
         },
         is_system_generated=True,
     )
+
+
+def sync_guardrail_options() -> None:
+    """The Guardrail picker's options, same pattern and same reason as
+    sync_interface_options: an app-registered guardrail (the crema_guardrails hook)
+    can't be known when the doctype JSON is written, so the Select's options are
+    stamped from crema.guardrails.registry() here instead. Re-run on every migrate
+    (hooks.after_migrate). crema.api.get_guardrails relabels these values in the
+    browser; server-side validation still checks against the raw keys stamped here."""
+    frappe.make_property_setter(
+        {
+            "doctype": "Crema Guardrail",
+            "fieldname": "guardrail",
+            "property": "options",
+            "value": "\n" + "\n".join(_guardrails.registry()),
+            "property_type": "Text",
+        },
+        is_system_generated=True,
+    )
+
+
+def sync_guardrails() -> None:
+    """Seed the Crema Guardrails Single with one row per built-in guardrail, in
+    crema.guardrails._BUILTINS order, the FIRST time this runs on a site — tracked by
+    the Single's own `seeded` flag rather than by the rows existing, so an admin who
+    deletes every row (or just the ones they don't want) never has them come back on
+    the next migrate. Run on install and re-run on every migrate (hooks.after_migrate);
+    a already-seeded site is then a no-op."""
+    doc = frappe.get_single("Crema Guardrails")
+    if doc.seeded:
+        return
+    for row in _guardrails._default_rows():
+        doc.append("guardrails", dict(row))
+    doc.seeded = 1
+    doc.save(ignore_permissions=True)
+
+
+_BLOCKED_NOTIFICATION_SUBJECT = "Crema blocked a call"
+
+
+def sync_notification() -> None:
+    """Seed one standard, DISABLED Notification on Crema Log (condition: a Blocked
+    row) — the escalation rail for malicious events. Create-if-missing only: an admin
+    who enables it, edits its recipients, or deletes it must never have that undone by
+    a migrate (same idempotence rule as sync_dashboard's cards)."""
+    if frappe.db.exists("Notification", {"subject": _BLOCKED_NOTIFICATION_SUBJECT}):
+        return
+
+    doc = frappe.new_doc("Notification")
+    doc.update(
+        {
+            "subject": _BLOCKED_NOTIFICATION_SUBJECT,
+            "document_type": "Crema Log",
+            "event": "New",
+            "condition": 'doc.status == "Blocked"',
+            "channel": "System Notification",
+            "enabled": 0,
+            "message": "Crema blocked a call: {{ doc.detail }} (use case: {{ doc.interface }}, "
+            "user: {{ doc.user }})",
+        }
+    )
+    doc.append("recipients", {"receiver_by_role": "System Manager"})
+    doc.insert(ignore_permissions=True)
 
 
 _DASHBOARD_CARDS = [

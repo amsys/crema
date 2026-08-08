@@ -1,8 +1,9 @@
 # Configure Crema
 
 Configure two things before you call Crema: a provider and an interface. A provider
-holds a connection to an LLM API. An interface binds a provider, a model, and a
-security setting to one named use-case.
+holds a connection to an LLM API. An interface binds a provider and a model to one
+named use-case. The safety checks live on the **Guardrails** page, one ordered list
+for the whole site (Procedure D).
 
 Add the provider first. **Providers** is a list of its own, first in the Crema
 workspace sidebar. Interfaces live on **Crema Settings**, below it in the same
@@ -62,9 +63,10 @@ grid:
    account (`crema@<site>`, no password, `Crema User` role only) created for exactly
    this. Keep it unless you want a different account as the default isolation user.
 
-Save. Every one of the 12 predefined interfaces now resolves through these three
-values, including `security` — turning on `enable_llm_guard` anywhere no longer needs
-`security` configured with its own provider first.
+Save. Every one of the 11 predefined interfaces now resolves through these three
+values — the AI Guard on the Guardrails page needs no separate step either: a guard
+row with no **Checked By** service of its own uses the Default Provider and Default
+Model.
 
 Note: on this fast path, `advanced_ocr` resolves to the same provider and model as
 `ocr`, so OCR escalation never fires — a retry on the same model has no value, and
@@ -88,8 +90,10 @@ somewhere else.
 
 Only **Provider** and **Model** are editable directly in the grid row. Everything
 else — Runs As, the monthly budget, Creativity, how long answers are reused, the
-safety checks, the standing instructions — lives behind the pencil (**Edit**) icon at
-the end of the row, which opens that use case's full field set.
+standing instructions — lives behind the pencil (**Edit**) icon at the end of the
+row, which opens that use case's full field set. The safety checks live on the
+**Guardrails** page, one ordered list for the whole site with a per-check use-case
+filter (Procedure D).
 
 Warning: pick a low-privilege isolation user, for a row override same as for the
 default. The system refuses `Administrator` and any user with the `System Manager`
@@ -109,9 +113,8 @@ remove the sandbox.
 
 **Reset All Use Cases**, in the grid's toolbar, blanks every row's Provider, Model,
 Runs As, monthly budget, Creativity, answer reuse, and standing instructions in one
-action — every interface falls back to the Defaults above. It also sets every row's
-security toggles back to their defaults: `enable_prompt_scan` on, `enable_llm_guard`
-off. It does not touch `output_trap` or `max_tokens`. The action only changes the
+action — every interface falls back to the Defaults above. It does not touch
+`max_tokens`, and it does not touch the Guardrails page. The action only changes the
 fields on screen; the form stays unsaved, so review before you click Save, or reload
 the page to discard.
 
@@ -134,16 +137,83 @@ orange 80–99%, red at 100% or over. See [security.md](security.md#budgets).
 | `temperature` | Float | Label **Creativity**. 0 by default. |
 | `max_tokens` | Int | Label **Longest Answer**. Caps the response length. 0 (default) leaves the provider's own default untouched. |
 | `cache_ttl` | Int | Label **Reuse Answers For (seconds)**. Seconds to cache a response. 0 turns caching off. Applies to `ask`/`ask_json` calls (and everything built on them) only — `ocr`, `advanced_ocr`, and `transcribe` never read the cache. |
-| `enable_prompt_scan` | Check | Label **Text Scan**. On by default. Layer 1 — the local scan. |
-| `enable_llm_guard` | Check | Label **AI Guard**. Off by default. Layer 2 — the LLM guard. Needs an effective `security` provider (its own row, or Default Provider). |
-| `output_trap` | Select | Label **Reply Check**. `Block` by default (a freshly-reconciled row; an existing row from before this field was added stays at `Off` until you pick a value — see [security.md](security.md#layer-3--the-output-trap)). Layer 3 — the output trap. `Off` / `Log Only` / `Retry Once` / `Block`. |
 | `system_prompt` | Long Text | Label **Standing Instructions**. Fills in from a built-in default if you leave it empty. |
 
 Set `cache_ttl` on the `view` row to make a repeated desk "Ask Crema" list-view request
 free: Crema serves the exact same request on the same doctype from cache, with no
 provider call, until the TTL expires.
 
-## Procedure D — configure by code
+## Procedure D — set the guardrails
+
+Open **Guardrails** (under Setup, next to Settings). One list holds every safety
+check, in the order they run. The page lists each available check above the grid,
+with one line on what it does. What each check guarantees, and which positions in
+the list are fixed, is on [security.md](security.md#guardrails).
+
+Note: the five shipped rows are created once. A row you delete stays deleted — a
+later migrate does not bring it back. Add a row and pick the same check to restore
+it.
+
+1. Drag a row to change the order the checks run in.
+2. Set each row's **Action**: `Off`, `Log Only` (record on the Crema Log row,
+   proceed), `Retry Once` (the Reply Check only; the other checks treat it as
+   `Block`), or `Block`.
+3. Leave **Use Cases** empty to run the row for every use case, or enter a
+   comma-separated list of use-case keys to limit it.
+4. For an AI Guard row, pick **Checked By** and **Guard Model** (blank uses the
+   Default Provider and Default Model), and edit **Guard Instructions** to tune the
+   classifier. The page refuses to save an AI Guard row that cannot resolve a
+   working AI service.
+5. Save.
+
+Crema ships these five rows, in this order:
+
+| Row | Default | Notes |
+|---|---|---|
+| **Text Scan** | `Block` | The local, no-cost scan for prompt injection. |
+| **Hide Personal Information** | `Off` | Experimental. Masks names, emails, phone numbers, and record values before the request leaves the server, and swaps them back into the reply. |
+| **Hide Health Information** | `Off` | Experimental. Masks a list of condition, medication, and procedure words. A keyword list, not a detector — read [security.md](security.md#masking-experimental) before you rely on it. |
+| **AI Guard** | `Off` | A second model judges each request. It sits after the Hide rows, so it reads masked text. |
+| **Reply Check** | `Block` | Puts a token in each request and checks that the reply returns it. |
+
+You can add a second row for the same check — two AI Guard rows checked by different
+services, or a second Hide row filtered to a different use case — each keeps its own
+state. A row whose check came from an app you removed disappears on the next save.
+
+Audio: none of these checks can read sound. For the Transcribe use case, only a Hide
+row set to `Block` changes anything — it refuses the call. The page warns when a row
+names `transcribe` in its filter.
+
+To get an alert when something is blocked, enable the shipped Notification "Crema
+blocked a call" (disabled by default) and set its recipients.
+
+### Health Words
+
+Crema's built-in health word list (used by **Hide Health Information**) is English
+only. To add words in another language, open **Health Words** and either type a word
+in yourself, or click **Translate Built-in List**, pick a language, and Crema asks its
+Translation use case to propose that language's version of the list. Proposed words
+are filed switched off — review them and turn on the ones you want before they take
+effect. A word added by hand starts switched on.
+
+| Field | Type | Notes |
+|---|---|---|
+| `word` | Data | The word or phrase to hide. Must be unique. |
+| `language` | Link (Language) | Set automatically by Translate Built-in List; not read when matching. |
+| `enabled` | Check | Off by default for a translated word; on by default for a word you add yourself. |
+
+### Crema Guardrail fields (one row in the list)
+
+| Field | Type | Notes |
+|---|---|---|
+| `guardrail` | Select | Label **Guardrail**. The check this row runs. The options list every built-in and every app-registered check. |
+| `action` | Select | Label **Action**. `Off` (default), `Log Only`, `Retry Once`, or `Block`. |
+| `interfaces` | Data | Label **Use Cases**. Empty means every use case; a comma-separated list of use-case keys limits the row. |
+| `guard_provider` | Link | Label **Checked By**. AI Guard rows only. Blank uses the Default Provider. |
+| `guard_model` | Autocomplete | Label **Guard Model**. AI Guard rows only. Blank uses the Default Model. |
+| `guard_prompt` | Long Text | Label **Guard Instructions**. AI Guard rows only. The classifier prompt; a built-in default applies when it is empty. |
+
+## Procedure E — configure by code
 
 For a migration or a provisioning script, not the desk: `crema.configure()` sets
 **Provider**, **Model**, or the monthly budget on one interface's row without opening
@@ -167,8 +237,8 @@ doesn't resolve to a usable provider (for example, a model set before any provid
 exists yet). Setting `provider` with no isolation user anywhere still raises, same as
 saving the form with that row would — `configure()` does not set one.
 
-Only these three fields. Everything else on a row — the security toggles, the
-standing instructions, Runs As — stays a desk edit.
+Only these three fields. Everything else on a row — the standing instructions, Runs
+As, the Use Cases grid's own budget field — stays a desk edit.
 
 ### Crema Settings fields (the rest of the page)
 
@@ -195,7 +265,7 @@ show — only create, edit, and delete are refused. See
 [docs/security.md](security.md#a-site-wide-write-block) for the full guarantee and its
 limits.
 
-## Procedure E — give people access
+## Procedure F — give people access
 
 A provider and an interface are configured now, but the desk robot UI stays invisible
 to everyone except a System Manager until you grant the `Crema User` role. See
@@ -215,7 +285,6 @@ to everyone except a System Manager until you grant the `Crema User` role. See
 | `complex` | Complex | Careful, thorough reasoning for demanding tasks | `simple` |
 | `ocr` | OCR | Extract text from images or scanned PDFs | none |
 | `advanced_ocr` | Advanced OCR | Stronger retry when `ocr` reports low confidence | none — escalation target only |
-| `security` | Security | Layer 2 guard: classifies a prompt's risk | none — raises an error if unresolved |
 | `extraction` | Extraction | Pull structured data out of content | `complex` |
 | `classification` | Classification | Classify or label content | `simple` |
 | `summarization` | Summarization | Concise, accurate summaries | `simple` |
@@ -224,10 +293,10 @@ to everyone except a System Manager until you grant the `Crema User` role. See
 | `transcribe` | Transcribe | Speech-to-text via `crema.transcribe()` | none — a transcription call cannot fall back to a chat model |
 
 The Crema Automation Task **AI Profile** dropdown offers six of these. It leaves out
-`security` and `advanced_ocr`, which a task must never run as; `view` and `transform`,
-whose answers only the caller that asked for them can apply; `ocr`, whose answer is a
-page of text and not a plan; and `transcribe`, which speaks to a speech provider and not
-to a chat provider.
+`advanced_ocr`, which a task must never run as; `view` and `transform`, whose answers
+only the caller that asked for them can apply; `ocr`, whose answer is a page of text
+and not a plan; and `transcribe`, which speaks to a speech provider and not to a chat
+provider.
 
 If an interface has no provider of its own, the system tries Crema Settings' Default
 Provider first. Only if that is also blank does it try the next interface in its
@@ -239,12 +308,12 @@ billing identity — the Crema Log row and the monthly budget follow the interfa
 that actually served the call. The system keeps two things from the interface you
 asked for. First, its prompt: `view`, `transform`, and `extraction` each expect
 strict JSON back, and the fallback's own prompt would produce plain text the caller
-cannot parse. Second, its security settings — `enable_prompt_scan`,
-`enable_llm_guard`, and `output_trap` — so a fallback row with weaker settings never
-lowers the requested interface's protection.
+cannot parse. Second, its guardrails: every Guardrails row is matched against the
+use case you asked for, so a fallback never lowers the requested interface's
+protection.
 
 An installed app can add its own interfaces too — see below. Those rows appear in the
-grid alongside the 12 above, same reconcile, same locked add/delete.
+grid alongside the 11 above, same reconcile, same locked add/delete.
 
 ## How to add a new interface name
 
@@ -271,10 +340,10 @@ Always set `prompt` and `fallback`. The system does not enforce them: a missing
 fallback chain. Set `label` too, or the Use Cases grid and the Crema Log show the raw
 key (`my_app_ocr`) instead of a human-readable name — `label` is read the same way as
 `prompt`/`fallback`, not written onto the row. Every other key is a `Crema Model
-Assignment` fieldname (`enable_prompt_scan`, `output_trap`, `max_tokens`, ...) that
+Assignment` fieldname (`isolation_user`, `monthly_budget_usd`, `max_tokens`, ...) that
 the system seeds onto the row the first time it creates it — an admin can change any
-of it afterward in the desk. The system ignores a name already in the 12 predefined
-interfaces, so an app can never redefine `security` or `ocr`. Run `bench migrate` (or
+of it afterward in the desk. The system ignores a name already in the 11 predefined
+interfaces, so an app can never redefine `ocr` or `simple`. Run `bench migrate` (or
 restart) so the new row appears.
 
 **In crema itself**, for a new predefined interface that talks to a provider the same
@@ -294,5 +363,46 @@ chat-message path. It also skips `DEFAULT_PROMPTS`, and usually `FALLBACKS`: a
 transcription call cannot fall back to a chat model, and an OCR call cannot fall
 back to a transcription one. Each non-chat interface's fallback chain, if it has
 one, stays within its own kind.
+
+## Add your own guardrail
+
+An installed app can add a check to the Guardrails list — an external toxicity API, a
+stronger PII detector — with no crema edit. Add a `crema_guardrails` dict to that
+app's `hooks.py`:
+
+```python
+crema_guardrails = {
+    "toxicity": "my_app.guardrails.TOXICITY",
+}
+```
+
+Each value is a module object, or a dotted path string to one (resolved lazily, the
+same convention as `crema_interfaces`). A module is any object with:
+
+- `key`, `label`, and a `default_action` (usually `"Off"`). Give it a one-line
+  `help` string too — the Guardrails page shows it in the check list above the grid.
+- an optional `before(ctx)` — read `ctx.messages`, raise `crema.CremaBlockedError`
+  to block, or record a note per `ctx.action`,
+- an optional `after(ctx)` — read and, if needed, replace `ctx.response`.
+
+Set `pre_cache = True` on the module to run it before the answer cache and the
+budget check instead, in the position the Text Scan holds, over `ctx.text` (the
+joined request text) rather than `ctx.messages`. A pre-cache check runs on every
+call, cached or not, so it must be cheap and must not call a provider.
+
+`ctx.action` is the row's Action and `ctx.interface` the requested use case.
+`ctx.state` is a scratch dict that survives a retry: a Reply Check row set to `Retry
+Once` re-runs every `before()` hook against the caller's original messages, with
+`ctx.state` carried over. Reach for `ctx.slot(ctx.row)` instead of `ctx.state`
+directly if your check should support more than one row on the same site — crema's
+own masking rows do this, so two Hide rows never share a vault.
+
+If your check masks or otherwise hides content from the request, set
+`masks_text = True` on the module too. Audio and image attachments carry no text to
+hide anything in; this flag is what makes a row set to `Block` refuse such a call.
+
+After `bench migrate` the new key appears in the Guardrail picker; the admin adds a
+row and picks it, in whatever position they want. An app can never replace one of
+crema's own checks, and the first installed app wins a key collision.
 
 Next step: [use.md](use.md).

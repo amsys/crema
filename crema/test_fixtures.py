@@ -68,7 +68,9 @@ def cleanup_fixtures() -> None:
     # (frappe.database.set_value clears by dt+dn) — NOT the "Crema Settings" parent
     # Single's document cache, and not crema's own crema:iface: redis cache either.
     # Both must be cleared explicitly or a later test reads stale assignment data.
+    # Same for the Crema Guardrails Single, whose child rows _set_guardrail modifies.
     frappe.clear_document_cache("Crema Settings")
+    frappe.clear_document_cache("Crema Guardrails")
     cache.clear_interfaces()
 
     frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
@@ -92,12 +94,33 @@ class CremaFixtureTestCase(IntegrationTestCase):
     _SAVEPOINT = "crema_fixture_test"
 
     @classmethod
-    def ensure_fixtures(cls, *interface_names: str, users: tuple[str, ...] = (), **interface_kw) -> None:
+    def setUpClass(cls) -> None:
+        """Every fixture class starts from the guardrails baseline (scan on, all else
+        off) — not just the ones that go through ensure_fixtures. Without this, a
+        class that builds its fixtures directly (test_client's per-ttl interfaces)
+        inherits whatever the site's Guardrails rows happen to say — on a freshly
+        migrated site that is trap=Block everywhere, and every litellm-level mock
+        without a nonce dies with "trap: nonce missing"."""
+        super().setUpClass()
+        frappe.set_user("Administrator")
+        _ensure_guardrails()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+
+    @classmethod
+    def ensure_fixtures(
+        cls,
+        *interface_names: str,
+        users: tuple[str, ...] = (),
+        guardrails: dict[str, str] | None = None,
+        **interface_kw,
+    ) -> None:
         """The setUpClass body most classes in the suite share: the isolation user, any
-        extra users, the test provider, then each named interface configured the same
-        way. A class that needs per-interface settings (test_client's three cache_ttls)
-        or an extra fixture document calls the helpers directly instead — forcing those
-        through here would be the abstraction this exists to avoid.
+        extra users, the test provider, each named interface configured the same way,
+        then the Crema Guardrails baseline (scan on, everything else off) overridden by
+        `guardrails` — e.g. guardrails={"scan": "Off"}. A class that needs
+        per-interface settings (test_client's three cache_ttls) or an extra fixture
+        document calls the helpers directly instead — forcing those through here would
+        be the abstraction this exists to avoid.
         """
         frappe.set_user("Administrator")
         _ensure_user(TEST_ISOLATION_USER)
@@ -106,6 +129,7 @@ class CremaFixtureTestCase(IntegrationTestCase):
         _ensure_provider()
         for name in interface_names:
             _ensure_interface(name, **interface_kw)
+        _ensure_guardrails(**(guardrails or {}))
         frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     def setUp(self) -> None:
@@ -120,8 +144,10 @@ class CremaFixtureTestCase(IntegrationTestCase):
         # A test that saved Crema Settings mid-test (e.g. via _ensure_interface) left
         # frappe's own document cache (get_cached_doc) holding the now-rolled-back
         # state — a DB rollback doesn't touch redis. Left stale, the next test's first
-        # client._resolve() reads a config that no longer exists in the DB.
+        # client._resolve() reads a config that no longer exists in the DB. Same story
+        # for the Crema Guardrails Single a _set_guardrail call saved.
         frappe.clear_document_cache("Crema Settings")
+        frappe.clear_document_cache("Crema Guardrails")
         cache.clear_interfaces()
         super().tearDown()
 
@@ -169,9 +195,6 @@ _ASSIGNMENT_FIXTURE_FIELDS = (
     "model",
     "isolation_user",
     "system_prompt",
-    "enable_prompt_scan",
-    "enable_llm_guard",
-    "output_trap",
     "cache_ttl",
     "monthly_budget_usd",
 )
@@ -181,11 +204,9 @@ def _ensure_interface(
     name: str,
     *,
     cache_ttl: int = 0,
-    enable_prompt_scan: bool = True,
     isolation_user: str = TEST_ISOLATION_USER,
     monthly_budget_usd: float = 0,
     model: str = "test-model",
-    output_trap: str = "Off",
 ) -> str:
     """Configure the Crema Model Assignment row for a PREDEFINED interface name on
     the single, global Crema Settings doc.
@@ -197,6 +218,9 @@ def _ensure_interface(
     row's prior field values into _MODIFIED so cleanup_fixtures() can restore them
     once the calling test class is done, exactly like a modified Crema Interface
     document used to be restored.
+
+    The security posture is not per-interface anymore — see _set_guardrail /
+    _ensure_guardrails for the Crema Guardrails side of a fixture.
     """
     if name not in interfaces.PREDEFINED:
         raise ValueError(f"'{name}' is not a predefined interface name")
@@ -211,13 +235,60 @@ def _ensure_interface(
     row.model = model
     row.isolation_user = isolation_user
     row.system_prompt = f"test system prompt for {name}"
-    row.enable_prompt_scan = 1 if enable_prompt_scan else 0
-    row.enable_llm_guard = 0
-    row.output_trap = output_trap
     row.cache_ttl = cache_ttl
     row.monthly_budget_usd = monthly_budget_usd
     settings.save(ignore_permissions=True)
     return name
+
+
+_GUARDRAIL_FIXTURE_FIELDS = ("action", "interfaces", "guard_provider", "guard_model", "guard_prompt")
+
+# The suite's baseline posture: the scan on everywhere (matching the old
+# enable_prompt_scan=1 fixture default), everything else off — a test that wants the
+# trap, the guard, or masking switches exactly that one row on via _set_guardrail.
+_GUARDRAIL_BASELINE = {"scan": "Block", "llm_guard": "Off", "pi": "Off", "phi": "Off", "trap": "Off"}
+
+
+def _ensure_guardrails(**actions: str) -> None:
+    """Put the Crema Guardrails Single into the suite's baseline posture (see
+    _GUARDRAIL_BASELINE), overridden per key by `actions` — e.g.
+    _ensure_guardrails(trap="Block"). Snapshots every row it changes into _MODIFIED so
+    cleanup_fixtures() restores the site's real posture afterwards."""
+    doc = frappe.get_single("Crema Guardrails")
+    desired = {**_GUARDRAIL_BASELINE, **actions}
+    for row in doc.guardrails:
+        if row.guardrail not in desired:
+            continue
+        _MODIFIED.append(("Crema Guardrail", row.name, {f: row.get(f) for f in _GUARDRAIL_FIXTURE_FIELDS}))
+        row.action = desired[row.guardrail]
+        row.interfaces = ""
+        row.guard_provider = ""
+        row.guard_model = ""
+        row.guard_prompt = ""
+    doc.save(ignore_permissions=True)
+
+
+def _set_guardrail(
+    key: str,
+    action: str,
+    *,
+    interfaces_filter: str = "",
+    guard_provider: str = "",
+    guard_model: str = "",
+    guard_prompt: str = "",
+) -> None:
+    """Set one Crema Guardrail row's action (and optionally its use-case filter or the
+    AI Guard's own provider/model/prompt), tracked for restore like _ensure_interface's
+    row edits. Call after _ensure_guardrails() when a class needs a non-baseline row."""
+    doc = frappe.get_single("Crema Guardrails")
+    row = next(r for r in doc.guardrails if r.guardrail == key)
+    _MODIFIED.append(("Crema Guardrail", row.name, {f: row.get(f) for f in _GUARDRAIL_FIXTURE_FIELDS}))
+    row.action = action
+    row.interfaces = interfaces_filter
+    row.guard_provider = guard_provider
+    row.guard_model = guard_model
+    row.guard_prompt = guard_prompt
+    doc.save(ignore_permissions=True)
 
 
 def _clear_defaults() -> None:

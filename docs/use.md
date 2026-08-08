@@ -127,7 +127,7 @@ Transcribe `file` — a File URL or raw audio bytes — with the `transcribe` in
 configured model. `language` is an optional ISO-639-1 hint (`"en"`, `"fr"`, ...); the
 provider still auto-detects when you omit it. This interface has no system prompt,
 so the scan and the guard do not run — there is no user-supplied text to scan before
-the provider call happens — and the output trap does not run either, because there
+the provider call happens — and the trap does not run either, because there
 is no system prompt to protect (see [security.md](security.md)). The system still
 checks the budget and logs every call to Crema Log. The interface has no fallback: a
 transcription call that cannot resolve raises `CremaConfigError` instead of silently
@@ -163,7 +163,7 @@ provider to check. `is_configured()` is the cheap, no-network shortcut:
 
 To set an interface's model, provider, or monthly budget from code instead of the desk
 — a migration, a provisioning script — see `crema.configure()` in
-[configure.md](configure.md#procedure-d--configure-by-code).
+[configure.md](configure.md#procedure-e--configure-by-code).
 
 ## HTTP endpoints
 
@@ -175,7 +175,7 @@ utility endpoints sits beside them — see the table further down.
 
 | Parameter | Required | Notes |
 |---|---|---|
-| `interface` | yes | Not `security` or `advanced_ocr` — the system refuses these over HTTP. |
+| `interface` | yes | Not `advanced_ocr` — the system refuses it over HTTP. |
 | `prompt` | yes | |
 | `context` | no | |
 | `response_json` | no | Ask for a JSON reply. Same effect as `ask_json`'s `response_format`; the reply still comes back as a string under `result` — parse it yourself. |
@@ -233,7 +233,8 @@ All System Manager only, all `POST /api/method/<name>`:
 
 | Endpoint | Purpose |
 |---|---|
-| `crema.api.get_interfaces` | Value/label pairs for the AI Profile dropdown on Crema Automation Task, one per selectable interface. `Security`, `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not included — a task must never run as any of them. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
+| `crema.api.get_interfaces` | Value/label pairs for the AI Profile dropdown on Crema Automation Task, one per selectable interface. `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not included — a task must never run as any of them. The dropdown's option list itself comes from the field's own metadata; this endpoint only supplies the human-readable labels. |
+| `crema.api.get_guardrails` | Value/label/help triples for every registered guardrail. Feeds the Guardrail picker and the check list on the Guardrails page. |
 | `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
 | `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers list's Connection badge. |
 | `crema.api.grant_crema_role` | Adds the `Crema User` role to a user. System Manager only. |
@@ -438,8 +439,8 @@ admin already configured by hand, changes nothing. See its docstring for the
 
 With the site configured this way, `client._complete(cfg, messages,
 response_format=None)` is the supported patch point for a caller's test — the single
-place a provider is actually called, so patching it exercises every layer above
-(security scan, guard, cache, output trap, audit log). Its signature is covered by the
+place a provider is actually called, so patching it exercises everything above it
+(the guardrails, cache, budget, sandbox, audit log). Its signature is covered by the
 same stability expectation as the functions `crema/__init__.py` exports:
 
 ```python

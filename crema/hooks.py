@@ -49,6 +49,9 @@ after_migrate = [
     "crema.install.sync_interfaces",
     "crema.install.sync_dashboard",
     "crema.install.sync_interface_options",
+    "crema.install.sync_guardrail_options",
+    "crema.install.sync_guardrails",
+    "crema.install.sync_notification",
     "crema.install.sync_example_task",
 ]
 

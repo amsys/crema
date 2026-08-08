@@ -50,3 +50,15 @@ def clear_interfaces() -> None:
     document cache for the Single itself (frappe.get_cached_doc) is cleared by
     Document.save independently of this."""
     frappe.cache.delete_keys("crema:iface:")
+
+
+def health_words_key() -> str:
+    """Key for this site's enabled Crema Health Word rows — the per-site extension to
+    mask._PHI_TERMS read by guardrails._phi_patterns."""
+    return "crema:health_words"
+
+
+def clear_health_words() -> None:
+    """Crema Health Word saved/deleted: drop the cached word list so the next request
+    picks up the change."""
+    frappe.cache.delete_value(health_words_key())

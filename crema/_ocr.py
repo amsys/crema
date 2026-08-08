@@ -249,9 +249,10 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict[str, Any]:
         _log.check_budget(cfg)
         result, used_cfg = _run(cfg, user_message, response_format)
     except (CremaBudgetError, CremaBlockedError) as exc:
-        # CremaBlockedError here is client._complete's layer-3 output trap (an
-        # "output_trap: Block"/"Retry Once" miss) — logged as Blocked, not Error, same
-        # reasoning as crema.api._Ask.__call__'s equivalent handler.
+        # CremaBlockedError here is a guardrail inside client._complete's onion — in
+        # practice the reply check, the only guardrail whose default covers OCR (the
+        # scan and the guard skip this path by design) — logged as Blocked, not
+        # Error, same reasoning as crema.api._Ask.__call__'s equivalent handler.
         duration_ms = int((time.monotonic() - start) * 1000)
         _log.insert(
             cfg["interface"],

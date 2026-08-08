@@ -2,7 +2,7 @@
 
 This folder is the manual for Frappe Crema. Each page covers one job.
 
-Crema is in **beta** (see [../README.md](../README.md)). The public API and the
+Crema is in **alpha** (see [../README.md](../README.md)). The public API and the
 doctype fields are stable. A change that breaks them will come with a migration path.
 
 | Page | Audience | Question it answers |

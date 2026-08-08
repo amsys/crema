@@ -10,7 +10,8 @@ import uuid
 from unittest.mock import patch
 
 import frappe
-from crema import api, cache, client, interfaces, log, policy, testing
+from crema import api, cache, client, guardrails, interfaces, log, policy, testing
+from crema.crema.doctype.crema_health_word.crema_health_word import translate_words
 from crema.crema.doctype.crema_provider.crema_provider import (
     PRESETS,
     _is_local_or_private,
@@ -27,6 +28,7 @@ from crema.test_fixtures import (
     _clear_defaults,
     _ensure_provider,
     _ensure_user,
+    _set_guardrail,
 )
 from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.utils import validate_email_address
@@ -189,6 +191,67 @@ class IntegrationTestCremaProvider(CremaFixtureTestCase):
             create_from_template(preset="Ollama", provider_name="x", base_url="http://x")
 
 
+class IntegrationTestCremaHealthWord(CremaFixtureTestCase):
+    """CremaHealthWord.on_update/on_trash cache invalidation, and translate_words —
+    the model call is mocked at crema.api.ask_json, the same boundary every other
+    test in this suite mocks at."""
+
+    def _add_word(self, word: str, enabled: int = 1, language: str = ""):
+        doc = frappe.get_doc(
+            {"doctype": "Crema Health Word", "word": word, "enabled": enabled, "language": language}
+        )
+        doc.insert()
+        self.addCleanup(cache.clear_health_words)
+        return doc
+
+    def test_on_update_clears_the_cached_word_list(self):
+        frappe.cache.set_value(cache.health_words_key(), ["stale"])
+        self._add_word(f"_test_crema_word_{uuid.uuid4().hex[:8]}")
+        self.assertIsNone(frappe.cache.get_value(cache.health_words_key()))
+
+    def test_on_trash_clears_the_cached_word_list(self):
+        doc = self._add_word(f"_test_crema_word_{uuid.uuid4().hex[:8]}")
+        frappe.cache.set_value(cache.health_words_key(), ["stale"])
+        doc.delete()
+        self.assertIsNone(frappe.cache.get_value(cache.health_words_key()))
+
+    def test_translate_words_rejects_non_system_manager(self):
+        _ensure_user(TEST_PLAIN_USER)
+        frappe.set_user(TEST_PLAIN_USER)
+        with self.assertRaises(frappe.PermissionError):
+            translate_words("fr")
+
+    @patch("crema.crema.doctype.crema_health_word.crema_health_word.ask_json")
+    def test_translate_words_files_new_words_switched_off(self, mock_ask_json):
+        word = f"_test_crema_translated_{uuid.uuid4().hex[:6]}"
+        mock_ask_json.return_value = {"words": [word]}
+        self.addCleanup(
+            lambda: frappe.delete_doc("Crema Health Word", word, ignore_permissions=True, force=True)
+        )
+
+        result = translate_words("fr")
+
+        self.assertEqual(result, {"added": 1, "skipped": 0})
+        doc = frappe.get_doc("Crema Health Word", word)
+        self.assertEqual(doc.enabled, 0)
+        self.assertEqual(doc.language, "fr")
+
+    @patch("crema.crema.doctype.crema_health_word.crema_health_word.ask_json")
+    def test_translate_words_skips_a_word_already_on_the_list(self, mock_ask_json):
+        existing = self._add_word(f"_test_crema_existing_{uuid.uuid4().hex[:6]}")
+        mock_ask_json.return_value = {"words": [existing.word.upper()]}
+
+        result = translate_words("fr")
+
+        self.assertEqual(result, {"added": 0, "skipped": 1})
+
+    @patch("crema.crema.doctype.crema_health_word.crema_health_word.ask_json")
+    def test_translate_words_rejects_a_reply_that_is_not_json(self, mock_ask_json):
+        mock_ask_json.side_effect = ValueError("not json")
+        with self.assertRaises(frappe.ValidationError):
+            translate_words("fr")
+
+
 class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
     """CremaAutomationTask.validate — the per-save fences: trigger, sources, action,
     match_on, and cron expression."""
@@ -227,9 +290,9 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         options server-side on every save (_validate_selects in
         frappe/model/base_document.py, which runs AFTER CremaAutomationTask.validate).
         So this is enforced by frappe itself, not by our own controller: a task can no
-        longer be saved on "security" at all, even though CremaAutomationTask.validate's
+        longer be saved on "advanced_ocr" at all, even though CremaAutomationTask.validate's
         own membership check (see test_unknown_interface_name_is_rejected) would let it
-        through, since "security" is a real interfaces.names() member. Call
+        through, since "advanced_ocr" is a real interfaces.names() member. Call
         sync_interface_options() explicitly so the Property Setter is guaranteed to
         exist regardless of test run order."""
         from crema.install import sync_interface_options
@@ -242,7 +305,7 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         doc.schedule = "0 3 * * *"
         doc.instruction = "do something"
         doc.target_doctype = "ToDo"
-        doc.interface = "security"
+        doc.interface = "advanced_ocr"
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
 
@@ -449,7 +512,8 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
 
 class IntegrationTestCremaInstall(CremaFixtureTestCase):
     """install.py — after_install/hooks.after_migrate: sync_interfaces,
-    sync_interface_options, sync_dashboard, sync_example_task."""
+    sync_interface_options, sync_dashboard, sync_guardrails, sync_notification,
+    sync_example_task."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -529,6 +593,29 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
                 self.assertIn(data["quick_list_name"], quick_list_labels)
             elif kind == "number_card":
                 self.assertIn(data["number_card_name"], number_card_labels)
+
+    def test_sidebar_section_breaks_are_indented_with_their_children_nested(self):
+        """`sidebar_items` is v17-only, so this reads the fixture file rather than
+        `frappe.get_doc` — the assertion still applies on version-16, where the field is
+        simply absent from the doc. Frappe's sidebar template renders a Section Break with
+        `indent: 0` as a static muted caption instead of a real collapsible group header,
+        and its children never get the CSS indent that nests them underneath — exactly the
+        bug that left Setup/Automation/Activity looking disconnected from their links."""
+        import json
+        from pathlib import Path
+
+        path = frappe.get_app_path("crema", "crema", "workspace", "crema", "crema.json")
+        sidebar_items = json.loads(Path(path).read_text())["sidebar_items"]
+
+        under_a_section = False
+        for item in sidebar_items:
+            if item["type"] == "Section Break":
+                self.assertEqual(item["indent"], 1, f"{item['label']} Section Break must be indented")
+                under_a_section = True
+            elif item.get("child"):
+                self.assertTrue(under_a_section, f"{item['label']} has no Section Break to nest under")
+            else:
+                under_a_section = False
 
     def test_workspace_blocks_fill_every_row(self):
         """Blocks flow into one continuous flex row of 12 columns, so three rules hold.
@@ -651,10 +738,10 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         field = frappe.get_meta("Crema Automation Task").get_field("interface")
         self.assertEqual(field.fieldtype, "Select")
         self.assertEqual(field.options.split("\n"), ["", *interfaces.selectable()])
-        # security/advanced_ocr are INTERNAL; the other four are NOT_FOR_TASKS — each
-        # emits something a task's PLAN stage cannot use, and transcribe is not even a
+        # advanced_ocr is INTERNAL; the other four are NOT_FOR_TASKS — each emits
+        # something a task's PLAN stage cannot use, and transcribe is not even a
         # chat interface.
-        for excluded in ("security", "advanced_ocr", "view", "transform", "ocr", "transcribe"):
+        for excluded in ("advanced_ocr", "view", "transform", "ocr", "transcribe"):
             self.assertNotIn(excluded, field.options.split("\n"))
 
     def test_ensure_isolation_user_is_idempotent(self):
@@ -744,78 +831,57 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         )
         self.assertEqual(reloaded.provider, TEST_PROVIDER)
 
-    def test_enabling_llm_guard_is_rejected_while_seeded_security_row_has_no_provider(self):
-        """Distinct from the equivalent test in test_client.py, which configures
-        "security" with a real provider outright — this pins the more common real
-        case: the row exists (sync_interfaces seeds it) but is not yet configured."""
-        settings = frappe.get_single("Crema Settings")
-        security_row = next(r for r in settings.assignments if r.interface == "security")
-        security_row.provider = ""
-        settings.save(ignore_permissions=True)
+    def test_sync_guardrails_seeds_defaults_once_and_never_resurrects_a_deleted_row(self):
+        """install.sync_guardrails seeds the five built-in rows, in _BUILTINS order,
+        the FIRST time it runs on a site — tracked by the Single's own `seeded` flag,
+        not by the row set. Deleting a row afterward and running it again must not
+        bring the row back: unlike the old auto-reconcile contract this replaced, the
+        guardrail table is the user's to edit (see CremaGuardrails' own docstring)."""
+        from crema.install import sync_guardrails
 
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        settings = frappe.get_single("Crema Settings")
-        row = next(r for r in settings.assignments if r.interface == "translation")
-        row.provider = TEST_PROVIDER
-        row.model = "test-model"
-        row.isolation_user = TEST_ISOLATION_USER
-        row.enable_llm_guard = 1
-        with self.assertRaises(frappe.ValidationError) as ctx:
-            settings.save(ignore_permissions=True)
-        self.assertIn("security", str(ctx.exception))
+        doc = frappe.get_single("Crema Guardrails")
+        doc.guardrails = []
+        doc.seeded = 0
+        doc.save(ignore_permissions=True)
 
-    def test_enabling_llm_guard_is_permitted_when_only_default_provider_is_configured(self):
-        """ "security" itself can stay unconfigured at the row level as long as Crema
-        Settings' Default Provider is set — client._load_from_db resolves "security"
-        through the default like any other interface (CremaSettings._apply_security_
-        guard_rules treats a default_provider as "security configured")."""
-        _ensure_user(TEST_ISOLATION_USER)
-        _ensure_provider()
-        settings = frappe.get_single("Crema Settings")
-        security_row = next(r for r in settings.assignments if r.interface == "security")
-        security_row.provider = ""
-        settings.default_provider = TEST_PROVIDER
-        settings.default_isolation_user = TEST_ISOLATION_USER
-        row = next(r for r in settings.assignments if r.interface == "translation")
-        row.provider = TEST_PROVIDER
-        row.model = "test-model"
-        row.isolation_user = TEST_ISOLATION_USER
-        row.enable_llm_guard = 1
-        settings.save(ignore_permissions=True)  # must not raise
+        sync_guardrails()
+        sync_guardrails()  # already seeded — must not raise, must not duplicate rows
 
-        reloaded = next(
-            r for r in frappe.get_single("Crema Settings").assignments if r.interface == "translation"
+        seeded = frappe.get_single("Crema Guardrails")
+        self.assertEqual([r.guardrail for r in seeded.guardrails], list(guardrails._BUILTINS))
+        self.assertTrue(seeded.seeded)
+
+        seeded.guardrails = [r for r in seeded.guardrails if r.guardrail != "trap"]
+        seeded.save(ignore_permissions=True)
+        sync_guardrails()
+
+        reloaded = frappe.get_single("Crema Guardrails")
+        self.assertNotIn("trap", {r.guardrail for r in reloaded.guardrails})
+
+    def test_sync_notification_seeds_one_disabled_blocked_notification(self):
+        """install.sync_notification — the escalation rail for Blocked rows, seeded
+        DISABLED and create-if-missing only, so a migrate never re-enables or restores
+        what an admin turned off or deleted after the first seed."""
+        from crema.install import _BLOCKED_NOTIFICATION_SUBJECT, sync_notification
+
+        for name in frappe.get_all(
+            "Notification", filters={"subject": _BLOCKED_NOTIFICATION_SUBJECT}, pluck="name"
+        ):
+            frappe.delete_doc("Notification", name, ignore_permissions=True, force=True)
+
+        sync_notification()
+        sync_notification()  # create-if-missing: must not raise or duplicate
+
+        names = frappe.get_all(
+            "Notification", filters={"subject": _BLOCKED_NOTIFICATION_SUBJECT}, pluck="name"
         )
-        self.assertEqual(reloaded.enable_llm_guard, 1)
-
-    def test_enabling_llm_guard_is_rejected_when_security_provider_is_disabled(self):
-        """_apply_security_guard_rules now requires the effective security provider to
-        be *enabled*, not just named — a disabled provider can never actually run the
-        guard call, so it must be treated the same as "not configured"."""
-        disabled_provider = f"_test_crema_disabled_provider_{uuid.uuid4().hex[:8]}"
-        doc = frappe.new_doc("Crema Provider")
-        doc.provider_name = disabled_provider
-        doc.base_url = "http://localhost:11434/v1"
-        doc.enabled = 0
-        doc.insert(ignore_permissions=True)
-        try:
-            _ensure_user(TEST_ISOLATION_USER)
-            _ensure_provider()
-            settings = frappe.get_single("Crema Settings")
-            security_row = next(r for r in settings.assignments if r.interface == "security")
-            security_row.provider = disabled_provider
-            security_row.isolation_user = TEST_ISOLATION_USER
-            row = next(r for r in settings.assignments if r.interface == "translation")
-            row.provider = TEST_PROVIDER
-            row.model = "test-model"
-            row.isolation_user = TEST_ISOLATION_USER
-            row.enable_llm_guard = 1
-            with self.assertRaises(frappe.ValidationError) as ctx:
-                settings.save(ignore_permissions=True)
-            self.assertIn("security", str(ctx.exception))
-        finally:
-            frappe.delete_doc("Crema Provider", disabled_provider, ignore_permissions=True, force=True)
+        self.assertEqual(len(names), 1)
+        doc = frappe.get_doc("Notification", names[0])
+        self.assertEqual(doc.document_type, "Crema Log")
+        self.assertEqual(doc.condition, 'doc.status == "Blocked"')
+        self.assertEqual(doc.channel, "System Notification")
+        self.assertFalse(doc.enabled)
+        self.assertEqual({r.receiver_by_role for r in doc.recipients}, {"System Manager"})
 
     def test_default_isolation_user_administrator_is_rejected(self):
         settings = frappe.get_single("Crema Settings")
@@ -877,16 +943,6 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         self.assertNotIn("_not_a_real_interface_name", names)
         self.assertEqual(names, set(interfaces.names()))
 
-    def test_security_row_cannot_enable_its_own_llm_guard(self):
-        settings = frappe.get_single("Crema Settings")
-        row = next(r for r in settings.assignments if r.interface == "security")
-        row.enable_llm_guard = 1
-        settings.save(ignore_permissions=True)
-
-        rows = frappe.get_single("Crema Settings").assignments
-        reloaded = next(r for r in rows if r.interface == "security")
-        self.assertEqual(reloaded.enable_llm_guard, 0)
-
     def test_reconcile_stamps_the_human_label_for_every_row(self):
         settings = frappe.get_single("Crema Settings")
         settings.save(ignore_permissions=True)
@@ -929,8 +985,8 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
             "_test_app_iface": {
                 "prompt": "app prompt",
                 "fallback": "simple",
-                "enable_prompt_scan": 0,
-                "output_trap": "Log Only",
+                "max_tokens": 512,
+                "cache_ttl": 300,
             }
         }
         try:
@@ -942,19 +998,19 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
                 row = next(r for r in reloaded.assignments if r.interface == "_test_app_iface")
                 self.assertEqual(row.interface_label, "_test_app_iface")  # LABELS.get(name, name)
                 self.assertEqual(row.system_prompt, "app prompt")
-                self.assertEqual(row.enable_prompt_scan, 0)
-                self.assertEqual(row.output_trap, "Log Only")
+                self.assertEqual(row.max_tokens, 512)
+                self.assertEqual(row.cache_ttl, 300)
 
                 # An admin's later edit is not clobbered by a second reconcile — the
                 # hook config only seeds a *new* row, once.
-                row.output_trap = "Block"
+                row.cache_ttl = 600
                 reloaded.save(ignore_permissions=True)
                 row = next(
                     r
                     for r in frappe.get_single("Crema Settings").assignments
                     if r.interface == "_test_app_iface"
                 )
-                self.assertEqual(row.output_trap, "Block")
+                self.assertEqual(row.cache_ttl, 600)
         finally:
             # Outside the patch, app_interfaces() reverts to real (no app on this site
             # declares this fake name), so the next reconcile drops the row — the same
@@ -1064,16 +1120,29 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         self.assertEqual(reloaded.default_model, "")
 
     def test_deleting_a_provider_named_only_on_one_assignment_row_clears_that_row(self):
+        """Both rows get an explicit provider — a distinct one on the survivor —
+        rather than trusting whatever the site's `simple` row happens to hold: on a
+        site where an earlier aborted run left `simple` pointing at the shared test
+        provider, "named only on one row" would silently be false and the release
+        would (correctly) clear both."""
         _ensure_provider()
         _ensure_user(TEST_ISOLATION_USER)
         _clear_defaults()
+        keeper = f"_test_crema_keeper_{uuid.uuid4().hex[:8]}"
+        keeper_doc = frappe.new_doc("Crema Provider")
+        keeper_doc.provider_name = keeper
+        keeper_doc.base_url = "http://localhost:11434/v1"
+        keeper_doc.enabled = 0
+        keeper_doc.insert(ignore_permissions=True)
+
         settings = frappe.get_single("Crema Settings")
         row = next(r for r in settings.assignments if r.interface == "extraction")
         row.provider = TEST_PROVIDER
         row.model = "test-model"
         row.isolation_user = TEST_ISOLATION_USER
         other_row = next(r for r in settings.assignments if r.interface == "simple")
-        other_row_provider = other_row.provider
+        other_row.provider = keeper
+        other_row.isolation_user = TEST_ISOLATION_USER
         settings.save(ignore_permissions=True)
 
         frappe.delete_doc("Crema Provider", TEST_PROVIDER, ignore_permissions=True)
@@ -1083,7 +1152,7 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         self.assertEqual(reloaded_row.provider, "")
         self.assertEqual(reloaded_row.model, "")
         reloaded_other = next(r for r in reloaded.assignments if r.interface == "simple")
-        self.assertEqual(reloaded_other.provider, other_row_provider)
+        self.assertEqual(reloaded_other.provider, keeper)
 
     def test_deleting_an_unreferenced_provider_does_not_touch_settings(self):
         name = f"_test_crema_unreferenced_{uuid.uuid4().hex[:8]}"
@@ -1098,37 +1167,6 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
         after_modified = frappe.get_single("Crema Settings").modified
 
         self.assertEqual(before_modified, after_modified)
-
-    def test_deleting_the_security_provider_is_refused_while_a_use_case_still_guards_on_it(self):
-        """A delete that would leave an enabled AI Guard pointing at nothing must be
-        refused, same as CremaSettings._apply_security_guard_rules refuses a direct
-        edit that does the same thing — the on_trash cleanup save runs through the
-        same validate().
-
-        Blanks the defaults first: the real site this suite runs against may already
-        have a Default Provider set, which would silently cover for the deleted
-        provider (security_provider falls back to it) and defeat the point of this
-        test — same reasoning as _clear_defaults()'s other callers in this class."""
-        _ensure_provider()
-        _ensure_user(TEST_ISOLATION_USER)
-        _clear_defaults()
-        settings = frappe.get_single("Crema Settings")
-        security_row = next(r for r in settings.assignments if r.interface == "security")
-        security_row.provider = TEST_PROVIDER
-        security_row.model = "test-model"
-        security_row.isolation_user = TEST_ISOLATION_USER
-        guarded_row = next(r for r in settings.assignments if r.interface == "extraction")
-        guarded_row.provider = TEST_PROVIDER
-        guarded_row.model = "test-model"
-        guarded_row.isolation_user = TEST_ISOLATION_USER
-        guarded_row.enable_llm_guard = 1
-        settings.flags.crema_skip_model_warning = True
-        settings.save(ignore_permissions=True)
-
-        with self.assertRaises(frappe.ValidationError) as ctx:
-            frappe.delete_doc("Crema Provider", TEST_PROVIDER, ignore_permissions=True)
-        self.assertIn("extraction", str(ctx.exception))
-        self.assertTrue(frappe.db.exists("Crema Provider", TEST_PROVIDER))
 
     def test_settings_references_reports_default_flag_and_use_case_labels(self):
         _ensure_provider()
@@ -1176,6 +1214,118 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
             r for r in frappe.get_single("Crema Settings").assignments if r.interface == "extraction"
         )
         self.assertEqual(reloaded.provider, TEST_PROVIDER)
+
+
+class IntegrationTestCremaGuardrails(CremaFixtureTestCase):
+    """CremaGuardrails.validate — _drop_orphans (the one row Frappe's own Select
+    validation would otherwise brick the Single over), the use-case filter fence
+    (_validate_filters), _validate_guard (the needs-a-working-provider rule that
+    replaced the old CremaSettings._apply_security_guard_rules), and the _warn_audio
+    msgprint."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures("simple")  # _validate_guard's default provider target
+
+    def test_saving_an_emptied_table_leaves_it_empty(self):
+        """Unlike the old auto-reconcile, deleting every row and saving keeps the
+        table empty — nothing here re-seeds it. install.sync_guardrails is the only
+        thing that seeds the built-ins, and only the first time it ever runs on a
+        site (IntegrationTestCremaInstall)."""
+        doc = frappe.get_single("Crema Guardrails")
+        doc.guardrails = []
+        doc.save(ignore_permissions=True)  # must not raise
+
+        self.assertEqual(frappe.get_single("Crema Guardrails").guardrails, [])
+
+    def test_a_reordered_row_list_survives_the_next_save(self):
+        """Row order is execution order here, so _reconcile is order-preserving —
+        unlike CremaSettings._reconcile_assignments, which re-sorts to a fixed order.
+        An admin's drag-reorder must come back from the save intact."""
+        doc = frappe.get_single("Crema Guardrails")
+        doc.guardrails = list(reversed(doc.guardrails))
+        for idx, row in enumerate(doc.guardrails, start=1):
+            row.idx = idx
+        reordered = [r.guardrail for r in doc.guardrails]
+        doc.save(ignore_permissions=True)
+
+        rows = frappe.get_single("Crema Guardrails").guardrails
+        self.assertEqual([r.guardrail for r in rows], reordered)
+
+    def test_a_row_with_an_unknown_guardrail_key_is_dropped_on_save(self):
+        doc = frappe.get_single("Crema Guardrails")
+        bogus = doc.append("guardrails", {})
+        bogus.guardrail = "_not_a_real_guardrail"
+        doc.save(ignore_permissions=True)
+
+        keys = {r.guardrail for r in frappe.get_single("Crema Guardrails").guardrails}
+        self.assertNotIn("_not_a_real_guardrail", keys)
+        self.assertEqual(keys, set(guardrails.registry()))
+
+    def test_an_unknown_use_case_token_in_the_filter_is_rejected(self):
+        with self.assertRaises(frappe.ValidationError) as ctx:
+            _set_guardrail("scan", "Block", interfaces_filter="simple, _not_a_real_use_case")
+        self.assertIn("_not_a_real_use_case", str(ctx.exception))
+
+    def test_a_valid_use_case_filter_is_normalized_to_comma_space(self):
+        _set_guardrail("scan", "Block", interfaces_filter="simple,extraction,  translation")
+
+        row = next(r for r in frappe.get_single("Crema Guardrails").guardrails if r.guardrail == "scan")
+        self.assertEqual(row.interfaces, "simple, extraction, translation")
+
+    def test_enabling_the_ai_guard_without_a_resolvable_provider_is_rejected(self):
+        """An AI Guard row that cannot resolve a working provider — no Checked By of
+        its own, and no Default Provider either — must fail loud at save time, not
+        silently at call time. The old llm-guard-requires-a-configured-security-
+        interface rule, moved here and re-shaped around a provider instead of an
+        interface: the guard is a check, not a use case."""
+        _clear_defaults()  # blanks Crema Settings' Default Provider/Model
+
+        with self.assertRaises(frappe.ValidationError) as ctx:
+            _set_guardrail("llm_guard", "Block")
+        self.assertIn("AI Guard", str(ctx.exception))
+
+    def test_enabling_the_ai_guard_with_its_own_provider_saves(self):
+        _set_guardrail("llm_guard", "Block", guard_provider=TEST_PROVIDER, guard_model="test-model")
+
+        rows = frappe.get_single("Crema Guardrails").guardrails
+        self.assertEqual(next(r.action for r in rows if r.guardrail == "llm_guard"), "Block")
+
+    def test_enabling_the_ai_guard_with_a_configured_default_provider_saves(self):
+        """A guard row with no Checked By/Guard Model of its own still saves when
+        Crema Settings' Default Provider resolves — the same fallback
+        client._scanner_cfg gives any other caller."""
+        settings = frappe.get_single("Crema Settings")
+        settings.default_provider = TEST_PROVIDER
+        settings.default_model = "test-model"
+        settings.save(ignore_permissions=True)
+
+        _set_guardrail("llm_guard", "Block")  # blank guard_provider/guard_model
+
+        rows = frappe.get_single("Crema Guardrails").guardrails
+        self.assertEqual(next(r.action for r in rows if r.guardrail == "llm_guard"), "Block")
+
+    def test_a_non_off_row_naming_transcribe_in_its_filter_warns_on_save(self):
+        """_warn_audio — audio has no text to scan or mask, so a filter that names the
+        transcribe use case msgprints (never throws); a blank everywhere-filter stays
+        silent, or every save would nag."""
+        before = len(frappe.message_log)
+        _set_guardrail("scan", "Block", interfaces_filter="transcribe")  # must not raise
+
+        warnings = [m for m in frappe.message_log[before:] if m.get("title") == "Guardrails and audio"]
+        self.assertTrue(warnings, frappe.message_log[before:])
+        self.assertEqual(warnings[0].get("indicator"), "orange")
+        self.assertIn("Text Scan", str(warnings[0]["message"]))
+
+    def test_a_blank_filter_does_not_trigger_the_audio_warning(self):
+        """The other half of _warn_audio's fence: blank means "everywhere", including
+        transcribe, and that must not warn on every routine save."""
+        before = len(frappe.message_log)
+        _set_guardrail("scan", "Block", interfaces_filter="")
+
+        warnings = [m for m in frappe.message_log[before:] if m.get("title") == "Guardrails and audio"]
+        self.assertEqual(warnings, [])
 
 
 class IntegrationTestCremaConfigure(CremaFixtureTestCase):

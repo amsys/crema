@@ -1794,7 +1794,10 @@ function crema_new_provider_dialog(on_created) {
 								// frappe.model.with_doc short-circuits on a cached doc, so
 								// navigating there would not refetch it; saving it would then
 								// fail frappe's own timestamp check.
-								frappe.model.remove_from_locals("Crema Settings", "Crema Settings");
+								frappe.model.remove_from_locals(
+									"Crema Settings",
+									"Crema Settings"
+								);
 							}
 							if (on_created) on_created();
 						},

@@ -1,9 +1,8 @@
-"""Security scanning — layer 1 (regex/unicode) and layer 2 (LLM guard) glue.
+"""The text scan — pure detection, no policy.
 
-Layer 1 (`scan`) is pure: no frappe imports, no I/O, just a canonicalization pass and
-compiled regexes over the prompt/context strings. Layer 2 (the LLM guard) is wired into
-`crema.api.ask` via a recursive `ask("security", ...)` call — see the
-`# phase 3: llm guard` seam there.
+`scan` is pure: no frappe imports, no I/O, just a canonicalization pass and compiled
+regexes over the prompt/context strings. Policy (block, log, filter by use case) lives
+in crema/guardrails.py, whose "scan" and "llm_guard" modules both call this.
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import frappe
+from crema import interfaces
 from crema.api import ask_api
 from crema.exceptions import CremaBudgetError, CremaConfigError
 from crema.test_fixtures import (
@@ -127,13 +128,27 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
         mock_complete.assert_not_called()
 
     def test_internal_interfaces_are_rejected(self):
-        """`security` would be a jailbreak-calibration oracle; `advanced_ocr` is only
-        ever reached through ocr()."""
-        for interface in ("security", "advanced_ocr"):
+        """interfaces.INTERNAL is just `advanced_ocr` now — it is only ever reached
+        through ocr(), never named by an HTTP caller."""
+        for interface in interfaces.INTERNAL:
             with self.subTest(interface=interface), patch("crema.client._complete") as mock_complete:
                 with self.assertRaises(frappe.ValidationError):
                     ask_api(interface, "hello")
                 mock_complete.assert_not_called()
+
+    def test_the_removed_security_name_fails_as_an_ordinary_config_error(self):
+        """ "security" is not an interface anymore — the layer-2 guard moved into the
+        llm_guard guardrail (crema.guardrails), so the old internal-interface refusal
+        (which kept it from becoming a jailbreak-calibration oracle) is gone. The name
+        now resolves like any other unknown one: no assignment row, no fallback, and
+        ask() returns the structured 417 config-error body with blocked False."""
+        with patch("crema.client._complete") as mock_complete:
+            result = ask_api("security", "hello")
+
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["reason"])
+        self.assertEqual(frappe.local.response.get("http_status_code"), 417)
+        mock_complete.assert_not_called()
 
     def test_role_guard_accepts_crema_user_role(self):
         """`frappe.only_for` treats the (System Manager, Crema User) tuple as OR — this
@@ -153,7 +168,7 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
         frappe.set_user(TEST_PLAIN_USER)
         with patch("crema.client._complete") as mock_complete:
             with self.assertRaises(frappe.PermissionError):
-                ask_api("security", "hello")
+                ask_api("advanced_ocr", "hello")
         mock_complete.assert_not_called()
 
     def test_per_user_rate_limit_throws_above_the_hourly_limit(self):

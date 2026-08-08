@@ -17,11 +17,6 @@
   "temperature",
   "max_tokens",
   "cache_ttl",
-  "section_security",
-  "enable_prompt_scan",
-  "column_break_security",
-  "enable_llm_guard",
-  "output_trap",
   "section_prompt",
   "system_prompt"
  ],
@@ -110,37 +105,6 @@
    "label": "Reuse Answers For (seconds)"
   },
   {
-   "fieldname": "section_security",
-   "fieldtype": "Section Break",
-   "label": "Safety Checks"
-  },
-  {
-   "default": "1",
-   "description": "Check the text for known attack patterns before sending it. Runs on this server, costs nothing, and blocks anything suspicious. Keep this on.",
-   "fieldname": "enable_prompt_scan",
-   "fieldtype": "Check",
-   "label": "Text Scan"
-  },
-  {
-   "fieldname": "column_break_security",
-   "fieldtype": "Column Break"
-  },
-  {
-   "default": "0",
-   "description": "Have a second AI read the text first and judge whether it is safe. Slower and costs extra. Needs the Security use case to have a working provider.",
-   "fieldname": "enable_llm_guard",
-   "fieldtype": "Check",
-   "label": "AI Guard"
-  },
-  {
-   "default": "Block",
-   "description": "Ask the model to repeat a secret word back, to prove the reply is really its own and was not hijacked. Off — do not check. Log Only — note it and use the reply anyway. Retry Once — try once more, then stop. Block — stop the request.",
-   "fieldname": "output_trap",
-   "fieldtype": "Select",
-   "label": "Reply Check",
-   "options": "Off\nLog Only\nRetry Once\nBlock"
-  },
-  {
    "fieldname": "section_prompt",
    "fieldtype": "Section Break",
    "label": "Standing Instructions"
@@ -153,7 +117,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-31 00:00:00.000000",
+ "modified": "2026-08-08 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Model Assignment",

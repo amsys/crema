@@ -812,11 +812,11 @@ context("Crema Settings", () => {
 	// hardcoded, since the app-registered half varies per site.
 	//
 	// get_interfaces() is the narrower list the automation task's AI Profile picker
-	// shows — interfaces.selectable(), i.e. names() minus interfaces.INTERNAL (2:
-	// security, advanced_ocr) and minus interfaces.NOT_FOR_TASKS (4: view, transform,
-	// ocr, transcribe). The grid still carries a row for each of those six, so it is a
+	// shows — interfaces.selectable(), i.e. names() minus interfaces.INTERNAL (1:
+	// advanced_ocr) and minus interfaces.NOT_FOR_TASKS (4: view, transform, ocr,
+	// transcribe). The grid still carries a row for each of those five, so it is a
 	// superset by exactly that count.
-	const UNSELECTABLE_INTERFACE_COUNT = 6;
+	const UNSELECTABLE_INTERFACE_COUNT = 5;
 
 	it("shows the full set of model assignment rows with no add/delete affordance", () => {
 		cy.window()
@@ -905,6 +905,49 @@ context("Crema Settings", () => {
 	});
 });
 
+context("Crema Guardrails", () => {
+	before(() => {
+		cy.login();
+	});
+
+	beforeEach(() => {
+		cy.visit("/app/crema-guardrails");
+		// A logged-out visit 301s to /login — assert the form actually rendered.
+		cy.get('[data-fieldname="guardrails"]').should("exist");
+	});
+
+	// crema_guardrails.js renders one "label — help" line per registered check into
+	// the guardrail_help HTML field, from the same get_guardrails call that relabels
+	// the Guardrail picker — so a reader learns what each built-in does without
+	// opening the dropdown.
+	it("lists every built-in check with a one-line description above the grid", () => {
+		cy.get('[data-fieldname="guardrail_help"]').within(() => {
+			for (const label of [
+				"Text Scan",
+				"Hide Personal Information",
+				"Hide Health Information",
+				"AI Guard",
+				"Reply Check",
+			]) {
+				cy.contains("strong", label).should("be.visible");
+			}
+			cy.contains("prompt injection").should("be.visible");
+		});
+	});
+
+	// The brief used to be the grid's own field description, rendered below the grid
+	// under a redundant "Guardrails" heading — render_check_list now puts it first,
+	// inside the same HTML field, above the one-liners it introduces.
+	it("puts the brief above the one-liners and drops the Guardrails heading", () => {
+		cy.get('[data-fieldname="guardrail_help"] > div')
+			.children()
+			.first()
+			.should("have.prop", "tagName", "P")
+			.and("contain", "top to bottom");
+		cy.get('[data-fieldname="guardrails"]').should("not.contain", "Guardrails");
+	});
+});
+
 describe("Crema Provider list", () => {
 	before(() => {
 		cy.login();
@@ -939,6 +982,26 @@ describe("Crema Provider list", () => {
 			"have.value",
 			"https://api.openai.com/v1"
 		);
+	});
+});
+
+describe("Crema Health Word list", () => {
+	before(() => {
+		cy.login();
+	});
+
+	beforeEach(() => {
+		cy.visit("/app/crema-health-word");
+	});
+
+	it("offers the Translate Built-in List action", () => {
+		cy.contains("button", "Translate Built-in List").should("be.visible");
+	});
+
+	it("opens the dialog with a Language field", () => {
+		cy.contains("button", "Translate Built-in List").click();
+		cy.get(".modal-title").contains("Translate Built-in List").should("be.visible");
+		cy.get(".modal .frappe-control[data-fieldname=language]").should("be.visible");
 	});
 });
 

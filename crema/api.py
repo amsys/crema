@@ -16,8 +16,9 @@ from typing import Any
 
 import frappe
 from crema import _ocr as _ocr_impl
-from crema import cache, client, interfaces, sandbox, security
+from crema import cache, client, guardrails, interfaces, sandbox
 from crema import log as _log_mod
+from crema import terms as _terms
 from crema._json import strip_fence
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
 from frappe import _
@@ -81,7 +82,7 @@ def _prompt_hash(
 def _user_content(prompt: str, context: str | None) -> str:
     """The exact string the model receives as the user turn.
 
-    Both security layers scan THIS, not prompt and context separately: the model sees
+    The input gate scans THIS join, not prompt and context separately: the model sees
     them concatenated, so an injection split across the two fields ("...please ignore
     all" in context, "previous instructions..." in prompt) is only visible here.
     Scanning the concatenation is strictly stronger than scanning each field, since
@@ -110,19 +111,20 @@ def _scan_context(context: str | None, history: list[dict] | None) -> str | None
     return f"{context}\n{turns}" if context else turns
 
 
-def _scan_or_block(
+def _gate_or_block(
     cfg: dict[str, Any], prompt: str, context: str | None, history: list[dict] | None, prompt_sha: str
 ) -> None:
-    """Layer 1. scan() joins context+prompt and scans the join — see its docstring for
-    why it is handed the two fields rather than the delimiter-wrapped user_content that
-    layer 2 and the provider get. _scan_context widens that join to cover a
-    caller-supplied history too."""
-    if not cfg["enable_prompt_scan"]:
-        return
-    reason = security.scan(prompt, _scan_context(context, history))
-    if reason:
-        _log(cfg, "Blocked", reason, prompt_sha=prompt_sha)
-        raise CremaBlockedError(reason)
+    """Anchor A of the guardrails pipeline (crema.guardrails.gate) — every pre-cache
+    guardrail (the text scan) runs here, over context+history+prompt joined the same
+    way the model will see them concatenated, BEFORE the answer cache and the budget
+    check. A hit is logged Blocked and raised."""
+    scoped = _scan_context(context, history)
+    text = f"{scoped}\n{prompt}" if scoped else prompt
+    try:
+        guardrails.gate(cfg, text)
+    except CremaBlockedError as exc:
+        _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha)
+        raise
 
 
 def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
@@ -165,12 +167,12 @@ def _attach_files(cfg: dict[str, Any], messages: list[dict], files: list | None)
     if not file_parts:
         return messages
 
-    if cfg["enable_prompt_scan"]:
-        # Scan it so the same bytes block on this path as on extract()'s, which hands
-        # the read text to layer 1 via context=.
-        reason = security.scan("\n".join(p["text"] for p in file_parts if p["type"] == "text"))
-        if reason:
-            raise CremaBlockedError(reason)
+    # Gate the extracted text so the same bytes block on this path as on extract()'s,
+    # which hands the read text to the gate via context=. Raises CremaBlockedError,
+    # logged by _Ask.__call__'s own handler.
+    text = "\n".join(p["text"] for p in file_parts if p["type"] == "text")
+    if text:
+        guardrails.gate(cfg, text)
 
     last = {"role": "user", "content": [{"type": "text", "text": messages[-1]["content"]}, *file_parts]}
     return [*messages[:-1], last]
@@ -204,8 +206,9 @@ class _Ask:
 
     `ask("simple", "text")` and `ask.simple("text")` are equivalent; the attribute
     form is just `functools.partial(self, interface)` via `__getattr__`. Both go
-    through the exact same `__call__` flow below (security scan, cache, LLM guard,
-    sandboxed completion) — the sugar changes nothing about what runs. A single
+    through the exact same `__call__` flow below (the input gate, cache, budget, and
+    the sandboxed, guardrail-wrapped completion) — the sugar changes nothing about
+    what runs. A single
     positional argument, `ask("text")`, is a third equivalent form: it runs the
     `simple` interface, same as `ask("simple", "text")`.
     """
@@ -248,9 +251,8 @@ class _Ask:
             cfg = {**cfg, "cache_ttl": cache_ttl}
 
         prompt_sha = _prompt_hash(cfg, prompt, context, response_format, history)
-        user_content = _user_content(prompt, context)
 
-        _scan_or_block(cfg, prompt, context, history, prompt_sha)
+        _gate_or_block(cfg, prompt, context, history, prompt_sha)
 
         # A call carrying files is never cached, read or write: _prompt_hash cannot see
         # the file bytes (it doubles as the audit log's prompt_sha, and a File URL's
@@ -273,11 +275,9 @@ class _Ask:
             _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha)
             raise
 
-        # phase 3: llm guard. Defense-in-depth, not the hard fence — layer 1 (scan,
-        # above) and User Permissions on the isolation user are.
-        if cfg["enable_llm_guard"]:
-            self._guard(cfg, user_content, prompt_sha)
-
+        # The AI guard, masking, and the reply check all run inside client._complete's
+        # guardrails onion (crema.guardrails.run) — after the cache and the budget
+        # check, so a cached or budget-stopped call never bills a guard model call.
         messages = _build_messages(cfg, prompt, context, history)
 
         start = time.monotonic()
@@ -286,11 +286,12 @@ class _Ask:
                 messages = _attach_files(cfg, messages, files)
                 result = client._complete(cfg, messages, response_format)
         except CremaBlockedError as exc:
-            # Two raisers: client._complete's layer-3 output trap (an "output_trap:
-            # Block" or "Retry Once" miss), and the layer-1 scan over a file's extracted
-            # text just above. Logged as Blocked, not Error, so either is distinguishable
-            # from a provider failure in the audit log — that distinction is what makes
-            # the trap's false-positive rate measurable.
+            # Raisers: any guardrail inside client._complete's onion (a reply-check
+            # miss, an unrestorable mask token, a malicious AI-guard verdict), and the
+            # gate over a file's extracted text just above. Logged as Blocked, not
+            # Error, so a block is distinguishable from a provider failure in the
+            # audit log — that distinction is what makes each guardrail's
+            # false-positive rate measurable.
             _log(
                 cfg,
                 "Blocked",
@@ -318,34 +319,6 @@ class _Ask:
 
         _log(cfg, "Success", None, prompt_sha=prompt_sha, duration_ms=duration_ms)
         return result
-
-    def _guard(self, cfg: dict[str, Any], user_content: str, prompt_sha: str) -> None:
-        """Layer 2. A guard error or unparseable response fails OPEN (proceeds), by
-        design — see the `# phase 3: llm guard` call site for why."""
-        risk = None
-        try:
-            guard_raw = self("security", user_content)
-            risk = json.loads(strip_fence(guard_raw)).get("risk")
-        except CremaBlockedError:
-            # The nested call's own layer 1 flagged the content. Layer 1 fails CLOSED —
-            # reaching it through the guard's wrapper call doesn't earn it a pass into
-            # the fail-open branch below.
-            _log(cfg, "Blocked", "llm guard: layer-1 scan blocked the content", prompt_sha=prompt_sha)
-            raise
-        except CremaConfigError:
-            # An unresolvable "security" interface is a fail-loud admin
-            # misconfiguration (client._resolve) — not a guard runtime error.
-            raise
-        except Exception:
-            # Includes CremaBudgetError: the guard exhausting its own budget must not
-            # block legitimate traffic — it is defense-in-depth, not the fence.
-            _log(cfg, "Error", "llm guard error/unparseable — proceeding (fail-open)", prompt_sha=prompt_sha)
-
-        if risk == "malicious":
-            _log(cfg, "Blocked", "llm guard: malicious", prompt_sha=prompt_sha)
-            raise CremaBlockedError("blocked by security guard")
-        if risk == "suspicious":
-            _log(cfg, "Success", "llm guard: suspicious — proceeded", prompt_sha=prompt_sha)
 
     def __getattr__(self, interface: str):
         if interface.startswith("_"):
@@ -416,6 +389,13 @@ def transform(doctype: str, name: str, instruction: str, interface: str = "trans
         doc.check_permission("read")
         doc.apply_fieldlevel_read_permissions()  # same path frappe.client.get uses
         payload = doc.as_dict(no_default_fields=True)
+        # Harvested inside isolation, like the read above: a term the isolation user
+        # can't see must not enter masking's term list either — see
+        # crema.terms.harvest's own docstring. Skipped entirely when no Hide
+        # Personal Information row applies to this interface (guardrails.run drains
+        # the accumulator unconditionally either way, so nothing can leak).
+        if guardrails.active("pi", interface) != "Off":
+            frappe.local.crema_terms = _terms.harvest(doctype, name)
 
     raw = ask_json(interface, instruction, context=frappe.as_json(payload))
     return {**_filter_diff(doctype, raw), "reason": raw.get("reason", "")}
@@ -460,8 +440,8 @@ def extract(doctype: str, file: str | bytes, instruction: str | None = None) -> 
     if instruction:
         parts.append(f"Caller instruction:\n{instruction}")
     # context=, like transform: the untrusted document text goes inside <context>...
-    # </context> (see _user_content) rather than concatenated into the prompt, and layer
-    # 1 (security.scan) still runs on it, same as automation._extract's fetched content.
+    # </context> (see _user_content) rather than concatenated into the prompt, and the
+    # input gate still runs on it, same as automation._extract's fetched content.
     raw = ask_json("extraction", "\n\n".join(parts), context=page["text"])
     records = [_filter_diff(doctype, r) for r in raw.get("records") or [] if isinstance(r, dict)]
     return {"records": records, "reason": raw.get("reason", ""), "confidence": page["confidence"]}
@@ -483,10 +463,11 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, A
     "language": str | None, "duration": float | None}.
 
     No system prompt exists for this interface (see interfaces.PREDEFINED/
-    DEFAULT_PROMPTS), so layers 1 (security.scan) and 2 (the LLM guard) don't run —
-    same reasoning crema._ocr's module docstring gives for OCR'd document content:
-    those layers scan text a caller supplies, and there is none here before the
-    provider call happens. Every call is still logged to Crema Log and
+    DEFAULT_PROMPTS), so the text scan and the AI guard don't run — same reasoning
+    crema._ocr's module docstring gives for OCR'd document content: those guardrails
+    scan text a caller supplies, and there is none here before the provider call
+    happens (see crema.guardrails._GUARD_SKIP and client._transcribe's Hide-row
+    refusal). Every call is still logged to Crema Log and
     budget-checked, same as ask()/ocr(); reuses _ocr_impl._load_bytes for the
     File URL / raw-bytes read rather than duplicating it — which means a File URL is
     permission-checked as the calling (session) user, same as ocr() (see
@@ -600,8 +581,9 @@ def configure(
     same arguments changes nothing.
 
     Only these three fields: everything else on a Crema Model Assignment row (the
-    security flags, the system prompt, output_trap, ...) is intentionally left a desk
-    edit, not a second code-side surface over the same settings.
+    system prompt, the isolation user, ...) — and the whole Crema Guardrails list —
+    is intentionally left a desk edit, not a second code-side surface over the same
+    settings.
 
     Deliberately NOT @frappe.whitelist()'d, like health() — an admin/migration
     affordance, and Crema Settings is already System-Manager-gated in the desk. Setting
@@ -687,9 +669,8 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
     decorator's, which is per client IP, and _check_user_rate_limit's, which is per
     session user. Neither applies to in-process callers.
 
-    Internal interfaces (`security`, `advanced_ocr`) are refused here — crema drives
-    them itself; a caller who could address the `security` classifier directly would
-    have a jailbreak-calibration oracle.
+    Internal interfaces (`advanced_ocr`) are refused here — crema drives them itself
+    through ocr()'s escalation, never over HTTP.
 
     A blocked prompt, a budget stop, or a config error does not propagate as a
     generic 500/417 error page: all three are caught here (see _error_response) and
@@ -803,6 +784,27 @@ def get_interfaces() -> list[dict[str, str]]:
     which is core-only, so an app-registered interface shows its raw key."""
     frappe.only_for("System Manager")
     return [{"value": name, "label": interfaces.LABELS.get(name, name)} for name in interfaces.selectable()]
+
+
+@frappe.whitelist()
+def get_guardrails() -> list[dict[str, str]]:
+    """Relabels the Guardrail picker on Crema Guardrails and fills the form's check
+    list: {"value", "label", "help"} per registered guardrail. The values are already
+    in the doctype's meta (install.sync_guardrail_options) — this exists because a
+    frappe Select option string cannot carry a label separate from its value, and the
+    module's own one-line `help` has no other way onto the form."""
+    frappe.only_for("System Manager")
+    rows = []
+    for key in guardrails.registry():
+        module = guardrails._module(key)
+        rows.append(
+            {
+                "value": key,
+                "label": getattr(module, "label", None) or key,
+                "help": getattr(module, "help", "") or "",
+            }
+        )
+    return rows
 
 
 @frappe.whitelist()

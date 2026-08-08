@@ -32,7 +32,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `read_webhook_payload` | Check | Label **Use Webhook Data**. On by default. For a Webhook trigger. Reads what the caller sends as one more source. |
 | `sources` | Table (Crema Automation Source) | Label **Sources**. Required, except for a Webhook task that uses webhook data. One row per thing this task reads. See the field list below. |
 | `on_source_error` | Check | Label **Stop if a Source Fails**. Off by default. Shown when a task has more than one source. |
-| `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Security`, `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not offered — a task must never run as any of them. |
+| `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not offered — a task must never run as any of them. |
 | `run_as` | Link (User) | Label **Runs As**. The account this task acts as. Empty uses the account set for the AI profile. Not `Administrator`, not a System Manager, not a disabled user. |
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
 | `action` | Select | `Create or Update Records`, `Update the Records It Read`, or `No Changes`. |
@@ -159,9 +159,15 @@ The query reads the record's own fields only. It does not read child tables (the
 item lines of an invoice, for example) or comments. Switch on **Files** to also read
 the files attached to each record.
 
-When the interface's `enable_prompt_scan` is on, the run also scans each record on
-its own before the batch goes to the model, and drops any record the scan flags.
-`last_result` counts the drops — `(2 skipped by the security scan)`.
+When the Text Scan row applies to the task's use case, the run also scans each
+record on its own before the batch goes to the model, and drops any record the scan
+flags. `last_result` counts the drops — `(2 skipped by the security scan)`.
+
+When a Hide Personal Information row applies to the task's use case, the records
+read also feed masking: each record's title, the names and titles of the records it
+links to, and its phone and email fields become exact placeholders for that run.
+Several Document Query sources add their terms together. See
+[security.md](security.md#masking-experimental).
 
 A run whose sources produce no text at all stops before any LLM call, records
 `Success`, and stores `no new records` in `last_result`. A quiet night costs nothing, and does not
@@ -215,7 +221,7 @@ A File Query source has two things the others don't:
 
 A file Crema cannot read — anything that is not a PDF or a picture — is skipped and
 noted in `last_result`, the same as an unreadable attachment. A file whose text trips
-the security scan is skipped and noted too, rather than failing the whole run; its
+the scan is skipped and noted too, rather than failing the whole run; its
 siblings still import. See [security.md](security.md) for what the account in
 **Runs As** needs to be able to list files it does not own.
 

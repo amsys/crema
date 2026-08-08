@@ -1,0 +1,88 @@
+{
+ "actions": [],
+ "creation": "2026-08-08 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "guardrail",
+  "action",
+  "interfaces",
+  "section_guard",
+  "guard_provider",
+  "guard_model",
+  "guard_prompt"
+ ],
+ "fields": [
+  {
+   "columns": 3,
+   "description": "Which check this row runs. Add a row for every check you want, in the order you want them to run — drag the rows to reorder.",
+   "fieldname": "guardrail",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Guardrail",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "default": "Off",
+   "description": "What happens when this check finds a problem. Off — do not run the check. Log Only — note it and continue. Retry Once — try the request once more, then stop (only the Reply Check retries; the others treat this as Block). Block — stop the request.",
+   "fieldname": "action",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Action",
+   "options": "Off\nLog Only\nRetry Once\nBlock"
+  },
+  {
+   "columns": 4,
+   "description": "Leave empty to run this check for every use case. To limit it, list use-case keys separated by commas, for example: simple, extraction.",
+   "fieldname": "interfaces",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Use Cases"
+  },
+  {
+   "depends_on": "eval:doc.guardrail=='llm_guard'",
+   "fieldname": "section_guard",
+   "fieldtype": "Section Break",
+   "label": "AI Guard"
+  },
+  {
+   "columns": 2,
+   "depends_on": "eval:doc.guardrail=='llm_guard'",
+   "description": "Which AI service reads each request and judges whether it is safe. Leave empty to use the Default Provider.",
+   "fieldname": "guard_provider",
+   "fieldtype": "Link",
+   "label": "Checked By",
+   "options": "Crema Provider"
+  },
+  {
+   "columns": 2,
+   "depends_on": "eval:doc.guardrail=='llm_guard'",
+   "description": "Which model to use. Leave empty to use the Default Model. You can only pick one once this row has its own Checked By, because the list comes from that AI service.",
+   "fieldname": "guard_model",
+   "fieldtype": "Autocomplete",
+   "label": "Guard Model"
+  },
+  {
+   "depends_on": "eval:doc.guardrail=='llm_guard'",
+   "description": "The instructions the guard model reads. Leave empty to use Crema's built-in wording.",
+   "fieldname": "guard_prompt",
+   "fieldtype": "Long Text",
+   "label": "Guard Instructions"
+  }
+ ],
+ "links": [],
+ "modified": "2026-08-08 04:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Guardrail",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

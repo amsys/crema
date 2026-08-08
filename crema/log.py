@@ -38,11 +38,12 @@ def redact(text: str) -> str:
 def _drain_usage() -> dict[str, Any]:
     """Pop and reset the request-local usage accumulator client._record_usage fills.
 
-    Draining (not just reading) is what gives correct attribution for free: the
-    recursive `ask("security", ...)` guard call logs and drains before the outer call
-    resumes, so guard tokens land on the "security" row, not double-counted onto the
-    caller's own row. A call that never reached the provider (Blocked, a cache hit)
-    drains an accumulator nothing added to, i.e. all zeros.
+    Draining (not just reading) keeps attribution per logged row: everything billed
+    since the last row — including the AI guard's own call, which runs inside the
+    caller's pipeline and logs no row of its own — lands on the row that drains it,
+    so a guarded call shows llm_calls=2 with both calls' tokens and cost. A call that
+    never reached the provider (Blocked, a cache hit) drains an accumulator nothing
+    added to, i.e. all zeros.
     """
     acc = getattr(frappe.local, "crema_usage", None)
     frappe.local.crema_usage = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
@@ -58,6 +59,24 @@ def _drain_trap() -> str | None:
     leaks onto the next call's log row."""
     reason = getattr(frappe.local, "crema_trap", None)
     frappe.local.crema_trap = None
+    return reason
+
+
+def _drain_mask() -> str | None:
+    """Pop and reset the request-local EXPERIMENTAL masking miss reason
+    crema.guardrails._record_mask_miss sets on a non-blocking ("Log Only") unresolved
+    token or unmaskable content part. Same drain-on-every-call pattern as _drain_trap."""
+    reason = getattr(frappe.local, "crema_mask", None)
+    frappe.local.crema_mask = None
+    return reason
+
+
+def _drain_note() -> str | None:
+    """Pop and reset the request-local guardrail note crema.guardrails._record_note
+    sets (a Log Only scan hit, the AI guard's fail-open or "suspicious" verdict). Same
+    drain-on-every-call pattern as _drain_trap/_drain_mask."""
+    reason = getattr(frappe.local, "crema_note", None)
+    frappe.local.crema_note = None
     return reason
 
 
@@ -106,8 +125,10 @@ def insert(
 
     Token/cost/call-count fields come from crema.client._record_usage's request-local
     accumulator, drained here — callers never pass usage explicitly. A "Log Only"
-    output-trap miss is folded into `detail` the same way, but only on a Success row —
-    a Blocked/Error row already carries its own more specific detail string.
+    reply-check miss, a "Log Only" masking miss, and any other guardrail note (see
+    crema.guardrails._record_note) are folded into `detail` the same way, but only on
+    a Success row — a Blocked/Error row already carries its own more specific detail
+    string.
 
     The one exception to "never stores prompt content" is a developer_mode site, where
     the round trips client._record_transcript captured are attached to the row as a
@@ -115,9 +136,13 @@ def insert(
     """
     usage = _drain_usage()
     trap_reason = _drain_trap()
+    mask_reason = _drain_mask()
+    note_reason = _drain_note()
     transcript = _drain_transcript()
-    if trap_reason and status == "Success":
-        detail = trap_reason if not detail else f"{detail}; {trap_reason}"
+    if status == "Success":
+        for reason in (trap_reason, mask_reason, note_reason):
+            if reason:
+                detail = reason if not detail else f"{detail}; {reason}"
     try:
         doc = frappe.get_doc(
             {

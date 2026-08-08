@@ -39,7 +39,13 @@ _CONTENTLESS_TOKENS = {
 }
 _CONTENTLESS_PHRASES = {"happy_path"}
 
-_FIXTURE_HELPERS = {"_ensure_user", "_ensure_provider", "_ensure_interface"}
+_FIXTURE_HELPERS = {
+    "_ensure_user",
+    "_ensure_provider",
+    "_ensure_interface",
+    "_ensure_guardrails",
+    "_set_guardrail",
+}
 _CLEANUP_BASE = "CremaFixtureTestCase"
 _DB_BASES = {"IntegrationTestCase", _CLEANUP_BASE}
 _UNIT_BASES = {"UnitTestCase"}

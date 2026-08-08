@@ -7,9 +7,7 @@ impossible" boundary described in the app plan.
 
 from __future__ import annotations
 
-import json
 import re
-import secrets
 from typing import Any
 
 import requests
@@ -17,7 +15,6 @@ import requests
 import frappe
 from crema import cache, interfaces
 from crema import log as _log
-from crema._json import strip_fence
 from crema.exceptions import CremaBlockedError, CremaConfigError
 from frappe.utils.caching import redis_cache
 
@@ -58,14 +55,39 @@ def _load_from_db(name: str) -> dict[str, Any] | None:
         "model": doc.model or settings.default_model,
         "system_prompt": doc.system_prompt,
         "isolation_user": doc.isolation_user or settings.default_isolation_user,
-        "enable_prompt_scan": bool(doc.enable_prompt_scan),
-        "enable_llm_guard": bool(doc.enable_llm_guard),
-        "output_trap": doc.output_trap or "Off",
         "temperature": doc.temperature,
         "max_tokens": doc.max_tokens or 0,
         "cache_ttl": doc.cache_ttl or 0,
         "monthly_budget_usd": doc.monthly_budget_usd or settings.default_monthly_budget_usd or 0,
         "provider_budget_usd": provider.monthly_budget_usd or 0,
+    }
+
+
+def _scanner_cfg(provider_name: str | None, model: str | None) -> dict[str, Any]:
+    """A bare provider config for a guardrail's own scanner call (the AI Guard) — never
+    an interface's. `provider_name`/`model` come straight off the guardrail row; blank
+    falls back to Crema Settings' Default Provider/Model, same coalesce _load_from_db
+    uses for a Model Assignment row. A scanner is not a use case: it inherits no
+    interface's budget, standing instructions or isolation identity, only a provider to
+    call through. Raises CremaConfigError when the effective provider is missing or
+    disabled — same fail-loud contract as _resolve, checked again at save time by
+    CremaGuardrails._validate_guard."""
+    settings = frappe.get_cached_doc("Crema Settings")
+    resolved_name = provider_name or settings.default_provider
+    if not resolved_name or not frappe.db.exists("Crema Provider", resolved_name):
+        raise CremaConfigError(f"No usable AI service found for guard provider '{provider_name or ''}'")
+
+    provider = frappe.get_doc("Crema Provider", resolved_name)
+    if not provider.enabled:
+        raise CremaConfigError(f"AI service '{resolved_name}' is disabled")
+
+    return {
+        "provider": provider.provider_name,
+        "base_url": provider.base_url,
+        "timeout_seconds": provider.timeout_seconds,
+        "model": model or settings.default_model,
+        "temperature": 0,
+        "max_tokens": 0,
     }
 
 
@@ -90,28 +112,17 @@ def _prompt_for(interface: str) -> str:
     return (row and row.system_prompt) or interfaces.prompt_for(interface)
 
 
-def _own_security_flags(interface: str) -> dict[str, Any]:
-    """The requested interface's scan/guard/trap settings, read from its own
-    (possibly unconfigured) seeded row — a fallback lends its provider, never its
-    security posture. {} when the name has no row (a synthetic or app name whose
-    row isn't reconciled yet), leaving the fallback row's flags in place."""
-    row = _assignment_row(interface)
-    if row is None:
-        return {}
-    return {
-        "enable_prompt_scan": bool(row.enable_prompt_scan),
-        "enable_llm_guard": bool(row.enable_llm_guard),
-        "output_trap": row.output_trap or "Off",
-    }
-
-
 def _resolve(interface: str) -> dict[str, Any]:
     """Resolve an interface name to a config dict, walking interfaces.fallback_for()
     until a configured interface with an enabled provider is found.
 
-    "advanced_ocr" and "security" have no fallback entry — an unresolved
-    "advanced_ocr" means escalation is silently skipped by the caller; an
-    unresolved "security" is a fail-loud admin misconfiguration.
+    "advanced_ocr" has no fallback entry — an unresolved "advanced_ocr" means
+    escalation is silently skipped by the caller.
+
+    Every returned config carries `requested`: the interface name the caller actually
+    asked for, whatever the fallback walk resolved. The guardrails pipeline
+    (crema.guardrails) filters its rows by this name, never the fallback's — so a
+    fallback lends its provider, never the requested interface's security posture.
     """
     name = interface
     seen: set[str] = set()
@@ -121,14 +132,11 @@ def _resolve(interface: str) -> dict[str, Any]:
             if name != interface:
                 # The fallback lends provider/model/isolation_user (and, per
                 # api.health's contract, its billing identity). The requested
-                # interface keeps its own contract: the prompt, because view/
-                # transform/extraction emit strict JSON their callers parse and
-                # complex's generic prompt would yield unparseable prose — and the
-                # scan/guard/trap flags, because a fallback row with weaker
-                # settings must not switch off the requested interface's own
-                # security posture.
-                cfg = {**cfg, "system_prompt": _prompt_for(interface), **_own_security_flags(interface)}
-            return cfg
+                # interface keeps its own prompt, because view/transform/extraction
+                # emit strict JSON their callers parse and complex's generic prompt
+                # would yield unparseable prose.
+                cfg = {**cfg, "system_prompt": _prompt_for(interface)}
+            return {**cfg, "requested": interface}
 
         seen.add(name)
         fallback = interfaces.fallback_for(name)
@@ -188,79 +196,6 @@ def _record_usage(response: Any) -> None:
     acc["cost_usd"] += _as_number(hidden.get("response_cost"))
 
 
-# Layer 3 (the output trap): a per-call random nonce the model is told to echo back,
-# in a fixed position. Content-agnostic — unlike layer 1 (security.scan) and layer 2
-# (the LLM guard), it doesn't inspect the input at all, so it is the only layer that
-# also covers crema._ocr's calls, which bypass layers 1 and 2 on purpose (a regex/LLM
-# scan tuned for user prompts false-positives on arbitrary document text).
-#
-# Missing nonce -> the model stopped following crema's system prompt (hijack).
-# Nonce present but ALSO echoed elsewhere in the body -> the model is leaking its
-# system prompt back into its answer.
-_TRAP_TEXT = "Finish your reply with this exact token alone on the final line, nothing after it: {nonce}"
-_TRAP_JSON = (
-    'The JSON object you return must also contain the key "_crema" with the exact string value "{nonce}".'
-)
-
-
-def _arm_trap(messages: list[dict], nonce: str, response_format: dict | None) -> list[dict]:
-    """Return a NEW messages list (never mutates `messages`) with the layer-3
-    instruction appended to the system message, or prepended as a new one if
-    `messages[0]` isn't role=system."""
-    instruction = (_TRAP_JSON if response_format else _TRAP_TEXT).format(nonce=nonce)
-    if messages and messages[0].get("role") == "system":
-        armed = {**messages[0], "content": f"{messages[0]['content']}\n\n{instruction}"}
-        return [armed, *messages[1:]]
-    return [{"role": "system", "content": instruction}, *messages]
-
-
-def _spring_trap(content: str, nonce: str, response_format: dict | None) -> tuple[str, str | None]:
-    """Check `content` for the layer-3 nonce and strip it out. Returns
-    (best-effort-cleaned body, miss_reason | None) — never raises; `_complete` decides
-    what a miss means (log it, retry it, block it) per the interface's `output_trap`
-    setting.
-
-    JSON mode: the returned object must carry `{"_crema": nonce}`; that key is always
-    popped before the body is handed back, whether or not it matched, so a caller
-    never sees the trap's own plumbing. Every response_format call site in this app
-    uses free-form `{"type": "json_object"}`, so an extra key is legal everywhere.
-
-    Text mode: the last non-empty line must equal the nonce exactly.
-
-    Either mode: if the nonce still appears anywhere in the cleaned body, that's a
-    prompt-prompt leak, reported as its own reason even though the nonce was found in
-    the expected place too.
-    """
-    if response_format:
-        try:
-            parsed = json.loads(strip_fence(content))
-        except json.JSONDecodeError, TypeError:
-            return content, "trap: response not valid JSON"
-        if not isinstance(parsed, dict):
-            return content, "trap: response is not a JSON object"
-        found = parsed.pop("_crema", None)
-        body = json.dumps(parsed)
-        if found != nonce:
-            return body, "trap: nonce missing"
-    else:
-        lines = content.rstrip().splitlines()
-        if not lines or lines[-1].strip() != nonce:
-            return content, "trap: nonce missing"
-        body = "\n".join(lines[:-1]).rstrip()
-
-    if nonce in body:
-        return body, "trap: nonce echoed in body"
-    return body, None
-
-
-def _record_trap_miss(reason: str) -> None:
-    """Stash a non-blocking (Log Only) trap miss onto frappe.local, request-local like
-    _record_usage's crema_usage accumulator. crema.log.insert drains and clears this on
-    every logged row, folding it into that row's `detail` — so a Log Only miss is still
-    visible in the audit trail without changing the row's status away from Success."""
-    frappe.local.crema_trap = reason
-
-
 def _record_transcript(msgs: list[dict], content: str) -> None:
     """On a developer_mode site only, stash one provider round trip onto frappe.local so
     crema.log.insert can attach it to the Crema Log row as a comment.
@@ -282,60 +217,60 @@ def _record_transcript(msgs: list[dict], content: str) -> None:
 
 
 def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
-    """The only place a provider is actually called."""
+    """The only place a provider is actually called from caller code — every call
+    passes through the guardrails onion (crema.guardrails.run): masking, the AI
+    guard, and the reply check wrap _call_raw here, in the row order the Guardrails
+    doctype sets. Integration tests mock exactly this boundary."""
+    from crema import guardrails
+
+    return guardrails.run(cfg, messages, lambda msgs: _call_raw(cfg, msgs, response_format), response_format)
+
+
+def _call_raw(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
+    """The bare litellm.completion call — the single api_key touchpoint. No guardrail
+    runs here; only crema.guardrails may call it besides _complete's own closure (the
+    AI guard uses it directly, which is what makes guard recursion structurally
+    impossible)."""
     import litellm
 
-    def _call_once(msgs: list[dict]) -> str:
-        kwargs: dict[str, Any] = {
-            "model": f"openai/{cfg['model']}",
-            "messages": msgs,
-            "api_base": cfg["base_url"],
-            "api_key": _api_key(cfg["provider"]),
-            "timeout": cfg["timeout_seconds"],
-            "temperature": cfg["temperature"],
-            "num_retries": 1,
-        }
-        if response_format:
-            kwargs["response_format"] = response_format
-        if cfg.get("max_tokens"):
-            kwargs["max_tokens"] = cfg["max_tokens"]
+    kwargs: dict[str, Any] = {
+        "model": f"openai/{cfg['model']}",
+        "messages": messages,
+        "api_base": cfg["base_url"],
+        "api_key": _api_key(cfg["provider"]),
+        "timeout": cfg["timeout_seconds"],
+        "temperature": cfg["temperature"],
+        "num_retries": 1,
+    }
+    if response_format:
+        kwargs["response_format"] = response_format
+    if cfg.get("max_tokens"):
+        kwargs["max_tokens"] = cfg["max_tokens"]
 
-        response = litellm.completion(**kwargs)
-        _record_usage(response)
-        content = response.choices[0].message.content
-        _record_transcript(msgs, content)
-        return content
-
-    trap = cfg.get("output_trap") or "Off"
-    if trap == "Off":
-        return _call_once(messages)
-
-    nonce = secrets.token_hex(8)
-    body, miss = _spring_trap(_call_once(_arm_trap(messages, nonce, response_format)), nonce, response_format)
-
-    if miss is None or trap == "Log Only":
-        if miss:
-            _record_trap_miss(miss)
-        return body
-
-    if trap == "Retry Once":
-        nonce = secrets.token_hex(8)
-        body, miss = _spring_trap(
-            _call_once(_arm_trap(messages, nonce, response_format)), nonce, response_format
-        )
-        if miss is None:
-            return body
-        # Second miss falls through to Block below.
-
-    raise CremaBlockedError(miss)
+    response = litellm.completion(**kwargs)
+    _record_usage(response)
+    content = response.choices[0].message.content
+    _record_transcript(messages, content)
+    return content
 
 
 def _transcribe(
     cfg: dict[str, Any], audio: bytes, filename: str, mime: str, language: str | None = None
 ) -> dict[str, Any]:
     """The only place a provider's transcription endpoint is actually called —
-    audio's sibling of `_complete`. No output trap: there is no system prompt to
-    protect and no text instruction channel a nonce could ride along on."""
+    audio's sibling of `_complete`. No reply check: there is no system prompt to
+    protect and no text instruction channel a nonce could ride along on.
+
+    Audio bytes are the other channel masking (any guardrail with masks_text = True)
+    cannot reach — there is no text to hide anything in. A masking guardrail set to
+    Block refuses the call outright, same doctrine as the image-part guard; Log Only
+    proceeds unmasked, silently, since there is nothing to record a miss against."""
+    from crema import guardrails
+
+    interface = cfg.get("requested") or cfg.get("interface") or "transcribe"
+    if guardrails.blocks_unmaskable(interface):
+        raise CremaBlockedError("masking: audio content cannot be masked")
+
     import litellm
 
     kwargs: dict[str, Any] = {

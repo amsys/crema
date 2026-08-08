@@ -1,0 +1,69 @@
+{
+ "actions": [],
+ "autoname": "field:word",
+ "creation": "2026-08-08 05:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "word",
+  "column_break_status",
+  "language",
+  "enabled"
+ ],
+ "fields": [
+  {
+   "description": "A word or phrase to hide, on top of Crema's built-in English list. Must be unique.",
+   "fieldname": "word",
+   "fieldtype": "Data",
+   "label": "Word",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "The language this word is written in. Set automatically by Translate Built-in List; every enabled word is used whatever language the request is in.",
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Language",
+   "options": "Language"
+  },
+  {
+   "default": "1",
+   "description": "Switch off to stop this word being hidden, without deleting it. A word from Translate Built-in List arrives switched off for review.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  }
+ ],
+ "links": [],
+ "modified": "2026-08-08 05:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Health Word",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "word",
+ "track_changes": 1
+}

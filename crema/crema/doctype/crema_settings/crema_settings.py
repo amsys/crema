@@ -2,9 +2,9 @@
 doctype and the old 'Crema Settings' Page.
 
 Owns the cross-row rules the child doctype (Crema Model Assignment) can't see on its
-own: the interfaces.names() row set (core PREDEFINED + app-registered), the 'security'
-recursion guard, and the
-llm-guard-requires-a-configured-security-interface check.
+own: the interfaces.names() row set (core PREDEFINED + app-registered) and the
+provider/isolation-user pairing. The security-pipeline rules moved to the Crema
+Guardrails doctype (crema_guardrails.py) with the pipeline itself.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ class CremaSettings(Document):
             row.validate()
         validate_isolation_user(self.default_isolation_user, "Default Isolation User")
         self._validate_provider_isolation_pairing()
-        self._apply_security_guard_rules()
         self._warn_missing_models()
 
     def _validate_provider_isolation_pairing(self) -> None:
@@ -55,7 +54,7 @@ class CremaSettings(Document):
         reorder the rest. This is what makes the set "all present and fixed"; it
         replaces the old install.sync_interfaces insert loop. A newly-created
         app-registered row is seeded from its hook config (any Crema Model Assignment
-        fieldname — enable_prompt_scan, output_trap, max_tokens, ...) once, so an
+        fieldname — max_tokens, cache_ttl, ...) once, so an
         admin's later edits in the desk survive the next reconcile. "prompt", "fallback"
         and "label" are read separately (interfaces.prompt_for/fallback_for/label_for),
         not seeded onto the row: none of the three is a Crema Model Assignment
@@ -97,31 +96,6 @@ class CremaSettings(Document):
             item = _("'{0}': no Model set (row or Default Model).")
             lines = "".join(f"<li>{item.format(name)}</li>" for name in missing)
             frappe.msgprint(f"<ul>{lines}</ul>", indicator="orange", title=_("Missing Model"))
-
-    def _apply_security_guard_rules(self) -> None:
-        by_name = {row.interface: row for row in self.assignments}
-
-        security_row = by_name.get("security")
-        if security_row is not None:
-            # Recursion guard: the security interface can't guard itself.
-            security_row.enable_llm_guard = 0
-
-        # "security" has no fallback entry (interfaces.FALLBACKS) but IS covered by
-        # default_provider like every other interface — see client._load_from_db.
-        # A name alone isn't enough: a disabled provider makes every guarded call
-        # silently fail open at runtime, so check the provider is real and enabled.
-        security_provider = security_row and (security_row.provider or self.default_provider)
-        security_configured = bool(
-            security_provider and frappe.db.get_value("Crema Provider", security_provider, "enabled")
-        )
-        for row in self.assignments:
-            if row.interface == "security" or not row.enable_llm_guard:
-                continue
-            if not security_configured:
-                frappe.throw(
-                    f"'{row.interface}': enabling the LLM Guard requires a 'security' "
-                    "interface to be configured first."
-                )
 
     def on_update(self) -> None:
         cache.clear_interfaces()

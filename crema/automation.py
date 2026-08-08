@@ -52,7 +52,8 @@ import requests
 from croniter import croniter
 
 import frappe
-from crema import _ocr, api, client, log, policy, sandbox, security
+from crema import _ocr, api, client, guardrails, log, policy, sandbox, security
+from crema import terms as _terms
 from frappe.model import data_fieldtypes
 from frappe.utils import add_days, cint, now_datetime, strip_html
 
@@ -657,16 +658,30 @@ def _read_documents(
         return "", set(), "", read_up_to
 
     kept, dropped = rows, 0
-    if cfg["enable_prompt_scan"]:
-        # Triage, not the fence — api.ask_json still scans the assembled content. Without
-        # it one soft hyphen in one record blocks all 50, and five such runs disable the
-        # task. Only meaningful when the interface actually has layer 1 on.
+    interface = cfg.get("requested") or cfg.get("interface") or ""
+    if guardrails.active("scan", interface) != "Off":
+        # Triage, not the fence — api.ask_json's input gate still scans the assembled
+        # content. Without it one soft hyphen in one record blocks all 50, and five
+        # such runs disable the task. Only meaningful when the text scan actually
+        # applies to this task's interface.
         kept = [row for row in rows if not security.scan(frappe.as_json(row))]
         dropped = len(rows) - len(kept)
 
     notes = [f"{dropped} skipped by the security scan"] if dropped else []
     if not kept:
         return "", set(), "; ".join(notes), read_up_to
+
+    # Masking's term source (see crema.terms / crema.mask): harvested here, inside the
+    # caller's sandbox.isolation, and appended rather than replaced — a task with
+    # several Document Query sources calls _read_documents once per source, and each
+    # source's terms are as real as the last one's. Skipped when no Hide Personal
+    # Information row applies to this task's interface — the harvest is a
+    # get_doc-per-row cost not worth paying for a masking pass that will never run
+    # (guardrails.run drains the accumulator unconditionally either way).
+    if guardrails.active("pi", interface) != "Off":
+        term_groups = [g for row in kept for g in _terms.harvest(source.source_doctype, row["name"])]
+        if term_groups:
+            frappe.local.crema_terms = (getattr(frappe.local, "crema_terms", None) or []) + term_groups
 
     text = frappe.as_json(kept)
     if source.read_attachments:

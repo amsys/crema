@@ -15,8 +15,9 @@
 Crema gives every app in your bench one route to OpenAI-compatible LLM providers —
 OpenAI, OpenRouter, Groq, and about twenty more, hosted and local. A named **interface**
 (one per use-case: translation, OCR, extraction, ...) binds a provider, a model, a
-system prompt, an isolation user, and a security layer. Application code never names
-a provider — every call is `from crema import ask`.
+system prompt, and an isolation user; one ordered, site-wide guardrail list checks
+every request. Application code never names a provider — every call is
+`from crema import ask`.
 
 Crema is not a conversational agent, and a chatbot is out of scope — see
 [ROADMAP.md](ROADMAP.md).
@@ -54,7 +55,6 @@ affected record for you to confirm first. Full details in [docs/use.md](docs/use
 | `complex` | Careful reasoning for demanding tasks |
 | `ocr` | Text from images and scanned PDFs |
 | `advanced_ocr` | Stronger retry when `ocr` is unsure |
-| `security` | The guard: classifies a prompt's risk |
 | `extraction` | Structured data out of content |
 | `classification` | Classify or label content |
 | `summarization` | Short, accurate summaries |
@@ -69,9 +69,14 @@ can register their own — see [docs/configure.md](docs/configure.md).
 
 - **One entry point** — no public function accepts a model, provider, or API key;
   only an interface name.
-- **Three security layers** — a local prompt scan, an optional LLM guard, and an
-  output trap that catches a hijacked response
-  ([docs/security.md](docs/security.md)).
+- **Guardrails** — one ordered, pluggable list of safety checks on every request —
+  a local prompt scan, an optional AI guard, a reply check — each with its own
+  action and use-case filter, and a hook for an app to add its own check
+  ([docs/security.md](docs/security.md#guardrails)).
+- **Reversible masking (Experimental)** — two Hide guardrails swap personal values
+  (emails, phone numbers, likely names) and health keywords for placeholders before
+  a request leaves the server, then restore the real values in the reply
+  ([docs/security.md](docs/security.md#masking-experimental)).
 - **Isolation user sandbox** — document access runs as a low-privilege user, fenced
   by Frappe's own permission engine, plus a site-wide blocked-doctype list for the
   automation and desk write paths ([docs/security.md](docs/security.md)).

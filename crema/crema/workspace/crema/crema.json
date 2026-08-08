@@ -26,7 +26,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Setup",
-   "link_count": 2,
+   "link_count": 4,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -47,6 +47,26 @@
    "label": "Settings",
    "link_count": 0,
    "link_to": "Crema Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Guardrails",
+   "link_count": 0,
+   "link_to": "Crema Guardrails",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Health Words",
+   "link_count": 0,
+   "link_to": "Crema Health Word",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
@@ -100,7 +120,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-08-05 09:00:00.000000",
+ "modified": "2026-08-08 06:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema",
@@ -130,6 +150,13 @@
    "doc_view": "",
    "label": "Settings",
    "link_to": "Crema Settings",
+   "stats_filter": "[]",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "",
+   "label": "Guardrails",
+   "link_to": "Crema Guardrails",
    "stats_filter": "[]",
    "type": "DocType"
   },

@@ -21,7 +21,7 @@
   {
    "child": 0,
    "collapsible": 1,
-   "indent": 0,
+   "indent": 1,
    "keep_closed": 0,
    "label": "Setup",
    "link_type": "DocType",
@@ -53,9 +53,21 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "shield",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Guardrails",
+   "link_to": "Crema Guardrails",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
-   "indent": 0,
+   "indent": 1,
    "keep_closed": 0,
    "label": "Automation",
    "link_type": "DocType",
@@ -77,7 +89,7 @@
   {
    "child": 0,
    "collapsible": 1,
-   "indent": 0,
+   "indent": 1,
    "keep_closed": 0,
    "label": "Activity",
    "link_type": "DocType",
@@ -109,7 +121,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-08-04 12:00:00.000000",
+ "modified": "2026-08-08 06:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema",

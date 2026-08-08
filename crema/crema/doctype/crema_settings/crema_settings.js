@@ -154,8 +154,6 @@ function reset_assignments(frm) {
 		frappe.model.set_value(row.doctype, row.name, "monthly_budget_usd", 0);
 		frappe.model.set_value(row.doctype, row.name, "temperature", 0);
 		frappe.model.set_value(row.doctype, row.name, "cache_ttl", 0);
-		frappe.model.set_value(row.doctype, row.name, "enable_prompt_scan", 1);
-		frappe.model.set_value(row.doctype, row.name, "enable_llm_guard", 0);
 	});
 	frm.refresh_field("assignments");
 }

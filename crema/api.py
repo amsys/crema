@@ -744,6 +744,29 @@ def transform_api(doctype: str, name: str, instruction: str) -> dict:
 
 
 @frappe.whitelist()
+@rate_limit(limit=60, seconds=3600)
+def ocr_api(file_url: str) -> dict:
+    """HTTP entry point for `ocr()` — `POST /api/method/crema.api.ocr_api`.
+
+    Same gates as extract_api: either role, both rate limits (per client IP and per
+    session user), CremaBlockedError/CremaConfigError/CremaBudgetError -> structured
+    417 body. No `instruction` parameter — that stays a Python-caller affordance,
+    since this path deliberately skips layer 1 and layer 2 (see _ocr.py).
+
+    A File URL only — raw bytes are a Python-caller affordance, not an HTTP one.
+    """
+    frappe.only_for(("System Manager", "Crema User"))
+    _check_user_rate_limit()
+    if not isinstance(file_url, str):
+        frappe.throw(_("file_url must be a File URL string"))
+
+    try:
+        return ocr(file_url)
+    except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
+        return _error_response(exc)
+
+
+@frappe.whitelist()
 def get_models(provider: str) -> list[str]:
     """Feeds the Model Autocomplete on the Crema Settings Model Assignments grid."""
     frappe.only_for("System Manager")

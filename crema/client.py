@@ -13,7 +13,7 @@ from typing import Any
 import requests
 
 import frappe
-from crema import cache, interfaces
+from crema import cache, interfaces, policy
 from crema import log as _log
 from crema.exceptions import CremaBlockedError, CremaConfigError
 from frappe.utils.caching import redis_cache
@@ -60,6 +60,7 @@ def _load_from_db(name: str) -> dict[str, Any] | None:
         "cache_ttl": doc.cache_ttl or 0,
         "monthly_budget_usd": doc.monthly_budget_usd or settings.default_monthly_budget_usd or 0,
         "provider_budget_usd": provider.monthly_budget_usd or 0,
+        "per_user_budget_usd": settings.get("default_monthly_budget_usd_per_user") or 0,
     }
 
 
@@ -123,7 +124,12 @@ def _resolve(interface: str) -> dict[str, Any]:
     asked for, whatever the fallback walk resolved. The guardrails pipeline
     (crema.guardrails) filters its rows by this name, never the fallback's — so a
     fallback lends its provider, never the requested interface's security posture.
+
+    Raises CremaConfigError when the site-wide kill switch is enabled (policy.disabled).
     """
+    if policy.disabled():
+        raise CremaConfigError("crema is disabled")
+
     name = interface
     seen: set[str] = set()
     while True:

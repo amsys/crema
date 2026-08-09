@@ -100,10 +100,18 @@ class CremaFixtureTestCase(IntegrationTestCase):
         class that builds its fixtures directly (test_client's per-ttl interfaces)
         inherits whatever the site's Guardrails rows happen to say — on a freshly
         migrated site that is trap=Block everywhere, and every litellm-level mock
-        without a nonce dies with "trap: nonce missing"."""
+        without a nonce dies with "trap: nonce missing".
+
+        Also forces Crema Settings' disabled check off (the real site may have it on),
+        so no test accidentally sees a kill-switch CremaConfigError."""
         super().setUpClass()
         frappe.set_user("Administrator")
         _ensure_guardrails()
+        settings = frappe.get_single("Crema Settings")
+        if settings.get("disabled"):
+            _MODIFIED.append(("Crema Settings", settings.name, {"disabled": 1}))
+            settings.disabled = 0
+            settings.save(ignore_permissions=True)
         frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
 
     @classmethod
@@ -307,6 +315,7 @@ def _clear_defaults() -> None:
     settings.default_model = ""
     settings.default_isolation_user = ""
     settings.default_monthly_budget_usd = 0
+    settings.default_monthly_budget_usd_per_user = 0
     settings.save(ignore_permissions=True)
 
 

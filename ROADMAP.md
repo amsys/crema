@@ -82,25 +82,11 @@ Security hardening has its own list, in [docs/security.md](docs/security.md#plan
 
 #### Operations
 
-- **A kill switch.** No single flag turns crema off today — the nearest levers are
-  per-provider `enabled` and a spent budget, neither of which is a switch. One check —
-  a `Crema Settings` field or a `site_config` key, read at every `ask()` entry, in
-  `automation.on_doc_event`, and in the scheduler tick — that disables every LLM
-  feature on the site at once. A production incident needs seconds, not a deploy.
-- **Per-user spend ceilings.** The monthly budgets are site-wide, summed per interface
-  and per provider; the only per-user limit is the HTTP surface's 60-calls-per-hour
-  rate limit, which caps call count, not cost. `log.month_spend` gaining a user
-  dimension gives a per-user monthly ceiling beside the existing two.
-
 #### Retrieval
 
 - **Embeddings and document search.**
 
 #### Surface
-
-- **An HTTP endpoint for `ocr()`.** `ask_api`/`extract_api`/`transform_api` cover
-  `ask`/`extract`/`transform`, but a caller who only wants OCR text has no HTTP path.
-  Small — `extract_api` is the template to mirror.
 
 Explicitly, and permanently, out of scope: turning `crema` into a chatbot — a chat
 *surface* with its own session store, turn management, or UI. `ask(..., history=...)`

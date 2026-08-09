@@ -432,6 +432,26 @@ still readable everywhere Crema reads records today (a Document Query source, th
 desk assistant's "view" action), since reading was never the concern this list
 answers.
 
+## Kill switch
+
+Two flags, either one stops every LLM call:
+
+- **Crema Settings → Operations → Crema Is Off** — a Check field on the desk. Switch
+  it on and the next call is refused with `CremaConfigError`. The desk's own LLM
+  features (the robot button, the assistant) stop too.
+- **`site_config.json` key `crema_disabled`** — set it to `1` and the desk cannot
+  undo it. A restart is not necessary; the check is live on every call.
+
+Either flag kills; clearing both restores service. A killed call writes **no Crema
+Log row** — the budget stop logs `Blocked`, but a kill-switch stop logs silence
+(the alternative is five extra call sites to produce a log row for the one path
+that already raises).
+
+The kill switch does not touch: `automation.cleanup_logs` (retention must keep
+running), `client.check_connection` / `_fetch_models` (an admin needs the Providers
+panel during an incident), or `client._scanner_cfg` (the Guardrails form must be
+editable).
+
 ## Budgets
 
 Each interface has a `monthly_budget_usd` field (in Crema Settings' Use Cases
@@ -446,6 +466,18 @@ every interface that uses it. The system checks this in addition to the interfac
 own budget: whichever ceiling a call reaches first blocks it. `Crema Log.provider`
 records the effective provider on every row (blank on rows from before this field
 existed); the provider-level sum comes from that field.
+
+Crema Settings also has a `default_monthly_budget_usd_per_user` — a ceiling per
+user across all interfaces. The metered identity is `frappe.session.user`, the same
+identity `Crema Log.user` records. Two callers are exempt:
+
+- **The Administrator** — a currency ceiling that blocks `bench execute` is a
+debugging trap; the interface and provider ceilings still cap the spend.
+- **Automation runs** — inside `sandbox.isolation` the session user is the
+interface's isolation user, so every task would pool into one meaningless ceiling.
+
+The `crema_in_automation` flag on `frappe.local` tells `check_budget` to skip the
+per-user check.
 
 An OCR call that would escalate checks `advanced_ocr`'s own budget first. If that
 budget is already spent, the system skips the escalation and returns the first

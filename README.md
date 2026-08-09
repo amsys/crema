@@ -87,11 +87,11 @@ can register their own — see [docs/configure.md](docs/configure.md).
 - **Automation** — a task reads URLs, your own records, or uploaded files, plans
   once, and creates or updates records on a schedule, a document event, or a webhook
   ([docs/automation.md](docs/automation.md)).
-- **Cost control and audit** — monthly budgets, response caching, a usage dashboard,
-  and a tamper-evident audit row for every call — never the prompt or document
-  content itself.
-- **HTTP endpoints and admin UI** — rate-limited endpoints for `ask`, `extract`, and
-  `transform`, and one settings page with a provider template wizard
+- **Cost control and audit** — per-user, per-interface, and per-provider monthly
+  budgets, response caching, a usage dashboard, and a tamper-evident audit row for
+  every call — never the prompt or document content itself.
+- **HTTP endpoints and admin UI** — rate-limited endpoints for `ask`, `extract`,
+  `ocr`, and `transform`, and one settings page with a provider template wizard
   ([docs/use.md](docs/use.md)).
 
 ## Requirements

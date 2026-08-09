@@ -35,7 +35,8 @@ def seed_provider(
     Idempotent and non-overriding: a `name` provider that already exists is left as
     is, and `set_defaults` only fills a blank Crema Settings default, never replaces
     one already set — calling this twice, or on a site an admin already configured by
-    hand, changes nothing.
+    hand, changes nothing. Clears the disabled kill switch so _resolve does not raise
+    CremaConfigError for that reason.
 
     `base_url`'s default is a private address, so CremaProvider.validate needs no
     `api_key` to enable it (see crema/security.md's provider-key rule). Does not
@@ -71,6 +72,9 @@ def seed_provider(
             changed = True
         if not settings.default_isolation_user:
             settings.default_isolation_user = isolation_user
+            changed = True
+        if settings.get("disabled"):
+            settings.disabled = 0
             changed = True
         if changed:
             settings.save(ignore_permissions=True)

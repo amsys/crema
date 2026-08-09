@@ -131,6 +131,9 @@ def tick() -> None:
     mid-run cannot re-fire it) and the re-arm mechanism (move run_at forward and it is due
     again).
     """
+    if policy.disabled():
+        return
+
     now = now_datetime()
     for task in frappe.get_all(
         "Crema Automation Task",
@@ -205,7 +208,10 @@ def on_doc_event(doc, method: str) -> None:
     """
     if getattr(frappe.local, "crema_in_automation", False):
         return
-    for task in _event_tasks().get((doc.doctype, method), ()):
+    tasks = _event_tasks().get((doc.doctype, method), ())
+    if not tasks or policy.disabled():
+        return
+    for task in tasks:
         enqueue_task(task, doc_doctype=doc.doctype, doc_name=doc.name)
 
 
@@ -281,6 +287,9 @@ def run_task(
     trigger and narrow the matching document-query source to that one record; any other
     source is still read in full. `payload` is set by a webhook trigger and is read as one
     more source. Returns the recorded status."""
+    if policy.disabled():
+        return "Skipped"
+
     doc = frappe.get_doc("Crema Automation Task", task)
 
     # Captured before the read, and used as the new watermark for any source that did not

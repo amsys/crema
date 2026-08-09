@@ -28,7 +28,7 @@ function warn_if_referenced(frm) {
 
 			const parts = [];
 			if (is_default) parts.push(__("the Default Provider (and Default Model)"));
-			if (use_cases && use_cases.length) {
+			if (use_cases?.length) {
 				parts.push(__("the use case(s) {0}", [use_cases.map((u) => `'${u}'`).join(", ")]));
 			}
 			frm.dashboard.add_comment(

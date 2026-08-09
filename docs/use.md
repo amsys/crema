@@ -167,7 +167,7 @@ To set an interface's model, provider, or monthly budget from code instead of th
 
 ## HTTP endpoints
 
-Three call endpoints expose `ask`, `extract`, and `transform` over HTTP. All three
+Four call endpoints expose `ask`, `extract`, `ocr`, and `transform` over HTTP. All four
 need the `System Manager` role or the `Crema User` role. A set of System-Manager
 utility endpoints sits beside them — see the table further down.
 
@@ -187,6 +187,12 @@ utility endpoints sits beside them — see the table further down.
 | `doctype` | yes | |
 | `file_url` | yes | A File URL. Raw bytes are not accepted over HTTP. |
 | `instruction` | no | |
+
+### `POST /api/method/crema.api.ocr_api`
+
+| Parameter | Required | Notes |
+|---|---|---|
+| `file_url` | yes | A File URL. Raw bytes are not accepted over HTTP. |
 
 ### `POST /api/method/crema.api.transform_api`
 
@@ -243,10 +249,10 @@ All System Manager only, all `POST /api/method/<name>`:
 
 ### Rate limits
 
-Two limits guard the three call endpoints. Each endpoint allows 60 calls per hour
+Two limits guard the four call endpoints. Each endpoint allows 60 calls per hour
 per client IP; the buckets are separate per endpoint, so one IP can spend at most
-180 calls per hour across the three. Each session user gets one shared bucket of 60
-calls per hour across all three together. These limits do not apply to a Python
+240 calls per hour across the four. Each session user gets one shared bucket of 60
+calls per hour across all four together. These limits do not apply to a Python
 caller running in-process (bench console, a background job).
 
 ### Errors
@@ -265,8 +271,9 @@ the status code, to tell a security block apart from a budget/configuration stop
 
 A Python caller sees these as three distinct exception types. `CremaBlockedError`:
 the scan or the guard blocked the prompt. `CremaConfigError`: the interface does not
-resolve to a usable provider. `CremaBudgetError`: the interface's monthly budget is
-already spent this month — see [security.md](security.md#budgets). All three are
+resolve to a usable provider, or the kill switch is enabled. `CremaBudgetError`: the
+interface's, the provider's, or the user's monthly budget is already spent this
+month — see [security.md](security.md#budgets). All three are
 `frappe.ValidationError` subclasses, and over HTTP all three get the structured
 `{"blocked": bool, "reason": ...}` body above.
 

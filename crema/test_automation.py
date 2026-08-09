@@ -492,6 +492,50 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
         self.assertNotIn(task.name, {call.kwargs.get("task") for call in enqueue.call_args_list})
 
+    # --- kill switch --------------------------------------------------------
+
+    def test_tick_enqueues_nothing_when_disabled(self):
+        from crema import policy
+
+        due = _make_task(schedule="0 3 * * *")
+        due.db_set("last_run", add_to_date(now_datetime(), days=-2))
+
+        with patch.object(policy, "disabled", return_value=True), patch("frappe.enqueue") as enqueue:
+            automation.tick()
+
+        enqueue.assert_not_called()
+
+    def test_on_doc_event_enqueues_nothing_when_disabled(self):
+        from crema import cache, policy
+
+        cache.clear_event_tasks()
+        self.addCleanup(cache.clear_event_tasks)
+        _make_query_task(trigger="Document Event", event="On Update")
+        doc = SimpleNamespace(doctype="ToDo", name="some-todo")
+
+        with (
+            patch.object(policy, "disabled", return_value=True),
+            patch("crema.automation.enqueue_task") as enqueue,
+        ):
+            automation.on_doc_event(doc, "on_update")
+
+        enqueue.assert_not_called()
+
+    def test_run_task_returns_skipped_when_disabled(self):
+        from crema import policy
+
+        task = _make_task(schedule="0 3 * * *")
+        task.db_set("last_run", add_to_date(now_datetime(), days=-2))
+        task.db_set("last_status", "Success")
+
+        with patch.object(policy, "disabled", return_value=True), patch("frappe.db.commit"):
+            result = automation.run_task(task.name)
+
+        self.assertEqual(result, "Skipped")
+        task.reload()
+        self.assertEqual(task.last_status, "Success")  # untouched
+        self.assertEqual(task.consecutive_failures or 0, 0)  # not incremented
+
     # --- Once trigger --------------------------------------------------------
 
     @staticmethod

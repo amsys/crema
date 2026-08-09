@@ -607,6 +607,141 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertIn("provider", log.detail.lower())
         self.assertEqual(log.provider, TEST_PROVIDER)
 
+    # --- per-user monthly budget -------------------------------------------
+
+    def test_per_user_budget_blocks_a_second_call_by_the_same_user(self):
+        _ensure_interface("simple", cache_ttl=0, monthly_budget_usd=0)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_monthly_budget_usd_per_user = 5
+        settings.save(ignore_permissions=True)
+        from crema import cache as _cache
+
+        _cache.clear_interfaces()
+
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 5.0}
+
+        # Use the isolation user as the session user so the per-user check meters
+        # that identity (same one log.insert records inside the sandbox).
+        frappe.set_user(TEST_ISOLATION_USER)
+        try:
+            with patch("litellm.completion", return_value=response):
+                ask("simple", f"unique per-user budget prompt {uuid.uuid4().hex}")  # spends $5
+
+            with patch("crema.client._complete") as mock_complete:
+                with self.assertRaises(CremaBudgetError):
+                    ask("simple", f"unique over-per-user-budget prompt {uuid.uuid4().hex}")
+            mock_complete.assert_not_called()
+        finally:
+            frappe.set_user("Administrator")
+
+        log = frappe.get_last_doc("Crema Log", filters={"status": "Blocked"})
+        self.assertIn("User", log.detail)
+
+    def test_different_user_is_unaffected_by_another_users_spend(self):
+        _ensure_interface("simple", cache_ttl=0, monthly_budget_usd=0)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_monthly_budget_usd_per_user = 5
+        settings.save(ignore_permissions=True)
+        from crema import cache as _cache
+
+        _cache.clear_interfaces()
+
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 5.0}
+
+        # User A spends the ceiling
+        with patch("litellm.completion", return_value=response):
+            ask("simple", f"unique per-user budget prompt A {uuid.uuid4().hex}")
+
+        # User B is unaffected
+        frappe.set_user(TEST_ISOLATION_USER)
+        with patch("crema.client._complete", return_value="ok") as mock_complete:
+            result = ask("simple", f"unique per-user budget prompt B {uuid.uuid4().hex}")
+        frappe.set_user("Administrator")
+
+        self.assertEqual(result, "ok")
+        mock_complete.assert_called_once()
+
+    def test_administrator_is_exempt_from_per_user_budget(self):
+        _ensure_interface("simple", cache_ttl=0, monthly_budget_usd=0)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_monthly_budget_usd_per_user = 1
+        settings.save(ignore_permissions=True)
+        from crema import cache as _cache
+
+        _cache.clear_interfaces()
+
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 5.0}
+
+        # Administrator overspends the per-user budget
+        with patch("litellm.completion", return_value=response):
+            ask("simple", f"unique admin per-user prompt 1 {uuid.uuid4().hex}")
+        with patch("crema.client._complete", return_value="ok") as mock_complete:
+            result = ask("simple", f"unique admin per-user prompt 2 {uuid.uuid4().hex}")
+
+        self.assertEqual(result, "ok")
+        mock_complete.assert_called_once()
+
+    def test_automation_is_exempt_from_per_user_budget(self):
+        _ensure_interface("simple", cache_ttl=0, monthly_budget_usd=0)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_monthly_budget_usd_per_user = 1
+        settings.save(ignore_permissions=True)
+        from crema import cache as _cache
+
+        _cache.clear_interfaces()
+
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 5.0}
+
+        # Spend the ceiling as Administrator
+        with patch("litellm.completion", return_value=response):
+            ask("simple", f"unique automation exempt prompt 1 {uuid.uuid4().hex}")
+
+        # Under crema_in_automation, the per-user check is skipped
+        frappe.local.crema_in_automation = True
+        try:
+            with patch("crema.client._complete", return_value="ok") as mock_complete:
+                result = ask("simple", f"unique automation exempt prompt 2 {uuid.uuid4().hex}")
+        finally:
+            frappe.local.crema_in_automation = False
+
+        self.assertEqual(result, "ok")
+        mock_complete.assert_called_once()
+
+    def test_zero_per_user_budget_means_unlimited(self):
+        _ensure_interface("simple", cache_ttl=0, monthly_budget_usd=0)
+        settings = frappe.get_single("Crema Settings")
+        settings.default_monthly_budget_usd_per_user = 0
+        settings.save(ignore_permissions=True)
+        from crema import cache as _cache
+
+        _cache.clear_interfaces()
+
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 5.0}
+
+        with patch("litellm.completion", return_value=response):
+            ask("simple", f"unique unlimited per-user prompt {uuid.uuid4().hex}")
+
+        with patch("crema.client._complete", return_value="ok") as mock_complete:
+            result = ask("simple", f"unique still-unlimited per-user prompt {uuid.uuid4().hex}")
+
+        self.assertEqual(result, "ok")
+        mock_complete.assert_called_once()
+
     # --- list_models is untrusted third-party input --------------------------
 
     def test_list_models_drops_hostile_ids(self):

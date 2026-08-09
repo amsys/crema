@@ -1,14 +1,28 @@
-"""Site-wide write restrictions: the doctypes a System Manager has flagged as never
-writable by Crema, whatever an interface's own isolation user could otherwise reach.
+"""Site-wide restrictions: the disabled kill switch and the blocked-doctype list.
 
 Its own module, not automation.py or log.py, because both automation's plan validation
 and the desk UI's write-shape gating (via extend_bootinfo) consume the same list --
-neither side owns the other.
+neither side owns the other. The kill switch is here for the same reason: client._resolve
+and automation's three entry points all check it, and neither owns policy.
 """
 
 from __future__ import annotations
 
 import frappe
+from frappe.utils.data import cint
+
+
+def disabled() -> bool:
+    """True when the site-wide kill switch is set — either in site_config.json or on
+    Crema Settings' Check field. Either one kills; clearing both restores service.
+
+    site_config.json is checked first so a desk edit cannot undo a config-level kill.
+    cint is required because a JSON "0" is a truthy string.
+    """
+    return bool(
+        cint(frappe.conf.get("crema_disabled"))
+        or cint(frappe.get_cached_doc("Crema Settings").get("disabled"))
+    )
 
 
 def blocked_doctypes() -> set[str]:

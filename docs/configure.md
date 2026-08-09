@@ -248,8 +248,10 @@ As, the Use Cases grid's own budget field — stays a desk edit.
 | `default_model` | Autocomplete | Used by any row that leaves Model blank. Locked until Default Provider is set; lists that provider's models. |
 | `default_isolation_user` | Link (User) | Label **Default Runs-As User**. Used by any row that leaves Runs As blank. Seeded on install/migrate — see [install.md](install.md). |
 | `default_monthly_budget_usd` | Currency | Used by any row that leaves its own monthly budget at 0. 0 here too means unlimited. |
+| `default_monthly_budget_usd_per_user` | Currency | Label **Per-User Monthly Budget (USD)**. The most one user may spend per calendar month across all interfaces. Skipped for the Administrator and for automation runs. 0 means no per-user limit. |
 | `log_retention_days` | Int | Label **Keep Logs For (days)**. 30 by default. How long a Crema Log row survives before the daily cleanup job deletes it. |
 | `blocked_doctypes` | Table | Label **Blocked Doctypes**. Empty by default. Record types the AI may never create, edit, or delete — see "Block a doctype outright" below. |
+| `disabled` | Check | Label **Crema Is Off**. Switch this on to stop every LLM call. A kill in `site_config.json` (key `crema_disabled`) has the same effect and a desk edit cannot undo it. Either one kills; clearing both restores service. |
 
 ## Block a doctype outright
 

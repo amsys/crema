@@ -19,7 +19,10 @@ from crema.exceptions import CremaBudgetError, CremaConfigError
 from crema.test_fixtures import (
     TEST_PLAIN_USER,
     CremaFixtureTestCase,
+    _clear_defaults,
+    _drop_advanced_ocr,
     _ensure_user,
+    _text_pdf_bytes,
 )
 
 
@@ -242,6 +245,148 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
         with patch("crema.client._complete", return_value="ok") as mock_complete:
             ask_api("simple", "hello")
         self.assertIsNone(mock_complete.call_args.args[2])
+
+
+class IntegrationTestCremaKillSwitch(CremaFixtureTestCase):
+    """The site-wide kill switch: Crema Settings Check field and site_config.json key."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures("simple", users=(TEST_PLAIN_USER,))
+        settings = frappe.get_single("Crema Settings")
+        settings.disabled = 0
+        settings.save(ignore_permissions=True)
+
+    def setUp(self) -> None:
+        super().setUp()
+        from crema import cache
+
+        cache.clear_interfaces()
+
+    def tearDown(self) -> None:
+        frappe.local.response.pop("http_status_code", None)
+        frappe.set_user("Administrator")
+        # Restore
+        settings = frappe.get_single("Crema Settings")
+        settings.disabled = 0
+        settings.save(ignore_permissions=True)
+        super().tearDown()
+
+    def test_settings_disabled_field_returns_417(self):
+        settings = frappe.get_single("Crema Settings")
+        settings.disabled = 1
+        settings.save(ignore_permissions=True)
+
+        with patch("crema.client._complete") as mock_complete:
+            result = ask_api("simple", "hello")
+
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["reason"])
+        self.assertEqual(frappe.local.response.get("http_status_code"), 417)
+        mock_complete.assert_not_called()
+
+    def test_site_config_key_returns_417(self):
+        with patch.dict(frappe.conf, {"crema_disabled": 1}), patch("crema.client._complete") as mock_complete:
+            result = ask_api("simple", "hello")
+
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["reason"])
+        self.assertEqual(frappe.local.response.get("http_status_code"), 417)
+        mock_complete.assert_not_called()
+
+    def test_site_config_key_string_zero_does_not_kill(self):
+        """A JSON "0" is a truthy string — policy.disabled's cint must catch this."""
+        with (
+            patch.dict(frappe.conf, {"crema_disabled": "0"}),
+            patch("crema.client._complete", return_value="ok") as mock_complete,
+        ):
+            result = ask_api("simple", "hello")
+
+        self.assertEqual(result, {"result": "ok"})
+        mock_complete.assert_called_once()
+
+
+class IntegrationTestCremaOcrApi(CremaFixtureTestCase):
+    """crema.api.ocr_api — the whitelisted endpoint: role gate, rate limit, and
+    the 417 blocked-document shape, mirroring extract_api."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures("ocr", users=(TEST_PLAIN_USER,))
+
+    def setUp(self) -> None:
+        super().setUp()
+        _clear_defaults()
+        _drop_advanced_ocr()
+
+    def tearDown(self) -> None:
+        frappe.local.response.pop("http_status_code", None)
+        frappe.set_user("Administrator")
+        super().tearDown()
+
+    def test_role_guard_rejects_plain_user(self):
+        from crema.api import ocr_api
+
+        frappe.set_user(TEST_PLAIN_USER)
+        with self.assertRaises(frappe.PermissionError):
+            ocr_api("/files/whatever.pdf")
+
+    def test_rate_limit_decorator_is_applied(self):
+        import inspect
+
+        from crema.api import ocr_api
+
+        rate_limited = ocr_api.__wrapped__
+        nonlocals = inspect.getclosurevars(rate_limited).nonlocals
+        self.assertEqual(nonlocals.get("limit"), 60)
+        self.assertEqual(nonlocals.get("seconds"), 3600)
+
+    def test_blocked_document_returns_417_body(self):
+        from crema.api import ocr_api
+        from crema.exceptions import CremaBlockedError
+
+        file_doc = frappe.get_doc(
+            {
+                "doctype": "File",
+                "file_name": f"_test_crema_ocr_{uuid.uuid4().hex[:8]}.pdf",
+                "content": _text_pdf_bytes(),
+                "is_private": 0,
+            }
+        ).insert(ignore_permissions=True)
+
+        with patch("crema._ocr.ocr", side_effect=CremaBlockedError("reply check: nonce missing")):
+            result = ocr_api(file_doc.file_url)
+
+        self.assertTrue(result["blocked"])
+        self.assertTrue(result["reason"])
+        self.assertEqual(frappe.local.response.get("http_status_code"), 417)
+
+    def test_raw_bytes_are_refused(self):
+        from crema.api import ocr_api
+
+        with patch("crema.client._complete") as mock_complete:
+            with self.assertRaises(frappe.ValidationError):
+                ocr_api(_text_pdf_bytes())
+        mock_complete.assert_not_called()
+
+    def test_public_file_url_round_trip(self):
+        from crema.api import ocr_api
+
+        file_doc = frappe.get_doc(
+            {
+                "doctype": "File",
+                "file_name": f"_test_crema_ocr_{uuid.uuid4().hex[:8]}.pdf",
+                "content": _text_pdf_bytes(),
+                "is_private": 0,
+            }
+        ).insert(ignore_permissions=True)
+
+        with patch("crema.client._complete", return_value='{"text": "Hello world.", "confidence": 0.95}'):
+            result = ocr_api(file_doc.file_url)
+
+        self.assertEqual(result["text"], "Hello world.")
 
 
 class IntegrationTestCremaGrantRole(CremaFixtureTestCase):

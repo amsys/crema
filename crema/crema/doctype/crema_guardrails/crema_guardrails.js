@@ -20,12 +20,17 @@ frappe.ui.form.on("Crema Guardrails", {
 				toggle_guard_model_field(frm, grid_row.doc.doctype, grid_row.doc.name)
 			);
 		});
-		frappe.xcall("crema.api.get_guardrails")
+		frappe
+			.xcall("crema.api.get_guardrails")
 			.then((options) => {
 				const grid = frm.fields_dict.guardrails.grid;
 				const labels = Object.fromEntries(options.map((o) => [o.value, o.label]));
 				grid.update_docfield_property("guardrail", "options", options);
-				grid.update_docfield_property("guardrail", "formatter", (value) => labels[value] || value);
+				grid.update_docfield_property(
+					"guardrail",
+					"formatter",
+					(value) => labels[value] || value
+				);
 				grid.refresh();
 				render_check_list(frm, options);
 			})

@@ -15,7 +15,9 @@ frappe.listview_settings["Crema Health Word"] = {
 	add_fields: ["enabled"],
 
 	get_indicator(doc) {
-		return doc.enabled ? [__("On"), "green", "enabled,=,1"] : [__("Off"), "gray", "enabled,=,0"];
+		return doc.enabled
+			? [__("On"), "green", "enabled,=,1"]
+			: [__("Off"), "gray", "enabled,=,0"];
 	},
 
 	onload(listview) {
@@ -50,10 +52,10 @@ function crema_translate_health_words_dialog(on_done) {
 					dialog.hide();
 					const { added, skipped } = r.message || {};
 					frappe.msgprint(
-						__("Added {0} new word(s), switched off. Skipped {1} already on the list.", [
-							added || 0,
-							skipped || 0,
-						])
+						__(
+							"Added {0} new word(s), switched off. Skipped {1} already on the list.",
+							[added || 0, skipped || 0]
+						)
 					);
 					if (on_done) on_done();
 				},

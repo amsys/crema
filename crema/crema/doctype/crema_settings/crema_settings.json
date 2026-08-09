@@ -12,12 +12,15 @@
   "column_break_defaults",
   "default_isolation_user",
   "default_monthly_budget_usd",
+  "default_monthly_budget_usd_per_user",
   "section_assignments",
   "assignments",
   "section_logging",
   "log_retention_days",
   "section_restrictions",
-  "blocked_doctypes"
+  "blocked_doctypes",
+  "section_operations",
+  "disabled"
  ],
  "fields": [
   {
@@ -57,6 +60,13 @@
    "label": "Default Monthly Budget (USD)"
   },
   {
+   "default": "0",
+   "description": "The most one user may spend per calendar month across all interfaces. Skipped for the Administrator and for automation runs. 0 means no per-user limit.",
+   "fieldname": "default_monthly_budget_usd_per_user",
+   "fieldtype": "Currency",
+   "label": "Per-User Monthly Budget (USD)"
+  },
+  {
    "collapsible": 1,
    "collapsible_depends_on": "eval:(doc.assignments || []).some(r => r.provider || r.model || r.isolation_user)",
    "fieldname": "section_assignments",
@@ -93,6 +103,18 @@
    "fieldtype": "Table",
    "label": "Blocked Doctypes",
    "options": "Crema Blocked Doctype"
+  },
+  {
+   "fieldname": "section_operations",
+   "fieldtype": "Section Break",
+   "label": "Operations"
+  },
+  {
+   "default": "0",
+   "description": "Switch this on to stop every LLM call. A kill in site_config.json (key \"crema_disabled\") has the same effect and a desk edit cannot undo it.",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Crema Is Off"
   }
  ],
  "links": [],

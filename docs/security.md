@@ -565,36 +565,23 @@ guarantee this page already states.
   no crema app version. A silent provider-side model bump changes behaviour with no
   trail, and an incident cannot be replayed against the exact stack that produced it.
   Record both, and add the new fields to the log's tamper-evident `CHAIN_FIELDS`.
-- **Scan evasion resistance**, in order of value per unit of false-positive risk
-  added:
-  1. *Homoglyph folding — shipped, partially.* The look-alike-letter gap this page's
-     Known limits section describes: closing the rest needs a Unicode confusables-
-     skeleton pass.
-  2. *Separator squeezing* — `i g n o r e`, `ig-nore`, `ignore***previous` all defeat a
-     literal pattern today. Re-running the pattern loop over a second, whitespace- and
-     punctuation-collapsed copy of the text would catch them, at the cost of new false
-     positives on ordinary punctuated sentences — item 6 below has to ship first.
-  3. *Leet folding* (`1gn0re pr3v10us`), applied only to that same squeezed copy.
-  4. *Bounded decode-and-rescan* — an 80-character base64 run is blocked today, but a
-     40-character one that decodes to a blocked phrase is not. Decode base64, hex,
-     percent-, and HTML-entity-encoded, and ROT13 candidates once (no recursive
-     decoding), and rescan whatever decodes to mostly-printable ASCII.
-  5. *Score instead of first-match-wins* for paraphrased attacks ("set aside what you
-     were told before and follow this instead") that match no literal pattern —
-     keeping every literal pattern as an unconditional block and adding a scored
-     second layer over independent signals (an override verb, a reference to prior
-     instructions, a role assignment, a secrecy request). Highest ceiling on this
-     list, and the highest false-positive risk.
-  6. *A false-positive corpus and a shadow mode*, needed before any of 2–5 ship live:
-     a fixture set of ordinary business text that must stay clean, and a per-pattern
-     shadow flag that logs a "would have blocked" Crema Log row instead of raising —
-     the same `Log Only` → `Block` ladder every Guardrails row already uses.
-  7. *Language coverage* — every pattern today is English phrasing; a static
-     per-language pattern table is a data addition, not an architecture change, since
-     `scan()` has to stay free of a `frappe.local.lang` lookup.
-  8. *Not planned:* matching an LLM classifier's paraphrase recall in regex. The
-     scan is meant to be the cheap, deterministic, offline pre-filter; genuine
-     semantic paraphrase is the gateway's job.
+- **The scan's scope is frozen.** Text Scan stays exactly what it is today: a
+  deterministic, offline, fail-closed pre-filter — the invisible/bidi/control
+  character block, the long-base64 block, the four-step canonicalisation, and the
+  literal injection-pattern list, with no Frappe import and no network call. Nothing
+  on this list grows the scan into a second, fuzzier layer:
+  1. *Homoglyph folding — shipped, partially.* The remaining look-alike-letter gap
+     stays a **Known limit**, not a task — closing it needs a Unicode
+     confusables-skeleton pass, and nothing here schedules one.
+  2. *A false-positive corpus.* Any new literal pattern still needs a fixture set of
+     ordinary business text that must stay clean before it ships — the same
+     discipline every pattern here already needed.
+  3. *Not planned, on purpose:* separator squeezing, leet folding, decode-and-
+     rescan, a scored second layer, and per-language pattern tables. Each trades the
+     scan's one guarantee — deterministic and cheap enough to run before the answer
+     cache — for a fuzzier, costlier check. Genuine semantic paraphrase, and any
+     text-only check that needs a scored or learned signal, is the gateway's job —
+     see [Behind a gateway](#behind-a-gateway).
 
 ## Add a new scan pattern
 

@@ -1591,7 +1591,7 @@ class IntegrationTestCremaListColumns(IntegrationTestCase):
         self.assertEqual(meta.title_field, "provider_name")
         self.assertEqual(
             {df.fieldname for df in meta.fields if df.in_list_view},
-            {"base_url", "enabled", "monthly_budget_usd"},
+            {"base_url", "enabled"},
         )
 
 

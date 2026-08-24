@@ -389,6 +389,43 @@ If your check masks or otherwise hides content from the request, set
 `masks_text = True` on the module too. Audio and image attachments carry no text to
 hide anything in; this flag is what makes a row set to `Block` refuse such a call.
 
+**Worked example: a Presidio sidecar.** Crema's own masking uses patterns and
+record terms, not a named-entity model — see
+[docs/security.md#behind-a-gateway](security.md#behind-a-gateway) for why Presidio
+does not ship as a crema dependency. A site that wants NER-based masking with no
+gateway in front of it runs Presidio as its own service and calls it from a
+`before()`-only module:
+
+```python
+import requests
+
+class PresidioMask:
+    key = "presidio"
+    label = "Presidio (NER)"
+    help = "Masks names, locations, and organisations a real NER model finds."
+    default_action = "Off"
+    masks_text = True
+
+    def before(self, ctx):
+        for msg in ctx.messages or []:
+            if not isinstance(msg.get("content"), str):
+                continue
+            found = requests.post(
+                "http://presidio-analyzer:3000/analyze",
+                json={"text": msg["content"], "language": "en"},
+                timeout=5,
+            ).json()
+            if found:
+                msg["content"] = _redact(msg["content"], found)  # your own placeholder swap
+```
+
+`crema_guardrails = {"presidio": PresidioMask()}` in the app's `hooks.py` is then
+all that registers it. It has no `after()`: `_redact` here is a one-way swap with
+no reply-side restore, unlike crema's own reversible Hide rows. A reversible
+version would keep a per-row vault (mapping placeholder to real value) with
+`ctx.slot(ctx.row)`, the same way crema's own `_Mask` does, and put the real
+values back in an `after()`.
+
 After `bench migrate` the new key appears in the Guardrail picker; the admin adds a
 row and picks it, in whatever position they want. An app can never replace one of
 crema's own checks, and the first installed app wins a key collision.

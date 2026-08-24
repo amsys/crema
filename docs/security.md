@@ -28,14 +28,14 @@ checks also undo their own work on the reply: masking puts the real values back,
 the trap removes its token. That undo runs in reverse row order, automatically, and
 only for the rows that ran on the way in.
 
-The same check can appear on more than one row — two AI Guard rows checked by
-different services, or two of the same masking row filtered to different use cases.
-Each row keeps its own state; they do not share one verdict or one vault.
+The same check can appear on more than one row — for example two masking rows
+filtered to different use cases. Each row keeps its own state; they do not share
+one vault.
 
-Order carries meaning. The AI Guard makes a provider call of its own, so a Hide row
-above it masks what the guard sees, and a Hide row below it does not. The shipped
-default keeps both Hide rows above the AI Guard — move one below it and that guard
-receives unmasked content.
+Order carries meaning. The Reply Check must run last: its token is the last thing
+added to the outgoing request, and it must come off the reply before masking puts
+the real values back. The shipped default keeps the Reply Check after both Hide
+rows.
 
 Each row has an **Action** and a **Use Cases** filter:
 
@@ -53,7 +53,7 @@ asked for — a call served by a fallback keeps the requested use case's guardra
 Two positions in the list are fixed by design. The Text Scan runs before the answer
 cache and the budget check, so a cached reply can never bypass it — it is free and
 fails closed. Every other check runs after the cache and the budget check, so a
-cached or budget-stopped call never pays for a guard model call.
+cached or budget-stopped call never pays for a check that costs money.
 
 Two checks cannot reach audio: there is no text to scan or mask before the sound is
 sent. For the Transcribe use case, only a Hide guardrail set to `Block` has an
@@ -104,41 +104,13 @@ The scan is the **Text Scan** row on the Guardrails page. It is on (`Block`) for
 every use case by default. `Log Only` records a hit on the log row instead of
 blocking; use it to measure false positives on a use case before you decide.
 
-## The guard — AI Guard
+## Guarding against malicious intent
 
-The guard is optional: the **AI Guard** row on the Guardrails page, off by default.
-It sends the request's user text to a second model and reads back a risk label:
-benign, suspicious, or malicious. A malicious label follows the row's Action —
-`Block` fails the call, `Log Only` records the verdict and lets the call proceed,
-and `Retry Once` counts as `Block`. A suspicious label is recorded on the log row
-and the call proceeds.
-
-The row carries the guard's own instructions (**Guard Instructions** — edit them to
-tune the classifier) and its own AI service and model (**Checked By** / **Guard
-Model**, Crema Settings' Default Provider and Default Model when either is empty).
-The guard is a check, not a use case — it never borrows an interface's provider,
-budget, standing instructions, or Runs As account, only a place to send the request.
-The guard's tokens and cost land on the calling use case's own log row — a guarded
-call shows two model calls on one row — and count against the calling use case's
-budget, not the guard's own.
-
-The guard fails open: if the guard call errors, or its reply cannot be read, the
-original call proceeds and the log row records that it did. The scan and Frappe's
-own permission checks are the hard fence. The guard adds a second opinion, not a
-second fence.
-
-Two failures are not guard errors, and do not fail open. The scan always runs on the
-guard's own payload first and fails closed, whatever the row's Action. If
-the row's effective provider cannot resolve at all — no **Checked By**, and no
-Default Provider either — the call fails loudly with a configuration error; the
-Guardrails page rejects that state at save time for every AI Guard row that is not
-`Off`, so reaching it at call time means the configuration changed after the save.
-
-The guard never checks the OCR, Advanced OCR, and Transcribe use cases (their
-content is document text and audio, which the classifier is not tuned for), and it
-structurally cannot
-check itself — its own call goes straight to the provider, outside the guardrail
-list.
+Crema has no built-in AI guard. A second model call that reads only bare text has
+no Frappe context to add, and it costs money on every request. Run an LLM guard on
+your gateway — litellm-proxy's prompt-injection and LLM guardrails do this job — or
+plug in your own check through the `crema_guardrails` hook. See
+[Behind a gateway](#behind-a-gateway) below.
 
 ## The trap — Reply Check
 
@@ -148,13 +120,12 @@ a JSON reply. A missing token means the model has stopped following crema's own
 system prompt (a hijack). A token that appears a second time, somewhere else in the
 reply, means the model is echoing that system prompt back (a leak).
 
-Unlike the scan and the guard, the trap does not read the prompt or the context at
-all — it only reads what comes back. That makes it the only check that also covers
-`ocr()` and `extract()`, which skip the scan and the guard on purpose: both are
-tuned for user prompts and false-positive on arbitrary document text. `transcribe()`
-runs with no scan, no guard, and no trap — it has no system prompt to protect, so
-the trap has nothing to arm. The sandbox, the budget check, and the audit log are
-its fences.
+Unlike the scan, the trap does not read the prompt or the context at all — it only
+reads what comes back. That makes it the only check that also covers `ocr()` and
+`extract()`, which skip the scan on purpose: it is tuned for user prompts and
+false-positives on arbitrary document text. `transcribe()` runs with no scan and
+no trap — it has no system prompt to protect, so the trap has nothing to arm. The
+sandbox, the budget check, and the audit log are its fences.
 
 The trap is the **Reply Check** row on the Guardrails page, `Block` for every use
 case by default. Its Action follows the shared ladder: `Log Only` records a miss on
@@ -273,8 +244,6 @@ that for this account exactly as for any other.
 Every interface with no provider of its own resolves through Crema Settings'
 `default_provider`/`default_model`/`default_isolation_user` before falling back per the
 chain in [configure.md](configure.md#reference--interfaces-and-the-fallback-chain).
-Once `default_provider` is set, an AI Guard row with no **Checked By** of its own
-counts as configured too, so the guard becomes available without a separate step.
 
 A fallback walk never weakens a call. The requested interface keeps its own prompt
 and its own guardrails — every row is matched against the use case the caller asked
@@ -291,12 +260,8 @@ just the calling user's name.
 
 Every call that reaches the provider writes one row to the Crema Log. A cached hit
 writes its own row too (`status = Cached`), so hit rate is computable from the log
-alone. A guarded call writes only the calling interface's own row — the guard's
-tokens and cost fold into it (`llm_calls` says 2), and a guard that errors, or
-answers in a shape the system cannot read, adds a note on the same row recording the
-fail-open rather than a row of its own. An OCR call that escalates to `advanced_ocr`
-still writes one row, but its `llm_calls` says 2 — both provider calls are billed
-under it.
+alone. An OCR call that escalates to `advanced_ocr` still writes one row, but its
+`llm_calls` says 2 — both provider calls are billed under it.
 
 | Field | Notes |
 |---|---|
@@ -449,9 +414,8 @@ Log row** — the budget stop logs `Blocked`, but a kill-switch stop logs silenc
 that already raises).
 
 The kill switch does not touch: `automation.cleanup_logs` (retention must keep
-running), `client.check_connection` / `_fetch_models` (an admin needs the Providers
-panel during an incident), or `client._scanner_cfg` (the Guardrails form must be
-editable).
+running), or `client.check_connection` / `_fetch_models` (an admin needs the
+Providers panel during an incident).
 
 ## Budgets
 
@@ -631,7 +595,7 @@ guarantee this page already states.
      `scan()` has to stay free of a `frappe.local.lang` lookup.
   8. *Not planned:* matching an LLM classifier's paraphrase recall in regex. The
      scan is meant to be the cheap, deterministic, offline pre-filter; genuine
-     semantic paraphrase is the guard's job.
+     semantic paraphrase is the gateway's job.
 
 ## Add a new scan pattern
 

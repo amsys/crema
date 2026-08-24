@@ -249,12 +249,12 @@ def _ensure_interface(
     return name
 
 
-_GUARDRAIL_FIXTURE_FIELDS = ("action", "interfaces", "guard_provider", "guard_model", "guard_prompt")
+_GUARDRAIL_FIXTURE_FIELDS = ("action", "interfaces")
 
 # The suite's baseline posture: the scan on everywhere (matching the old
 # enable_prompt_scan=1 fixture default), everything else off — a test that wants the
-# trap, the guard, or masking switches exactly that one row on via _set_guardrail.
-_GUARDRAIL_BASELINE = {"scan": "Block", "llm_guard": "Off", "pi": "Off", "phi": "Off", "trap": "Off"}
+# trap or masking switches exactly that one row on via _set_guardrail.
+_GUARDRAIL_BASELINE = {"scan": "Block", "pi": "Off", "phi": "Off", "trap": "Off"}
 
 
 def _ensure_guardrails(**actions: str) -> None:
@@ -270,32 +270,18 @@ def _ensure_guardrails(**actions: str) -> None:
         _MODIFIED.append(("Crema Guardrail", row.name, {f: row.get(f) for f in _GUARDRAIL_FIXTURE_FIELDS}))
         row.action = desired[row.guardrail]
         row.interfaces = ""
-        row.guard_provider = ""
-        row.guard_model = ""
-        row.guard_prompt = ""
     doc.save(ignore_permissions=True)
 
 
-def _set_guardrail(
-    key: str,
-    action: str,
-    *,
-    interfaces_filter: str = "",
-    guard_provider: str = "",
-    guard_model: str = "",
-    guard_prompt: str = "",
-) -> None:
-    """Set one Crema Guardrail row's action (and optionally its use-case filter or the
-    AI Guard's own provider/model/prompt), tracked for restore like _ensure_interface's
-    row edits. Call after _ensure_guardrails() when a class needs a non-baseline row."""
+def _set_guardrail(key: str, action: str, *, interfaces_filter: str = "") -> None:
+    """Set one Crema Guardrail row's action (and optionally its use-case filter),
+    tracked for restore like _ensure_interface's row edits. Call after
+    _ensure_guardrails() when a class needs a non-baseline row."""
     doc = frappe.get_single("Crema Guardrails")
     row = next(r for r in doc.guardrails if r.guardrail == key)
     _MODIFIED.append(("Crema Guardrail", row.name, {f: row.get(f) for f in _GUARDRAIL_FIXTURE_FIELDS}))
     row.action = action
     row.interfaces = interfaces_filter
-    row.guard_provider = guard_provider
-    row.guard_model = guard_model
-    row.guard_prompt = guard_prompt
     doc.save(ignore_permissions=True)
 
 

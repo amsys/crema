@@ -1,25 +1,11 @@
-/* global crema_fetch_models */
 // An ordinary editable grid: rows may be added, deleted and dragged into order. The
 // Guardrail column is a Select (options stamped by install.sync_guardrail_options
 // from crema.guardrails.registry()) rather than free text, so a row can only ever name
 // a check this site actually has; crema.api.get_guardrails relabels it here the same
 // way crema_automation_task.js relabels the AI Profile picker, including formatting the
 // static (non-editing) cell so a friendly name shows without opening the dropdown.
-// Everything else — the Checked By -> Guard Model gating below — mirrors
-// crema_settings.js's Model Assignments grid, including its fall-through to Crema
-// Settings' Default Provider (crema.client._scanner_cfg does the same at call time),
-// fetched once per form load since this Single has no Settings fields of its own to
-// read it from.
-let default_provider = null;
-
 frappe.ui.form.on("Crema Guardrails", {
 	refresh(frm) {
-		frappe.db.get_single_value("Crema Settings", "default_provider").then((value) => {
-			default_provider = value;
-			frm.fields_dict.guardrails.grid.grid_rows.forEach((grid_row) =>
-				toggle_guard_model_field(frm, grid_row.doc.doctype, grid_row.doc.name)
-			);
-		});
 		frappe
 			.xcall("crema.api.get_guardrails")
 			.then((options) => {
@@ -35,16 +21,6 @@ frappe.ui.form.on("Crema Guardrails", {
 				render_check_list(frm, options);
 			})
 			.catch(() => {}); // fall through to the raw meta options, same as the task picker
-	},
-});
-
-frappe.ui.form.on("Crema Guardrail", {
-	form_render(frm, cdt, cdn) {
-		toggle_guard_model_field(frm, cdt, cdn);
-	},
-	guard_provider(frm, cdt, cdn) {
-		frappe.model.set_value(cdt, cdn, "guard_model", "");
-		toggle_guard_model_field(frm, cdt, cdn);
 	},
 });
 
@@ -79,15 +55,4 @@ function render_check_list(frm, options) {
 			${items}
 		</div>`
 	);
-}
-
-function toggle_guard_model_field(frm, cdt, cdn) {
-	const row = locals[cdt][cdn];
-	const grid_row = frm.fields_dict.guardrails.grid.grid_rows_by_docname[cdn];
-	if (!grid_row) return;
-	const effective_provider = row.guard_provider || default_provider;
-	const model_field = grid_row.get_field("guard_model");
-	model_field.df.read_only = !effective_provider;
-	model_field.refresh();
-	crema_fetch_models(effective_provider, (models) => model_field.set_data(models));
 }

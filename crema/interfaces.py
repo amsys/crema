@@ -11,8 +11,8 @@ import frappe
 # Interfaces that only crema itself may drive. "advanced_ocr" is an internal
 # escalation target reached through ocr(), never addressed directly. Also not
 # selectable for an automation task — a task should never run as it. (The old
-# "security" interface is gone: the AI guard is a Crema Guardrails row now, executed
-# through whichever configured interface that row names — see crema/guardrails.py.)
+# "security" interface is gone: it backed the AI guard, a text-only check that
+# now belongs on the gateway, not in crema — see docs/security.md.)
 INTERNAL = frozenset({"advanced_ocr"})
 
 # Selectable everywhere else, but never by an automation task, which drives its profile

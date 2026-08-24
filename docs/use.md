@@ -126,7 +126,7 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict
 Transcribe `file` — a File URL or raw audio bytes — with the `transcribe` interface's
 configured model. `language` is an optional ISO-639-1 hint (`"en"`, `"fr"`, ...); the
 provider still auto-detects when you omit it. This interface has no system prompt,
-so the scan and the guard do not run — there is no user-supplied text to scan before
+so the scan does not run — there is no user-supplied text to scan before
 the provider call happens — and the trap does not run either, because there
 is no system prompt to protect (see [security.md](security.md)). The system still
 checks the budget and logs every call to Crema Log. The interface has no fallback: a
@@ -270,7 +270,7 @@ returns `blocked: false` with a `reason` explaining what happened. Read `blocked
 the status code, to tell a security block apart from a budget/configuration stop.
 
 A Python caller sees these as three distinct exception types. `CremaBlockedError`:
-the scan or the guard blocked the prompt. `CremaConfigError`: the interface does not
+a guardrail (the scan, masking, or the trap) blocked the call. `CremaConfigError`: the interface does not
 resolve to a usable provider, or the kill switch is enabled. `CremaBudgetError`: the
 interface's, the provider's, or the user's monthly budget is already spent this
 month — see [security.md](security.md#budgets). All three are
@@ -377,11 +377,11 @@ view's extract preview; save it yourself.
 
 ### When a prompt is blocked, or a request fails
 
-A prompt the scan or the guard refuses — whether typed into a dialog, the search bar,
+A prompt a guardrail refuses — whether typed into a dialog, the search bar,
 or a document dropped for extraction — comes back as a red **Blocked** message giving
 the reason. The system sent nothing to the provider. The Crema Log still records the call,
 with status `Blocked`, so the block rate stays visible. See
-[security.md](security.md) for what the scan and the guard check.
+[security.md](security.md) for what each guardrail checks.
 
 A monthly budget already spent, or an interface that can't be resolved to a usable
 provider, likewise comes back as a red message naming the reason, titled **Crema**

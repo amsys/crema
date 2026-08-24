@@ -151,6 +151,32 @@ def _as_number(value: Any) -> float:
     return 0.0
 
 
+def _proxy_cost(hidden: dict[str, Any]) -> float | None:
+    """The cost a litellm-proxy in front of this call reported, or None when there
+    is none to read. Behind a proxy, litellm's own cost map is keyed by the SDK's
+    model name — a proxy-served custom model name resolves to 0 there, silently
+    breaking every budget. The proxy's own response carries the real figure in an
+    `x-litellm-response-cost` header; litellm's process_response_headers treats a
+    raw upstream header as untrusted and prefixes it `llm_provider-`, so check both
+    forms.
+
+    A real header value is always a string — the explicit isinstance check (not a
+    bare float() coercion) is what rejects a MagicMock test double the same way
+    _as_number does: MagicMock configures __float__ with a harmless-looking
+    non-zero default rather than raising, so float(a_magicmock) "succeeds" and
+    would silently invent a cost."""
+    headers = hidden.get("additional_headers")
+    if not isinstance(headers, dict):
+        return None
+    raw = headers.get("llm_provider-x-litellm-response-cost") or headers.get("x-litellm-response-cost")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _record_usage(response: Any) -> None:
     """Accumulate this call's usage onto frappe.local, request-local like
     _api_key's frappe.local.crema_keys memo. crema.log.insert drains and clears this
@@ -165,12 +191,13 @@ def _record_usage(response: Any) -> None:
 
     usage = getattr(response, "usage", None)
     hidden = getattr(response, "_hidden_params", None) or {}
+    proxy_cost = _proxy_cost(hidden)
 
     acc = frappe.local.crema_usage
     acc["llm_calls"] += 1
     acc["prompt_tokens"] += int(_as_number(getattr(usage, "prompt_tokens", 0)))
     acc["completion_tokens"] += int(_as_number(getattr(usage, "completion_tokens", 0)))
-    acc["cost_usd"] += _as_number(hidden.get("response_cost"))
+    acc["cost_usd"] += proxy_cost if proxy_cost is not None else _as_number(hidden.get("response_cost"))
 
 
 def _record_transcript(msgs: list[dict], content: str) -> None:

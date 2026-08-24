@@ -833,7 +833,7 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         self.assertEqual(reloaded.provider, TEST_PROVIDER)
 
     def test_sync_guardrails_seeds_defaults_once_and_never_resurrects_a_deleted_row(self):
-        """install.sync_guardrails seeds the five built-in rows, in _BUILTINS order,
+        """install.sync_guardrails seeds the built-in rows, in _BUILTINS order,
         the FIRST time it runs on a site — tracked by the Single's own `seeded` flag,
         not by the row set. Deleting a row afterward and running it again must not
         bring the row back: unlike the old auto-reconcile contract this replaced, the
@@ -1220,14 +1220,12 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
 class IntegrationTestCremaGuardrails(CremaFixtureTestCase):
     """CremaGuardrails.validate — _drop_orphans (the one row Frappe's own Select
     validation would otherwise brick the Single over), the use-case filter fence
-    (_validate_filters), _validate_guard (the needs-a-working-provider rule that
-    replaced the old CremaSettings._apply_security_guard_rules), and the _warn_audio
-    msgprint."""
+    (_validate_filters), and the _warn_audio msgprint."""
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        cls.ensure_fixtures("simple")  # _validate_guard's default provider target
+        cls.ensure_fixtures("simple")
 
     def test_saving_an_emptied_table_leaves_it_empty(self):
         """Unlike the old auto-reconcile, deleting every row and saving keeps the
@@ -1274,38 +1272,6 @@ class IntegrationTestCremaGuardrails(CremaFixtureTestCase):
 
         row = next(r for r in frappe.get_single("Crema Guardrails").guardrails if r.guardrail == "scan")
         self.assertEqual(row.interfaces, "simple, extraction, translation")
-
-    def test_enabling_the_ai_guard_without_a_resolvable_provider_is_rejected(self):
-        """An AI Guard row that cannot resolve a working provider — no Checked By of
-        its own, and no Default Provider either — must fail loud at save time, not
-        silently at call time. The old llm-guard-requires-a-configured-security-
-        interface rule, moved here and re-shaped around a provider instead of an
-        interface: the guard is a check, not a use case."""
-        _clear_defaults()  # blanks Crema Settings' Default Provider/Model
-
-        with self.assertRaises(frappe.ValidationError) as ctx:
-            _set_guardrail("llm_guard", "Block")
-        self.assertIn("AI Guard", str(ctx.exception))
-
-    def test_enabling_the_ai_guard_with_its_own_provider_saves(self):
-        _set_guardrail("llm_guard", "Block", guard_provider=TEST_PROVIDER, guard_model="test-model")
-
-        rows = frappe.get_single("Crema Guardrails").guardrails
-        self.assertEqual(next(r.action for r in rows if r.guardrail == "llm_guard"), "Block")
-
-    def test_enabling_the_ai_guard_with_a_configured_default_provider_saves(self):
-        """A guard row with no Checked By/Guard Model of its own still saves when
-        Crema Settings' Default Provider resolves — the same fallback
-        client._scanner_cfg gives any other caller."""
-        settings = frappe.get_single("Crema Settings")
-        settings.default_provider = TEST_PROVIDER
-        settings.default_model = "test-model"
-        settings.save(ignore_permissions=True)
-
-        _set_guardrail("llm_guard", "Block")  # blank guard_provider/guard_model
-
-        rows = frappe.get_single("Crema Guardrails").guardrails
-        self.assertEqual(next(r.action for r in rows if r.guardrail == "llm_guard"), "Block")
 
     def test_a_non_off_row_naming_transcribe_in_its_filter_warns_on_save(self):
         """_warn_audio — audio has no text to scan or mask, so a filter that names the

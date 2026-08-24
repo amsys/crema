@@ -70,7 +70,7 @@ can register their own — see [docs/configure.md](docs/configure.md).
 - **One entry point** — no public function accepts a model, provider, or API key;
   only an interface name.
 - **Guardrails** — one ordered, pluggable list of safety checks on every request —
-  a local prompt scan, an optional AI guard, a reply check — each with its own
+  a local prompt scan, a reply check — each with its own
   action and use-case filter, and a hook for an app to add its own check
   ([docs/security.md](docs/security.md#guardrails)).
 - **Reversible masking (Experimental)** — two Hide guardrails swap personal values

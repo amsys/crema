@@ -39,11 +39,10 @@ def _drain_usage() -> dict[str, Any]:
     """Pop and reset the request-local usage accumulator client._record_usage fills.
 
     Draining (not just reading) keeps attribution per logged row: everything billed
-    since the last row — including the AI guard's own call, which runs inside the
-    caller's pipeline and logs no row of its own — lands on the row that drains it,
-    so a guarded call shows llm_calls=2 with both calls' tokens and cost. A call that
-    never reached the provider (Blocked, a cache hit) drains an accumulator nothing
-    added to, i.e. all zeros.
+    since the last row lands on the row that drains it, so a call that retries or
+    escalates (a trap retry, an OCR escalation to advanced_ocr) shows llm_calls=2
+    with both calls' tokens and cost. A call that never reached the provider
+    (Blocked, a cache hit) drains an accumulator nothing added to, i.e. all zeros.
     """
     acc = getattr(frappe.local, "crema_usage", None)
     frappe.local.crema_usage = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
@@ -73,8 +72,8 @@ def _drain_mask() -> str | None:
 
 def _drain_note() -> str | None:
     """Pop and reset the request-local guardrail note crema.guardrails._record_note
-    sets (a Log Only scan hit, the AI guard's fail-open or "suspicious" verdict). Same
-    drain-on-every-call pattern as _drain_trap/_drain_mask."""
+    sets (a Log Only scan hit). Same drain-on-every-call pattern as
+    _drain_trap/_drain_mask."""
     reason = getattr(frappe.local, "crema_note", None)
     frappe.local.crema_note = None
     return reason

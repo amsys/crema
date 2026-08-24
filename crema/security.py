@@ -2,7 +2,7 @@
 
 `scan` is pure: no frappe imports, no I/O, just a canonicalization pass and compiled
 regexes over the prompt/context strings. Policy (block, log, filter by use case) lives
-in crema/guardrails.py, whose "scan" and "llm_guard" modules both call this.
+in crema/guardrails.py, whose "scan" module calls this.
 """
 
 from __future__ import annotations

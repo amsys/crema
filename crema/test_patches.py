@@ -17,13 +17,9 @@ from frappe.tests import IntegrationTestCase, UnitTestCase
 
 _COLUMNS = {
     "enable_prompt_scan": "int(1) not null default 0",
-    "enable_llm_guard": "int(1) not null default 0",
     "output_trap": "varchar(140)",
     "masking": "varchar(140)",
 }
-
-_LEGACY_SECURITY_ROW = "_test-legacy-security-row"
-_LEGACY_PROVIDER = "_Test Legacy Guard Service"
 
 
 def _clear_column_cache() -> None:
@@ -48,8 +44,8 @@ class UnitTestCremaMostSevere(UnitTestCase):
 
 class IntegrationTestCremaConsolidateGuardrails(IntegrationTestCase):
     """consolidate_guardrails.execute — checkbox folding, ladder folding with
-    most-severe-wins, the Use Cases filter union, the legacy security row's mapping
-    onto the AI Guard row, and the fresh-install early return."""
+    most-severe-wins, the Use Cases filter union, and the fresh-install early
+    return."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -64,18 +60,12 @@ class IntegrationTestCremaConsolidateGuardrails(IntegrationTestCase):
                     f"alter table `tabCrema Model Assignment` drop column `{column}`"
                 )
         _clear_column_cache()
-        frappe.db.delete("Crema Model Assignment", {"name": _LEGACY_SECURITY_ROW})
         doc = frappe.get_single("Crema Guardrails")
         for row in doc.guardrails:
             module = guardrails._BUILTINS.get(row.guardrail)
             row.action = module.default_action if module else "Off"
             row.interfaces = ""
-            row.guard_provider = ""
-            row.guard_model = ""
-            row.guard_prompt = ""
         doc.save(ignore_permissions=True)
-        if frappe.db.exists("Crema Provider", _LEGACY_PROVIDER):
-            frappe.delete_doc("Crema Provider", _LEGACY_PROVIDER, ignore_permissions=True, force=True)
         frappe.clear_document_cache("Crema Guardrails")
         frappe.clear_document_cache("Crema Settings")
         frappe.db.commit()  # nosemgrep: frappe-manual-commit — the DDL above already ended the transaction
@@ -153,27 +143,3 @@ class IntegrationTestCremaConsolidateGuardrails(IntegrationTestCase):
         self.assertEqual(self._guardrail_row("pi").action, "Log Only")
         self.assertEqual(self._filter_set(self._guardrail_row("pi")), {"simple"})
         self.assertEqual(self._guardrail_row("phi").action, "Off")
-
-    def test_legacy_security_row_maps_onto_the_ai_guard_row(self):
-        self._add_columns("enable_llm_guard")
-        frappe.get_doc(
-            {
-                "doctype": "Crema Provider",
-                "provider_name": _LEGACY_PROVIDER,
-                "base_url": "http://localhost:11434/v1",
-                "enabled": 1,
-            }
-        ).insert(ignore_permissions=True)
-        frappe.db.sql(
-            "insert into `tabCrema Model Assignment`"
-            " (name, parent, parenttype, parentfield, interface, system_prompt, provider, model)"
-            " values (%s, 'Crema Settings', 'Crema Settings', 'assignments', 'security', %s, %s, %s)",
-            (_LEGACY_SECURITY_ROW, "old guard prompt", _LEGACY_PROVIDER, "legacy-model"),
-        )
-        frappe.clear_document_cache("Crema Settings")
-        consolidate_guardrails.execute()
-        guard = self._guardrail_row("llm_guard")
-        self.assertEqual(guard.action, "Off")  # no interface had the guard on
-        self.assertEqual(guard.guard_prompt, "old guard prompt")
-        self.assertEqual(guard.guard_provider, _LEGACY_PROVIDER)
-        self.assertEqual(guard.guard_model, "legacy-model")

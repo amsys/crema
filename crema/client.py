@@ -113,7 +113,12 @@ def _resolve(interface: str) -> dict[str, Any]:
                 # emit strict JSON their callers parse and complex's generic prompt
                 # would yield unparseable prose.
                 cfg = {**cfg, "system_prompt": _prompt_for(interface)}
-            return {**cfg, "requested": interface}
+            # Stamped here, before any caller opens sandbox.isolation(cfg
+            # ["isolation_user"]) — frappe.session.user read after that point is the
+            # isolation user, not the real caller (see api.py's isolation blocks).
+            # Never cached: _resolve_one's redis cache is keyed by interface alone,
+            # and a cached caller_user would leak onto a later, different user's call.
+            return {**cfg, "requested": interface, "caller_user": frappe.session.user}
 
         seen.add(name)
         fallback = interfaces.fallback_for(name)
@@ -243,6 +248,8 @@ def _call_raw(cfg: dict[str, Any], messages: list[dict], response_format: dict |
         "timeout": cfg["timeout_seconds"],
         "temperature": cfg["temperature"],
         "num_retries": 1,
+        "user": cfg["caller_user"],
+        "metadata": {"tags": [cfg["interface"]]},
     }
     if response_format:
         kwargs["response_format"] = response_format
@@ -282,6 +289,8 @@ def _transcribe(
         "api_key": _api_key(cfg["provider"]),
         "timeout": cfg["timeout_seconds"],
         "response_format": "verbose_json",
+        "user": cfg["caller_user"],
+        "metadata": {"tags": [cfg["interface"]]},
     }
     if language:
         kwargs["language"] = language

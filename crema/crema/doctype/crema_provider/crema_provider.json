@@ -11,8 +11,7 @@
   "api_key",
   "column_break_status",
   "enabled",
-  "timeout_seconds",
-  "monthly_budget_usd"
+  "timeout_seconds"
  ],
  "fields": [
   {
@@ -55,14 +54,6 @@
    "fieldname": "timeout_seconds",
    "fieldtype": "Int",
    "label": "Wait Up To (seconds)"
-  },
-  {
-   "default": "0",
-   "description": "The most this service may cost per calendar month, added up across every use case that sends to it. 0 means no limit. A request that would go over is stopped before the service is called.",
-   "fieldname": "monthly_budget_usd",
-   "fieldtype": "Currency",
-   "in_list_view": 1,
-   "label": "Monthly Budget (USD)"
   }
  ],
  "links": [],

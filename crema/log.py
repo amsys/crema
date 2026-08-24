@@ -219,43 +219,40 @@ def verify_chain() -> dict[str, Any]:
 
 
 def month_spend() -> dict[str, dict[str, float]]:
-    """Every interface's, every provider's, and every user's total cost_usd since the
-    start of the current calendar month, in one query — used by check_budget (all three
-    ceilings) and api.get_usage (the Crema Settings grid's Usage column)."""
+    """Every interface's and every user's total cost_usd since the start of the
+    current calendar month, in one query — used by check_budget (both ceilings)
+    and api.get_usage (the Crema Settings grid's Usage column)."""
     from frappe.query_builder.functions import Sum
     from frappe.utils import get_first_day, now_datetime
 
     log = frappe.qb.DocType("Crema Log")
     rows = (
         frappe.qb.from_(log)
-        .select(log.interface, log.provider, log.user, Sum(log.cost_usd).as_("cost_usd"))
+        .select(log.interface, log.user, Sum(log.cost_usd).as_("cost_usd"))
         .where(log.creation >= get_first_day(now_datetime()))
-        .groupby(log.interface, log.provider, log.user)
+        .groupby(log.interface, log.user)
         .run(as_dict=True)
     )
     by_interface: dict[str, float] = {}
-    by_provider: dict[str, float] = {}
     by_user: dict[str, float] = {}
     for row in rows:
         cost = float(row.cost_usd or 0)
         if row.interface:
             by_interface[row.interface] = by_interface.get(row.interface, 0) + cost
-        if row.provider:
-            by_provider[row.provider] = by_provider.get(row.provider, 0) + cost
         if row.user:
             by_user[row.user] = by_user.get(row.user, 0) + cost
-    return {"interface": by_interface, "provider": by_provider, "user": by_user}
+    return {"interface": by_interface, "user": by_user}
 
 
 def check_budget(cfg: dict[str, Any]) -> None:
-    """Raise CremaBudgetError if `cfg`'s interface, provider, or calling user has
-    already spent its monthly budget this calendar month. 0 (the default) means unlimited.
+    """Raise CremaBudgetError if `cfg`'s interface or calling user has already
+    spent its monthly budget this calendar month. 0 (the default) means unlimited.
 
     Per-user: the metered identity is frappe.session.user — the same identity
     log.insert records. Skipped for Administrator (a currency ceiling that blocks
-    bench execute is a debugging trap; the interface and provider ceilings still cap
-    the spend) and for automation runs (where the session user is the isolation user,
-    pooling every task into one meaningless ceiling).
+    bench execute is a debugging trap; the interface ceiling still caps the spend)
+    and for automation runs (where the session user is the isolation user, pooling
+    every task into one meaningless ceiling).
 
     Called after the cache-hit branch (a cache hit spends nothing and must not be
     blocked) and before the provider is ever called. Note: after a fallback walk,
@@ -268,12 +265,6 @@ def check_budget(cfg: dict[str, Any]) -> None:
     interface_budget = cfg.get("monthly_budget_usd") or 0
     if interface_budget and spend["interface"].get(cfg["interface"], 0) >= interface_budget:
         raise CremaBudgetError(f"'{cfg['interface']}': monthly budget of ${interface_budget} already spent.")
-
-    provider_budget = cfg.get("provider_budget_usd") or 0
-    if provider_budget and spend["provider"].get(cfg.get("provider"), 0) >= provider_budget:
-        raise CremaBudgetError(
-            f"Provider '{cfg.get('provider')}': monthly budget of ${provider_budget} already spent."
-        )
 
     per_user_budget = cfg.get("per_user_budget_usd") or 0
     if (

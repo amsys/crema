@@ -46,7 +46,6 @@ delete is done.
 | `api_key` | Password | Required to enable, unless the base URL is local or private. |
 | `enabled` | Check | Off by default. |
 | `timeout_seconds` | Int | Label **Wait Up To (seconds)**. 60 by default. Raise this for a local or self-hosted provider, for example Ollama on CPU. |
-| `monthly_budget_usd` | Currency | 0 (default) means unlimited. A combined ceiling across every interface using this provider — see [security.md](security.md#budgets). |
 
 ## Procedure B — set the defaults (the fast path)
 

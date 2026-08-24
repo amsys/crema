@@ -949,7 +949,23 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertEqual(kwargs["timeout"], cfg["timeout_seconds"])
         self.assertEqual(kwargs["temperature"], cfg["temperature"])
         self.assertEqual(kwargs["num_retries"], 1)
+        self.assertEqual(kwargs["user"], frappe.session.user)
+        self.assertEqual(kwargs["metadata"], {"tags": [cfg["interface"]]})
         self.assertNotIn("response_format", kwargs)
+
+    def test_stamped_user_is_the_real_caller_not_the_isolation_user(self):
+        """_call_raw runs inside sandbox.isolation(cfg["isolation_user"]) — by the
+        time it fires, frappe.session.user IS the isolation user, not whoever called
+        ask(). client._resolve must capture the real caller before that switch (see
+        its "caller_user" comment); this proves ask()'s own call path does, not just
+        a hand-built cfg."""
+        self.assertNotEqual(frappe.session.user, TEST_ISOLATION_USER)
+        with patch("litellm.completion") as mock_completion:
+            mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content="hi"))])
+            ask("simple", "hello")
+
+        kwargs = mock_completion.call_args.kwargs
+        self.assertEqual(kwargs["user"], "Administrator")
 
     def test_complete_passes_max_tokens_when_set(self):
         cfg = {**client._resolve("simple"), "max_tokens": 500}

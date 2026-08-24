@@ -136,6 +136,8 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
         self.assertEqual(kwargs["api_key"], client._api_key(cfg["provider"]))
         self.assertEqual(kwargs["timeout"], cfg["timeout_seconds"])
         self.assertEqual(kwargs["response_format"], "verbose_json")
+        self.assertEqual(kwargs["user"], frappe.session.user)
+        self.assertEqual(kwargs["metadata"], {"tags": [cfg["interface"]]})
         self.assertNotIn("language", kwargs)
 
     def test_transcribe_filename_carries_an_extension_for_a_known_mime(self):

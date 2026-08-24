@@ -275,9 +275,9 @@ class _Ask:
             _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha)
             raise
 
-        # The AI guard, masking, and the reply check all run inside client._complete's
-        # guardrails onion (crema.guardrails.run) — after the cache and the budget
-        # check, so a cached or budget-stopped call never bills a guard model call.
+        # Masking and the reply check both run inside client._complete's guardrails
+        # onion (crema.guardrails.run) — after the cache and the budget check, so a
+        # cached or budget-stopped call never bills a check that costs money.
         messages = _build_messages(cfg, prompt, context, history)
 
         start = time.monotonic()
@@ -287,8 +287,8 @@ class _Ask:
                 result = client._complete(cfg, messages, response_format)
         except CremaBlockedError as exc:
             # Raisers: any guardrail inside client._complete's onion (a reply-check
-            # miss, an unrestorable mask token, a malicious AI-guard verdict), and the
-            # gate over a file's extracted text just above. Logged as Blocked, not
+            # miss, an unrestorable mask token), and the gate over a file's extracted
+            # text just above. Logged as Blocked, not
             # Error, so a block is distinguishable from a provider failure in the
             # audit log — that distinction is what makes each guardrail's
             # false-positive rate measurable.
@@ -463,11 +463,10 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, A
     "language": str | None, "duration": float | None}.
 
     No system prompt exists for this interface (see interfaces.PREDEFINED/
-    DEFAULT_PROMPTS), so the text scan and the AI guard don't run — same reasoning
-    crema._ocr's module docstring gives for OCR'd document content: those guardrails
-    scan text a caller supplies, and there is none here before the provider call
-    happens (see crema.guardrails._GUARD_SKIP and client._transcribe's Hide-row
-    refusal). Every call is still logged to Crema Log and
+    DEFAULT_PROMPTS), so the text scan doesn't run — same reasoning crema._ocr's
+    module docstring gives for OCR'd document content: the scan checks text a
+    caller supplies, and there is none here before the provider call happens (see
+    client._transcribe's Hide-row refusal). Every call is still logged to Crema Log and
     budget-checked, same as ask()/ocr(); reuses _ocr_impl._load_bytes for the
     File URL / raw-bytes read rather than duplicating it — which means a File URL is
     permission-checked as the calling (session) user, same as ocr() (see

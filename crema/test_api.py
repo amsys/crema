@@ -140,11 +140,12 @@ class IntegrationTestCremaAskApi(CremaFixtureTestCase):
                 mock_complete.assert_not_called()
 
     def test_the_removed_security_name_fails_as_an_ordinary_config_error(self):
-        """ "security" is not an interface anymore — the layer-2 guard moved into the
-        llm_guard guardrail (crema.guardrails), so the old internal-interface refusal
-        (which kept it from becoming a jailbreak-calibration oracle) is gone. The name
-        now resolves like any other unknown one: no assignment row, no fallback, and
-        ask() returns the structured 417 config-error body with blocked False."""
+        """ "security" is not an interface anymore — it used to back the layer-2 AI
+        guard, since removed (see docs/security.md), so the old internal-interface
+        refusal (which kept it from becoming a jailbreak-calibration oracle) is gone.
+        The name now resolves like any other unknown one: no assignment row, no
+        fallback, and ask() returns the structured 417 config-error body with blocked
+        False."""
         with patch("crema.client._complete") as mock_complete:
             result = ask_api("security", "hello")
 

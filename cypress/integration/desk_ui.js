@@ -920,7 +920,6 @@ context("Crema Guardrails", () => {
 				"Text Scan",
 				"Hide Personal Information",
 				"Hide Health Information",
-				"AI Guard",
 				"Reply Check",
 			]) {
 				cy.contains("strong", label).should("be.visible");

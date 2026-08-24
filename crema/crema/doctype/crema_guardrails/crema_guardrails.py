@@ -1,8 +1,6 @@
 """Crema Guardrails controller — the Single holding the ordered guardrail list.
 
-Owns the rules a child row can't see on its own: the use-case filter tokens, and each
-AI Guard row's needs-a-working-provider check (which replaced the old
-llm-guard-requires-a-configured-security-interface rule on Crema Settings). Friendly
+Owns the rules a child row can't see on its own: the use-case filter tokens. Friendly
 labels for the registry (built-ins plus every app-registered guardrail) come from
 crema.guardrails.label_for — display only, never stored.
 
@@ -30,7 +28,6 @@ from __future__ import annotations
 import frappe
 from crema import guardrails as _guardrails
 from crema import interfaces
-from crema.exceptions import CremaConfigError
 from frappe import _
 from frappe.model.document import Document
 
@@ -39,7 +36,6 @@ class CremaGuardrails(Document):
     def validate(self) -> None:
         self._drop_orphans()
         self._validate_filters()
-        self._validate_guard()
         self._warn_audio()
 
     def _drop_orphans(self) -> None:
@@ -62,26 +58,6 @@ class CremaGuardrails(Document):
                     )
                 )
             row.interfaces = ", ".join(tokens)
-
-    def _validate_guard(self) -> None:
-        """Every non-Off AI Guard row (there may be more than one) that cannot resolve
-        a working provider fails loud at save time, not silently at call time — same
-        intent as the old Crema Settings rule, moved here with the guard itself."""
-        from crema import client
-
-        for row in self.guardrails:
-            if row.guardrail != "llm_guard" or (row.action or "Off") == "Off":
-                continue
-            try:
-                client._scanner_cfg(row.guard_provider, row.guard_model)
-            except CremaConfigError:
-                frappe.throw(
-                    _(
-                        "The AI Guard row '{0}' needs a working AI service to run on. Give it a "
-                        "Checked By and a Guard Model, set a Default Provider in Crema Settings, "
-                        "or set this row to Off."
-                    ).format(_guardrails.label_for(row.guardrail))
-                )
 
     def _warn_audio(self) -> None:
         """Audio has no text to scan or mask before it is sent — warn (don't block) when

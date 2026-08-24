@@ -205,9 +205,9 @@ def _run(cfg: dict[str, Any], user_message: dict, response_format: dict) -> tupl
     if (adv_cfg["provider"], adv_cfg["model"]) == (cfg["provider"], cfg["model"]):
         return {"text": text, "confidence": confidence or 0.0, "escalated": False}, cfg
 
-    # Escalation spends against advanced_ocr's own interface/provider ceilings, not
-    # ocr's (already checked by our caller) — enforce them before the second provider
-    # call. Over budget, the paid-for base result is served instead of the retry, same
+    # Escalation spends against advanced_ocr's own interface ceiling, not ocr's
+    # (already checked by our caller) — enforce it before the second provider call.
+    # Over budget, the paid-for base result is served instead of the retry, same
     # shape as the unresolvable-advanced_ocr skip above.
     try:
         _log.check_budget(adv_cfg)

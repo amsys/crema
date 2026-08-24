@@ -831,12 +831,12 @@ def get_guardrails() -> list[dict[str, str]]:
 
 @frappe.whitelist()
 def get_usage() -> dict[str, Any]:
-    """Month-to-date spend and effective budget for every interface and every
-    provider — feeds the Usage column on Crema Settings' Model Assignments grid and
-    the Providers panel. budget 0 means unlimited.
+    """Month-to-date spend and effective budget for every interface — feeds the
+    Usage column on Crema Settings' Model Assignments grid. budget 0 means
+    unlimited. A provider carries no budget of its own (that ceiling moved to the
+    gateway), so this reports interfaces only.
 
-    {"interfaces": {name: {"spend": float, "budget": float}},
-     "providers": {name: {"spend": float, "budget": float}}}
+    {"interfaces": {name: {"spend": float, "budget": float}}}
     """
     frappe.only_for("System Manager")
     settings = frappe.get_cached_doc("Crema Settings")
@@ -849,11 +849,7 @@ def get_usage() -> dict[str, Any]:
         }
         for row in settings.assignments
     }
-    providers_usage = {
-        p.name: {"spend": spend["provider"].get(p.name, 0), "budget": p.monthly_budget_usd or 0}
-        for p in frappe.get_all("Crema Provider", fields=["name", "monthly_budget_usd"])
-    }
-    return {"interfaces": interfaces_usage, "providers": providers_usage}
+    return {"interfaces": interfaces_usage}
 
 
 @frappe.whitelist()

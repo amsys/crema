@@ -426,20 +426,19 @@ calendar month reaches its effective budget, the system blocks the next call on 
 interface before it reaches the provider — `CremaBudgetError`, logged as a `Blocked`
 row.
 
-Each Crema Provider also has its own `monthly_budget_usd` — a combined ceiling across
-every interface that uses it. The system checks this in addition to the interface's
-own budget: whichever ceiling a call reaches first blocks it. `Crema Log.provider`
-records the effective provider on every row (blank on rows from before this field
-existed); the provider-level sum comes from that field.
-
 Crema Settings also has a `default_monthly_budget_usd_per_user` — a ceiling per
 user across all interfaces. The metered identity is `frappe.session.user`, the same
 identity `Crema Log.user` records. Two callers are exempt:
 
 - **The Administrator** — a currency ceiling that blocks `bench execute` is a
-debugging trap; the interface and provider ceilings still cap the spend.
+debugging trap; the interface ceiling still caps the spend.
 - **Automation runs** — inside `sandbox.isolation` the session user is the
 interface's isolation user, so every task would pool into one meaningless ceiling.
+
+A provider has no budget of its own — a provider is an infrastructure identity, and
+that ceiling belongs on the gateway in front of it (see [Behind a
+gateway](#behind-a-gateway)). `Crema Log.provider` still records the effective
+provider on every row, for audit, not metering.
 
 The `crema_in_automation` flag on `frappe.local` tells `check_budget` to skip the
 per-user check.

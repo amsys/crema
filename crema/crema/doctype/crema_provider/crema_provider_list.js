@@ -1,23 +1,21 @@
 // Copyright (c) 2026, Crema and contributors
 // For license information, please see license.txt
 
-/* global crema_new_provider_dialog, crema_usage_pill */
-// crema_new_provider_dialog and crema_usage_pill are defined once in crema.bundle.js
-// (app_include_js, so it is already loaded here) and shared with the Crema Settings form.
+/* global crema_new_provider_dialog */
+// crema_new_provider_dialog is defined once in crema.bundle.js (app_include_js, so it
+// is already loaded here) and shared with the Crema Settings form.
 //
 // This list replaced the hand-written Providers table that used to live in an HTML field
-// on Crema Settings. Name, Address and Status are ordinary list columns now. The two
-// columns that were the reason for that HTML field — Connection (a live probe) and Usage
-// (month-to-date spend) — are computed and never stored, so they are painted by
-// formatters over fields that are already on the row.
+// on Crema Settings. Name, Address and Status are ordinary list columns now. The Connection
+// column (a live probe) is computed and never stored, so it is painted by a formatter over
+// a field that is already on the row.
 //
 // provider_name has no in_list_view: autoname is field:provider_name, so the subject
 // column is already the name, and title_field + hide_name_column below keep it to one.
 //
-// listview_settings formatters are synchronous, so both values have to be in hand before
-// a row renders: the first render prefetches them and asks for one more refresh. The
+// listview_settings formatters are synchronous, so the value has to be in hand before a
+// row renders: the first render prefetches it and asks for one more refresh. The
 // `prefetched` flag is what stops that second refresh from looping.
-let usage_cache = {};
 const connection_cache = {};
 let prefetched = false;
 let list = null;
@@ -27,15 +25,6 @@ function prefetch(listview) {
 	// the settings object, not the list — hence the listview captured in onload.
 	if (prefetched || !listview) return;
 	prefetched = true;
-
-	const usage = frappe
-		.call({ method: "crema.api.get_usage" })
-		.then((r) => {
-			usage_cache = r.message?.providers || {};
-		})
-		.catch(() => {
-			usage_cache = {};
-		});
 
 	// One uncached check_provider call per enabled provider, in parallel — an hour-stale
 	// "Connected" pill (list_models' own cache TTL) is worse than one extra request per
@@ -56,14 +45,14 @@ function prefetch(listview) {
 				})
 		);
 
-	// allSettled, not all: a blank Usage column is better than a list that never shows
-	// the connection results because one call failed.
-	Promise.allSettled([usage, ...probes]).then(() => listview.refresh());
+	// allSettled, not all: a blank Connection column is better than a list that never
+	// shows the connection results because one call failed.
+	Promise.allSettled(probes).then(() => listview.refresh());
 }
 
 frappe.listview_settings["Crema Provider"] = {
 	hide_name_column: true,
-	add_fields: ["enabled", "monthly_budget_usd"],
+	add_fields: ["enabled"],
 
 	onload(listview) {
 		list = listview;
@@ -93,10 +82,6 @@ frappe.listview_settings["Crema Provider"] = {
 				label: status.detail,
 				theme: status.ok ? "green" : "red",
 			});
-		},
-
-		monthly_budget_usd(value, df, doc) {
-			return crema_usage_pill(usage_cache[doc.name]);
 		},
 	},
 };

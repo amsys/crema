@@ -59,7 +59,6 @@ def _load_from_db(name: str) -> dict[str, Any] | None:
         "max_tokens": doc.max_tokens or 0,
         "cache_ttl": doc.cache_ttl or 0,
         "monthly_budget_usd": doc.monthly_budget_usd or settings.default_monthly_budget_usd or 0,
-        "provider_budget_usd": provider.monthly_budget_usd or 0,
         "per_user_budget_usd": settings.get("default_monthly_budget_usd_per_user") or 0,
     }
 

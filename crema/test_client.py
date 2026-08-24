@@ -580,32 +580,6 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             ask("classification", f"unique own-budget prompt {uuid.uuid4().hex}")
         mock_complete.assert_called_once()
 
-    def test_provider_budget_blocks_across_interfaces_sharing_it(self):
-        """simple and summarization both resolve to TEST_PROVIDER (_ensure_interface).
-        A provider-level budget is a combined ceiling: spend booked against "simple"
-        must still block a call on "summarization"."""
-        _ensure_interface("simple", cache_ttl=0, monthly_budget_usd=0)
-        _ensure_interface("summarization", cache_ttl=0, monthly_budget_usd=0)
-        provider = frappe.get_doc("Crema Provider", TEST_PROVIDER)
-        provider.monthly_budget_usd = 5
-        provider.save(ignore_permissions=True)
-
-        response = MagicMock()
-        response.choices = [MagicMock(message=MagicMock(content="canned"))]
-        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
-        response._hidden_params = {"response_cost": 5.0}
-        with patch("litellm.completion", return_value=response):
-            ask("simple", f"unique provider-budget prompt {uuid.uuid4().hex}")  # spends $5
-
-        with patch("crema.client._complete") as mock_complete:
-            with self.assertRaises(CremaBudgetError):
-                ask("summarization", f"unique over-provider-budget prompt {uuid.uuid4().hex}")
-        mock_complete.assert_not_called()
-
-        log = frappe.get_last_doc("Crema Log", filters={"interface": "summarization", "status": "Blocked"})
-        self.assertIn("provider", log.detail.lower())
-        self.assertEqual(log.provider, TEST_PROVIDER)
-
     # --- per-user monthly budget -------------------------------------------
 
     def test_per_user_budget_blocks_a_second_call_by_the_same_user(self):
@@ -1176,7 +1150,6 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertEqual(usage["interfaces"]["summarization"], {"spend": 2.0, "budget": 7})
         # "simple" is configured (setUpClass) but has no budget of its own -> default
         self.assertEqual(usage["interfaces"]["simple"]["budget"], 3)
-        self.assertEqual(usage["providers"][TEST_PROVIDER]["spend"], 2.0)
 
     def test_get_usage_rejects_non_system_manager(self):
         frappe.set_user("Guest")

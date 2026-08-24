@@ -75,6 +75,11 @@ can register their own — see [docs/configure.md](docs/configure.md).
   a local prompt scan, a reply check — each with its own
   action and use-case filter, and a hook for an app to add its own check
   ([docs/security.md](docs/security.md#guardrails)).
+- **Works behind a gateway** — point a Crema Provider at litellm-proxy (or another
+  gateway) for prompt-injection detection, NER-based PII masking, and per-key spend
+  limits, with no code change; Crema stamps the caller and interface on every call so
+  the gateway's own metering lines up with its audit log
+  ([docs/security.md](docs/security.md#behind-a-gateway)).
 - **Reversible masking (Experimental)** — two Hide guardrails swap personal values
   (emails, phone numbers, likely names) and health keywords for placeholders before
   a request leaves the server, then restore the real values in the reply

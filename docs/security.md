@@ -71,6 +71,56 @@ stronger PII detector — through the `crema_guardrails` hook
 model behind that hook, or behind an LLM gateway a provider entry points at. Crema
 stays the policy and audit layer.
 
+## Behind a gateway
+
+Crema checks what needs Frappe context — a record, a field, a user, a permission —
+or model cooperation, such as a reply that must echo a token. A check that works on
+bare text alone, or that meters an API key rather than a use case, belongs on a
+gateway in front of the provider instead. Point a Crema Provider's **Address**
+(`base_url`) at a gateway such as litellm-proxy and every call through that
+provider routes through it — no code change.
+
+**What to run on the gateway.** Prompt-injection and LLM-classifier guardrails —
+litellm-proxy's own, or another vendor's — replace the AI Guard this app carried
+before. Secret detection and moderation adapters have no Frappe equivalent either.
+For personal data in free text, enable litellm-proxy's Presidio guardrail with
+`output_parse_pii` on: it runs a real named-entity model, and it restores its own
+placeholders in the reply the same way Crema's own masking does.
+
+**What stays in Crema.** The Text Scan runs before the answer cache; a gateway check
+runs after a cache hit already skipped the network call, so it cannot cover a cached
+reply. Masking's record-term harvest reads a document and its linked records under
+the interface's isolation user — exact values, scoped by Frappe's own permission
+rule — which no gateway can do, since a gateway sees one flat string with no
+document behind it. The Reply Check needs to write the outgoing system prompt and
+read the reply's own structure; a gateway sees neither. Per-interface and per-user
+budgets need `frappe.session.user` and the calling interface, an identity a gateway
+does not have unless Crema forwards it — see **Pass-through identity** below, in
+this same section.
+
+**Order matters.** Crema's own Hide rows run first, inside this app, before the
+request ever reaches the gateway. A masked prompt reads `[[NAME_1]]`, not a name —
+that is not personal data, so the gateway's own NER passes it through untouched.
+Each layer restores only the placeholders it made: Crema restores `[[NAME_1]]`
+against its own vault, and the gateway restores whatever it masked against its own
+map. Neither layer needs to know the other ran.
+
+**Why Presidio does not live in this app.** `presidio-analyzer` plus a spaCy model
+is hundreds of megabytes resident per bench worker, English-biased, and slow to
+start — a cost paid on every site, whether or not it uses masking. Its own pattern
+recognizers (email, phone, card, IBAN) also duplicate what `mask.py`'s pattern table
+already does. A site that wants named-entity detection with no gateway in front of
+it can still have it: add a `before()`-only module through the `crema_guardrails`
+hook ([docs/configure.md](configure.md#add-your-own-guardrail)) that calls a
+Presidio sidecar. That is a worked example, not a bundled dependency.
+
+**Pass-through identity.** Every provider call carries `user` (the real caller,
+captured before Crema's own isolation-user sandbox opens) and `metadata.tags` (the
+interface that serves the call). Behind litellm-proxy, its own per-end-user and
+per-tag spend then lines up with Crema's audit log, with no separate integration
+step. In front of no gateway, both fields cost nothing — litellm's SDK sends them
+along and nothing else reads them.
+
 ## The scan — Text Scan
 
 The scan is a local regex and unicode check. It runs before any network call. It

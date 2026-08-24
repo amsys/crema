@@ -960,10 +960,10 @@ describe("Crema Provider list", () => {
 		cy.contains("button", "New from Template").should("be.visible");
 	});
 
-	// Connection and Usage are painted by listview_settings formatters after one
-	// prefetch-then-refresh pass (crema_provider_list.js) — the columns themselves are
-	// ordinary list columns, so the headers must be there whether or not a provider exists.
-	it("shows the Address and Monthly Budget columns the formatters paint into", () => {
+	// Connection is painted by a listview_settings formatter after one
+	// prefetch-then-refresh pass (crema_provider_list.js) — Address is an ordinary
+	// list column, so its header must be there whether or not a provider exists.
+	it("shows the Address column", () => {
 		cy.get(".list-row-head").contains("Address").should("exist");
 	});
 

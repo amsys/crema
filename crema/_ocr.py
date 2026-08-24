@@ -5,11 +5,11 @@ Reimplements the pattern proven in fcr_fleet/ocr/engine.py (not imported — cre
 dependency on fcr_fleet): pymupdf for PDF text extraction and page rendering, PIL for
 downscaling plain images. Bypasses crema.api.ask() on purpose — this is a document
 extraction pipeline, not a user-prompt path, so it talks to crema.client directly (the
-same boundary the tests mock). That also means layer 1 (security.scan) and layer 2
-(the LLM guard) never run on OCR'd document content — by design: a scan tuned for
-user prompts throws false positives on arbitrary document text (dates, numbers, long
-base64-like OCR noise, etc.), and this path never reaches crema.api.ask() where those
-layers are wired in. Every call is still audited via Crema Log, below.
+same boundary the tests mock). That also means layer 1 (security.scan) never runs on
+OCR'd document content — by design: a scan tuned for user prompts throws false
+positives on arbitrary document text (dates, numbers, long base64-like OCR noise,
+etc.), and this path never reaches crema.api.ask() where that layer is wired in.
+Every call is still audited via Crema Log, below.
 """
 
 from __future__ import annotations
@@ -251,7 +251,7 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict[str, Any]:
     except (CremaBudgetError, CremaBlockedError) as exc:
         # CremaBlockedError here is a guardrail inside client._complete's onion — in
         # practice the reply check, the only guardrail whose default covers OCR (the
-        # scan and the guard skip this path by design) — logged as Blocked, not
+        # scan skips this path by design) — logged as Blocked, not
         # Error, same reasoning as crema.api._Ask.__call__'s equivalent handler.
         duration_ms = int((time.monotonic() - start) * 1000)
         _log.insert(

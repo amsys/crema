@@ -64,9 +64,7 @@ grid:
    this. Keep it unless you want a different account as the default isolation user.
 
 Save. Every one of the 11 predefined interfaces now resolves through these three
-values — the AI Guard on the Guardrails page needs no separate step either: a guard
-row with no **Checked By** service of its own uses the Default Provider and Default
-Model.
+values.
 
 Note: on this fast path, `advanced_ocr` resolves to the same provider and model as
 `ocr`, so OCR escalation never fires — a retry on the same model has no value, and
@@ -150,7 +148,7 @@ check, in the order they run. The page lists each available check above the grid
 with one line on what it does. What each check guarantees, and which positions in
 the list are fixed, is on [security.md](security.md#guardrails).
 
-Note: the five shipped rows are created once. A row you delete stays deleted — a
+Note: the shipped rows are created once. A row you delete stays deleted — a
 later migrate does not bring it back. Add a row and pick the same check to restore
 it.
 
@@ -160,25 +158,20 @@ it.
    `Block`), or `Block`.
 3. Leave **Use Cases** empty to run the row for every use case, or enter a
    comma-separated list of use-case keys to limit it.
-4. For an AI Guard row, pick **Checked By** and **Guard Model** (blank uses the
-   Default Provider and Default Model), and edit **Guard Instructions** to tune the
-   classifier. The page refuses to save an AI Guard row that cannot resolve a
-   working AI service.
-5. Save.
+4. Save.
 
-Crema ships these five rows, in this order:
+Crema ships these rows, in this order:
 
 | Row | Default | Notes |
 |---|---|---|
 | **Text Scan** | `Block` | The local, no-cost scan for prompt injection. |
 | **Hide Personal Information** | `Off` | Experimental. Masks names, emails, phone numbers, and record values before the request leaves the server, and swaps them back into the reply. |
 | **Hide Health Information** | `Off` | Experimental. Masks a list of condition, medication, and procedure words. A keyword list, not a detector — read [security.md](security.md#masking-experimental) before you rely on it. |
-| **AI Guard** | `Off` | A second model judges each request. It sits after the Hide rows, so it reads masked text. |
 | **Reply Check** | `Block` | Puts a token in each request and checks that the reply returns it. |
 
-You can add a second row for the same check — two AI Guard rows checked by different
-services, or a second Hide row filtered to a different use case — each keeps its own
-state. A row whose check came from an app you removed disappears on the next save.
+You can add a second row for the same check — for example a second Hide row
+filtered to a different use case — each keeps its own state. A row whose check came
+from an app you removed disappears on the next save.
 
 Audio: none of these checks can read sound. For the Transcribe use case, only a Hide
 row set to `Block` changes anything — it refuses the call. The page warns when a row
@@ -209,9 +202,6 @@ effect. A word added by hand starts switched on.
 | `guardrail` | Select | Label **Guardrail**. The check this row runs. The options list every built-in and every app-registered check. |
 | `action` | Select | Label **Action**. `Off` (default), `Log Only`, `Retry Once`, or `Block`. |
 | `interfaces` | Data | Label **Use Cases**. Empty means every use case; a comma-separated list of use-case keys limits the row. |
-| `guard_provider` | Link | Label **Checked By**. AI Guard rows only. Blank uses the Default Provider. |
-| `guard_model` | Autocomplete | Label **Guard Model**. AI Guard rows only. Blank uses the Default Model. |
-| `guard_prompt` | Long Text | Label **Guard Instructions**. AI Guard rows only. The classifier prompt; a built-in default applies when it is empty. |
 
 ## Procedure E — configure by code
 

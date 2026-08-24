@@ -65,9 +65,10 @@ Security hardening has its own list, in [docs/security.md](docs/security.md#plan
   design, not options on it: the tools stay read-only — a window that contains
   document text contains untrusted text, and a read-only turn is the one structural
   defence against injection that does not depend on a detector working, so a write
-  tool would first need a taint model that downgrades the turn; the AI Guard's
-  highest-value position is judging the *proposed tool call* against the user's
-  request (a small structured object is hard to talk around, unlike free text); and
+  tool would first need a taint model that downgrades the turn; a gateway-side LLM
+  guard's highest-value position is judging the *proposed tool call* against the
+  user's request (a small structured object is hard to talk around, unlike free
+  text); and
   every tool result is truncated before it enters the context, so one `get_list` on a
   fat doctype cannot eat the window and the budget alone.
 - **Background execution for long completions.** Every `ask()` today runs the

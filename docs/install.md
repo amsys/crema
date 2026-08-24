@@ -54,7 +54,7 @@ options of the AI Profile dropdown on Crema Automation Task, so a name added the
 shows up in that dropdown too. The install step also creates the three Number Cards
 the Crema workspace shows (calls, cost, blocked).
 
-The install step also seeds the **Guardrails** page with its five default rows (see
+The install step also seeds the **Guardrails** page with its default rows (see
 [configure.md](configure.md#procedure-d--set-the-guardrails)) and stamps the
 Guardrail dropdown's options, the same way as the AI Profile dropdown. This seeding
 runs once: a row you delete later stays deleted. The install step also creates one
@@ -64,8 +64,9 @@ blocked call.
 If you upgrade from a version that kept the safety settings on each use case's own
 row, the first `bench migrate` folds them into Guardrails rows. Where two use cases
 disagreed, the stricter setting wins, and the row's **Use Cases** filter lists the
-use cases that had the check on. The old security interface's prompt, provider, and
-model move onto the AI Guard row.
+use cases that had the check on. A site that also had the old AI Guard row loses it
+on that same migrate — the AI Guard is gone; run an LLM guard on your gateway
+instead (see [security.md](security.md#guarding-against-malicious-intent)).
 
 The install step also creates one Frappe user, `crema@<site>` — enabled, no password
 (it can never log in), holding only the `Crema User` role. If the site name is not a

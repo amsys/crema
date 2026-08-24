@@ -64,34 +64,6 @@ def _load_from_db(name: str) -> dict[str, Any] | None:
     }
 
 
-def _scanner_cfg(provider_name: str | None, model: str | None) -> dict[str, Any]:
-    """A bare provider config for a guardrail's own scanner call (the AI Guard) — never
-    an interface's. `provider_name`/`model` come straight off the guardrail row; blank
-    falls back to Crema Settings' Default Provider/Model, same coalesce _load_from_db
-    uses for a Model Assignment row. A scanner is not a use case: it inherits no
-    interface's budget, standing instructions or isolation identity, only a provider to
-    call through. Raises CremaConfigError when the effective provider is missing or
-    disabled — same fail-loud contract as _resolve, checked again at save time by
-    CremaGuardrails._validate_guard."""
-    settings = frappe.get_cached_doc("Crema Settings")
-    resolved_name = provider_name or settings.default_provider
-    if not resolved_name or not frappe.db.exists("Crema Provider", resolved_name):
-        raise CremaConfigError(f"No usable AI service found for guard provider '{provider_name or ''}'")
-
-    provider = frappe.get_doc("Crema Provider", resolved_name)
-    if not provider.enabled:
-        raise CremaConfigError(f"AI service '{resolved_name}' is disabled")
-
-    return {
-        "provider": provider.provider_name,
-        "base_url": provider.base_url,
-        "timeout_seconds": provider.timeout_seconds,
-        "model": model or settings.default_model,
-        "temperature": 0,
-        "max_tokens": 0,
-    }
-
-
 def _resolve_one(name: str) -> dict[str, Any] | None:
     """Cached lookup for a single interface name — no fallback walking here."""
     key = cache.interface_key(name)
@@ -224,9 +196,9 @@ def _record_transcript(msgs: list[dict], content: str) -> None:
 
 def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
     """The only place a provider is actually called from caller code — every call
-    passes through the guardrails onion (crema.guardrails.run): masking, the AI
-    guard, and the reply check wrap _call_raw here, in the row order the Guardrails
-    doctype sets. Integration tests mock exactly this boundary."""
+    passes through the guardrails onion (crema.guardrails.run): masking and the
+    reply check wrap _call_raw here, in the row order the Guardrails doctype sets.
+    Integration tests mock exactly this boundary."""
     from crema import guardrails
 
     return guardrails.run(cfg, messages, lambda msgs: _call_raw(cfg, msgs, response_format), response_format)
@@ -234,9 +206,7 @@ def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict |
 
 def _call_raw(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
     """The bare litellm.completion call — the single api_key touchpoint. No guardrail
-    runs here; only crema.guardrails may call it besides _complete's own closure (the
-    AI guard uses it directly, which is what makes guard recursion structurally
-    impossible)."""
+    runs here; only _complete's own closure calls it."""
     import litellm
 
     kwargs: dict[str, Any] = {

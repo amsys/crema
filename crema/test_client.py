@@ -501,6 +501,39 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertAlmostEqual(log.cost_usd, 0.0056, places=6)
         self.assertEqual(log.llm_calls, 1)
 
+    def test_a_proxys_own_cost_header_wins_over_response_cost(self):
+        """Behind litellm-proxy, response_cost from the SDK's own cost map is 0 for a
+        proxy-served custom model name — the proxy's own header carries the real
+        figure, and process_response_headers prefixes a raw upstream header with
+        "llm_provider-" (see client._proxy_cost)."""
+        prompt = f"unique proxy-cost prompt {uuid.uuid4().hex}"
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {
+            "response_cost": 0.0,
+            "additional_headers": {"llm_provider-x-litellm-response-cost": "0.0042"},
+        }
+
+        with patch("litellm.completion", return_value=response):
+            ask("summarization", prompt)
+
+        log = frappe.get_last_doc("Crema Log", filters={"interface": "summarization", "status": "Success"})
+        self.assertAlmostEqual(log.cost_usd, 0.0042, places=6)
+
+    def test_response_cost_is_used_when_no_proxy_header_is_present(self):
+        prompt = f"unique no-header prompt {uuid.uuid4().hex}"
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 0.0056}
+
+        with patch("litellm.completion", return_value=response):
+            ask("summarization", prompt)
+
+        log = frappe.get_last_doc("Crema Log", filters={"interface": "summarization", "status": "Success"})
+        self.assertAlmostEqual(log.cost_usd, 0.0056, places=6)
+
     def test_response_without_usage_attribute_logs_zeros_not_a_crash(self):
         """test_complete_builds_expected_litellm_kwargs (below) already proves a bare
         MagicMock response (no real .usage) doesn't crash _complete; this proves the
@@ -1457,6 +1490,33 @@ class UnitTestCremaAsNumber(UnitTestCase):
         self.assertEqual(client._as_number("7"), 0.0)
         self.assertEqual(client._as_number(None), 0.0)
         self.assertEqual(client._as_number(MagicMock()), 0.0)
+
+
+class UnitTestCremaProxyCost(UnitTestCase):
+    """client._proxy_cost — reads a litellm-proxy's own reported cost out of the
+    additional_headers a raw upstream response carries."""
+
+    def test_prefers_the_llm_provider_prefixed_form(self):
+        hidden = {"additional_headers": {"llm_provider-x-litellm-response-cost": "0.0042"}}
+        self.assertEqual(client._proxy_cost(hidden), 0.0042)
+
+    def test_falls_back_to_the_bare_header_form(self):
+        hidden = {"additional_headers": {"x-litellm-response-cost": "0.01"}}
+        self.assertEqual(client._proxy_cost(hidden), 0.01)
+
+    def test_no_additional_headers_returns_none(self):
+        self.assertIsNone(client._proxy_cost({}))
+
+    def test_unparseable_header_value_returns_none(self):
+        hidden = {"additional_headers": {"x-litellm-response-cost": "not-a-number"}}
+        self.assertIsNone(client._proxy_cost(hidden))
+
+    def test_a_magicmocks_auto_vivified_header_is_not_mistaken_for_a_real_one(self):
+        """A bare MagicMock response's _hidden_params auto-vivifies as another
+        MagicMock, not a real dict — .get() on it returns a further MagicMock, which
+        a bare float() coercion would silently accept (see the docstring's warning).
+        This is the regression test for that trap."""
+        self.assertIsNone(client._proxy_cost(MagicMock()))
 
 
 class IntegrationTestCremaOutputTrap(CremaFixtureTestCase):

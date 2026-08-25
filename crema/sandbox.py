@@ -5,7 +5,7 @@ All data access inside `isolation()` (File reads, future automation upserts via 
 Profile + User Permissions at the DB layer (`frappe.get_list`/`has_permission`). No
 custom permission-tree cache is needed: `frappe.set_user` resets `role_permissions`
 and frappe's own permission caching covers it. The fenced `frappe.get_list` surface
-this exposes doubles as the future tool-use API (see ROADMAP.md).
+this exposes doubles as the future tool-use API (see PLAN.md).
 """
 
 from __future__ import annotations

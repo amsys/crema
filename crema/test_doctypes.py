@@ -496,6 +496,23 @@ class IntegrationTestCremaAutomationTaskValidation(IntegrationTestCase):
         with self.assertRaises(frappe.ValidationError):
             doc.insert(ignore_permissions=True)
 
+    def test_propose_only_without_a_target_doctype_is_rejected(self):
+        doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
+        doc.action = "Propose Only"
+        doc.target_doctype = None
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+
+    def test_a_file_query_task_may_use_propose_only(self):
+        """A File Query source used to allow only Create or Update Records — Propose Only
+        needs the same target_doctype/match_on it does, and nothing else."""
+        doc = self._task_with_source(source_type="File Query")
+        doc.action = "Propose Only"
+        doc.target_doctype = "Contact"
+        doc.match_on = "first_name"
+        doc.insert(ignore_permissions=True)  # must not raise
+        self.assertEqual(doc.action, "Propose Only")
+
     def test_a_malformed_notify_to_address_is_rejected(self):
         doc = self._task_with_source(source_type="URL", source_url="https://example.invalid/source")
         doc.notify_to = "not-an-email"
@@ -1447,7 +1464,7 @@ class IntegrationTestCremaLogMeta(IntegrationTestCase):
 
 class IntegrationTestCremaLogChain(CremaFixtureTestCase):
     """CremaLog.before_insert's hash chain and crema.log.verify_chain — tamper-evidence
-    for the audit log, INSPIRATION.md item 2.
+    for the audit log (PLAN.md, Done: tamper-evident log chain).
 
     Subclasses CremaFixtureTestCase for its per-test savepoint alone (no
     _ensure_user/_ensure_provider/_ensure_interface call here): verify_chain walks the

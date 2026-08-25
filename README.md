@@ -22,7 +22,7 @@ every request. Application code never names a provider — every call is
 `from crema import ask`.
 
 Crema is not a conversational agent, and a chatbot is out of scope — see
-[ROADMAP.md](ROADMAP.md).
+[PLAN.md](PLAN.md).
 
 ## Quick start
 
@@ -93,7 +93,8 @@ can register their own — see [docs/configure.md](docs/configure.md).
   caller applies them.
 - **Automation** — a task reads URLs, your own records, or uploaded files, plans
   once, and creates or updates records on a schedule, a document event, or a webhook
-  ([docs/automation.md](docs/automation.md)).
+  ([docs/automation.md](docs/automation.md)). An unattended run is reversible: **Undo
+  Last Run** deletes what it created and leaves what it updated for you to review.
 - **Cost control and audit** — per-user and per-interface monthly budgets, response
   caching, a usage dashboard, and a tamper-evident audit row for
   every call — never the prompt or document content itself.

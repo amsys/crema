@@ -1,6 +1,5 @@
 """Crema Usage — calls/tokens/cost aggregated from Crema Log, grouped by use case,
-AI service, model, user, or day. Built for ROADMAP.md's "Usage/cost dashboards ... built
-on Crema Log" item.
+AI service, model, user, or day. The usage/cost dashboard, built on Crema Log.
 
 `group_by` is user input that reaches a raw SQL GROUP BY clause — mapped through
 _GROUP_BY_FIELD, a fixed whitelist, and rejected outright if it's not one of the known

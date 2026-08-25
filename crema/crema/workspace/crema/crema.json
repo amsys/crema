@@ -75,7 +75,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Automation",
-   "link_count": 1,
+   "link_count": 2,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
@@ -86,6 +86,16 @@
    "label": "Automations",
    "link_count": 0,
    "link_to": "Crema Automation Task",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Proposals",
+   "link_count": 0,
+   "link_to": "Crema Proposal",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
@@ -171,6 +181,13 @@
    "doc_view": "List",
    "label": "Automations",
    "link_to": "Crema Automation Task",
+   "stats_filter": "[]",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "label": "Proposals",
+   "link_to": "Crema Proposal",
    "stats_filter": "[]",
    "type": "DocType"
   },
@@ -264,6 +281,18 @@
    "keep_closed": 0,
    "label": "Automations",
    "link_to": "Crema Automation Task",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "list-checks",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Proposals",
+   "link_to": "Crema Proposal",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"

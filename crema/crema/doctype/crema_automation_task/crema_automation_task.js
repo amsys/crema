@@ -38,6 +38,68 @@ function crema_render_status(frm) {
 	);
 }
 
+function crema_last_written(frm) {
+	try {
+		return JSON.parse(frm.doc.last_written_json || "{}");
+	} catch (e) {
+		return {};
+	}
+}
+
+function crema_write_list_html(pairs) {
+	return pairs
+		.map(
+			([doctype, name]) =>
+				`<li>${frappe.utils.get_form_link(doctype, name, true, name)}</li>`
+		)
+		.join("");
+}
+
+function crema_undo_last_run(frm) {
+	const written = crema_last_written(frm);
+	const created = written.created || [];
+	const updated = written.updated || [];
+	if (!created.length) return;
+
+	let message = __("This run created {0} record(s). They will be deleted.", [created.length]);
+	message += `<ul>${crema_write_list_html(created)}</ul>`;
+	if (updated.length) {
+		message +=
+			__("It also updated {0} record(s). They are not touched — review them yourself.", [
+				updated.length,
+			]) + `<ul>${crema_write_list_html(updated)}</ul>`;
+	}
+	if (written.truncated) {
+		message += `<p>${__(
+			"Only the first records are listed; the run wrote more than that."
+		)}</p>`;
+	}
+
+	frappe.confirm(message, () => {
+		frappe.call({
+			method: "crema.api.undo_last_run",
+			args: { task: frm.doc.name },
+			freeze: true,
+			callback(r) {
+				frm.reload_doc();
+				const result = r.message || {};
+				frappe.show_alert({
+					message: __("Deleted {0} record(s).", [result.deleted || 0]),
+					indicator: "green",
+				});
+				if ((result.failed || []).length) {
+					frappe.msgprint({
+						title: __("Some records were not deleted"),
+						message: result.failed.join("<br>"),
+						indicator: "orange",
+					});
+				}
+			},
+			error: crema_show_error,
+		});
+	});
+}
+
 function crema_dry_run(frm) {
 	frappe.call({
 		method: "crema.api.dry_run_automation",
@@ -73,9 +135,10 @@ function crema_show_dry_run(frm, result) {
 	}
 
 	const verb =
-		frm.doc.action === "Update the Records It Read"
-			? __("would be updated")
-			: __("would be written");
+		{
+			"Update the Records It Read": __("would be updated"),
+			"Propose Only": __("would be proposed"),
+		}[frm.doc.action] || __("would be written");
 	// A File Query dry run has no plan at all — each file was read straight into records
 	// by extract() — so "used_stored_plan" is absent rather than false, and the line
 	// below is skipped entirely instead of misreporting "a new plan was written".
@@ -421,6 +484,14 @@ frappe.ui.form.on("Crema Automation Task", {
 		if (frm.is_new()) return;
 
 		frm.add_custom_button(__("Dry Run"), () => crema_dry_run(frm));
+		if (frm.doc.action === "Propose Only") {
+			frm.add_custom_button(__("Proposals"), () => {
+				frappe.set_route("List", "Crema Proposal", { task: frm.doc.name });
+			});
+		}
+		if ((crema_last_written(frm).created || []).length) {
+			frm.add_custom_button(__("Undo Last Run"), () => crema_undo_last_run(frm));
+		}
 		frm.add_custom_button(__("Run Now"), () => {
 			frappe.call({
 				method: "crema.api.run_automation_now",

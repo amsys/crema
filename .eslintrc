@@ -4,11 +4,14 @@
 		"node": true,
 		"es2022": true
 	},
+	"parser": "@typescript-eslint/parser",
+	"plugins": ["@typescript-eslint"],
 	"parserOptions": {
-		"sourceType": "module"
-	},
+		"sourceType": "module",
+		"ecmaVersion": 2022
+  	},
 	"extends": "eslint:recommended",
-	"rules": {
+		"rules": {
 		"indent": "off",
 		"brace-style": "off",
 		"no-mixed-spaces-and-tabs": "off",
@@ -22,6 +25,7 @@
 		"no-console": ["warn"],
 		"no-extra-boolean-cast": ["off"],
 		"no-control-regex": ["off"],
+		"@typescript-eslint/prefer-optional-chain": "error",
 	},
 	"root": true,
 	"globals": {

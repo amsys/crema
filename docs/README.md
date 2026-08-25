@@ -14,7 +14,7 @@ doctype fields are stable. A change that breaks them will come with a migration 
 | [security.md](security.md) | admin, developer | What does Crema protect, and how? |
 
 See also the top-level [README.md](../README.md) for a quick start, and
-[ROADMAP.md](../ROADMAP.md) for planned work and accepted risks.
+[PLAN.md](../PLAN.md) for planned work and accepted risks.
 
 Running behind litellm-proxy or another gateway? See
 [security.md#behind-a-gateway](security.md#behind-a-gateway) for what to enable

@@ -12,7 +12,7 @@ Build a task from three choices:
 |---|---|
 | **Trigger** — when it runs | `Schedule` (a cron expression), `Once` (a date and time), `Document Event`, `Incoming Email`, or `Webhook` |
 | **Sources** — what it reads | One or more rows: `URL`, `Document Query` (records on this site), or `File Query` (uploaded files, read into records). A task can mix `URL` and `Document Query`; a `File Query` row must stand alone. A Webhook task can also read what the caller sends. |
-| **Action** — what it does | `Create or Update Records`, `Update the Records It Read`, or `No Changes` |
+| **Action** — what it does | `Create or Update Records`, `Update the Records It Read`, `Propose Only`, or `No Changes` |
 
 Any task can also email what it did. That is not one of the three choices — put an
 address in **Email Report To** and it applies to whichever action you picked.
@@ -35,9 +35,10 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not offered — a task must never run as any of them. |
 | `run_as` | Link (User) | Label **Runs As**. The account this task acts as. Empty uses the account set for the AI profile. Not `Administrator`, not a System Manager, not a disabled user. |
 | `instruction` | Text | Required. What to read from the source, and what to do with it. |
-| `action` | Select | `Create or Update Records`, `Update the Records It Read`, or `No Changes`. |
-| `target_doctype` | Link (DocType) | Label **Record Type to Write**. For `Create or Update Records`. The only doctype this task can write to. |
-| `match_on` | Data | Label **Match Records On**. Comma-separated fieldname(s) on `target_doctype`. Required for a `File Query` source — see [File Query](#file-query) below. Unused, and cleared, by the other two actions. |
+| `action` | Select | `Create or Update Records`, `Update the Records It Read`, `Propose Only`, or `No Changes`. |
+| `target_doctype` | Link (DocType) | Label **Record Type to Write**. For `Create or Update Records` and `Propose Only`. The only doctype this task can write to (or propose writing to). |
+| `match_on` | Data | Label **Match Records On**. Comma-separated fieldname(s) on `target_doctype`. Required for a `File Query` source — see [File Query](#file-query) below. Unused, and cleared, by the other actions. |
+| `confidence_floor` | Float | Label **Lowest Confidence to Accept**. 0 by default. Applies only to a `File Query` source — see [Propose Only](#propose-only). A file read below this confidence is skipped, whichever action the task uses. |
 | `notify_to` | Small Text | Label **Email Report To**. Comma-separated addresses. Works with every action. |
 | `plan_json` | Code (read-only) | Label **Raw Plan (JSON)**. Written by the system on the first run. The system replaces it when you change the plan inputs, or when the stored plan no longer validates. |
 | `plan_target_doctype` | Data (read-only) | Label **Creates or Updates**. Read from the stored plan. |
@@ -48,6 +49,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `last_run` | Datetime (read-only) | |
 | `last_status` | Select (read-only) | `Success`, `Replanned`, or `Failed`. |
 | `last_result` | Text (read-only) | What the last run did — for example `3 created, 2 updated, 1 skipped`, `no new records`, or the report text. |
+| `last_written_json` | Code (read-only) | The records the last run created and updated. Feeds the **Undo Last Run** button — see [Undo a run](#undo-a-run). |
 | `consecutive_failures` | Int (read-only) | The task turns itself off at 5. |
 | `last_error` | Small Text (read-only) | |
 
@@ -83,6 +85,23 @@ top of the form. Open **Last Run** for the times, the result, and any error. Ope
 **Plan** to read the plan in a table instead of raw JSON. A task that failed three times
 in a row also shows a warning across the top of the form.
 
+## Crema Proposal fields
+
+One row per record a `Propose Only` task parked — see [Propose Only](#propose-only).
+Never edited by hand; a System Manager only reads, approves, or discards a row.
+
+| Field | Type | Notes |
+|---|---|---|
+| `task` | Link (Crema Automation Task) | The task that parked this row. |
+| `status` | Select | `Pending`, `Approved`, or `Discarded`. |
+| `target_doctype` | Link (DocType) | Label **Record Type**. What this row would create or change once approved. |
+| `confidence` | Float | The OCR pass's confidence in the file this row was read from, 0 to 1. Empty for a row read from text rather than a file. |
+| `outcome` | Small Text (read-only) | What approving this row did — the same counts an unattended run would have recorded. |
+| `created_json` | Code (read-only) | The record approving this row created. Feeds the **Undo** button on an Approved row — see [Undo a run](#undo-a-run). Empty when approving only updated an existing record. |
+| `fingerprint` | Data (read-only) | Identifies this row so a repeated run finds it instead of filing a duplicate. |
+| `payload_json` | Code (read-only) | The extracted row, unchanged, as the writer would receive it. |
+| `mapping_json` | Code (read-only) | How the payload maps onto the record type. |
+
 ## Create a task
 
 1. Open the **Crema Automation Task** list and create a new one.
@@ -114,6 +133,22 @@ run. It needs the `System Manager` role, and allows 20 calls per hour per client
 **Run Now**, beside Dry Run, queues one real run immediately. It uses the same code
 path as the scheduler — always a background job, never an inline run — and needs the
 `System Manager` role too.
+
+## Undo a run
+
+**Undo Last Run** deletes every record the task's last run created. It leaves every
+record the run updated alone, for a person to review — the form's dialog links to both
+lists before you confirm. Only the most recent run is reversible: `last_written_json`
+holds one run's list, replaced by the next run. The button is hidden once there is
+nothing left to undo.
+
+A record another document links to is refused, not force-deleted — the same link check
+`frappe.delete_doc` always applies. A record that fails to delete stays listed, so you
+can clear the reason and undo again.
+
+`Update the Records It Read` never creates a record, so a run of that action has nothing
+to undo. `Propose Only` writes nothing until a person approves a proposal — see
+[Propose Only](#propose-only) below for its own Undo.
 
 ## Sources
 
@@ -215,15 +250,21 @@ A File Query source has two things the others don't:
 
 * **It cannot share a task with any other source.** A run either reads files into
   records, or reads text — mixing the two has no single result to act on.
-* **It only supports `Create or Update Records`.** `Update the Records It Read` would
-  mean writing back to `File` itself; `No Changes` wants text to summarise, which this
-  path never produces.
+* **It only supports `Create or Update Records` or `Propose Only`.** `Update the
+  Records It Read` would mean writing back to `File` itself; `No Changes` wants text
+  to summarise, which this path never produces.
 
 A file Crema cannot read — anything that is not a PDF or a picture — is skipped and
 noted in `last_result`, the same as an unreadable attachment. A file whose text trips
 the scan is skipped and noted too, rather than failing the whole run; its
 siblings still import. See [security.md](security.md) for what the account in
 **Runs As** needs to be able to list files it does not own.
+
+Confidence is a File Query source's own reading, not a model self-assessment: it is
+the same score the OCR pass gives every scanned document (see
+[Propose Only](#propose-only)). Set **Lowest Confidence to Accept** above 0 and a file
+read below it is skipped and noted, the same way an unreadable file is — before it
+is written, or proposed, either way.
 
 ### Attachments
 
@@ -256,8 +297,8 @@ email case.
 ### Create or Update Records
 
 The task creates or updates records of `target_doctype`. This is the only action that
-creates records. It is also the only action a File Query source may use — see
-[File Query](#file-query) above for how a file is matched against an existing record.
+writes a record without a person looking at it first — see [Propose
+Only](#propose-only) for the same result held back for approval.
 
 ### Update the Records It Read
 
@@ -270,6 +311,28 @@ read, and cannot do that for two record types at once. The system sets `target_d
 to that source's record type for you. A URL source alongside it is fine: it is reference
 material, and the task still only writes to records the query returned.
 
+### Propose Only
+
+The task works out what `Create or Update Records` would have written, and parks it as
+a **Crema Proposal** instead of writing it — nothing is created or changed until a
+person approves it. This is the one action every trigger, including an unattended
+schedule, can run without writing anything on its own.
+
+Each proposal carries the record type, the field values it would set, and — for a File
+Query source — the confidence the OCR pass had in the file it came from (see
+[File Query](#file-query) above; a plan-based source has no equivalent measurement).
+Open the **Proposals** button on the task, or the **Crema Proposal** list, to review
+them: **Approve** writes the record the same way `Create or Update Records` would have,
+and stamps what it did; **Discard** removes it from the queue and writes nothing. An
+Approved row also shows **Undo**: it deletes the record approving it created and returns
+the row to Pending, so it can be approved again or discarded. All three work on one row
+from its form, or on several at once from the list view's Actions menu.
+
+A run that reads the same source again does not file a duplicate proposal for content
+it already parked — approved, discarded, or still pending. This is what makes it safe
+to leave a `Propose Only` task on the same schedule as any other task: a crash or a
+retry finds its earlier proposal instead of piling up copies.
+
 ### No Changes
 
 The task sends the source to the model with your `instruction` and stores the answer
@@ -281,7 +344,9 @@ in `last_result`. It writes no records at all, and needs no plan.
 result after each successful run, whichever action the task uses:
 
 * `No Changes` emails the model's answer.
-* The two writing actions email what the run did — `3 created, 2 updated, 1 skipped`.
+* `Create or Update Records` and `Update the Records It Read` email what the run did —
+  `3 created, 2 updated, 1 skipped`.
+* `Propose Only` emails how many rows it parked — `3 proposed, 1 already proposed`.
 
 A failed run sends nothing. A mail that cannot be sent is logged and never turns a
 successful run into a failed one.

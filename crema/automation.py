@@ -19,7 +19,7 @@ Security posture — the reason this module is longer than "just call the LLM":
   `doc.save()`. No `ignore_permissions` anywhere, so the isolation user's roles and
   User Permissions are the hard fence on what a task can read *and* write.
 
-The three actions differ only in what stage 4 does with the extracted rows:
+The four actions differ only in what stage 4 does with the extracted rows:
 
 * `Create or Update Records` — find-or-create in `target_doctype`.
 * `Update the Records It Read` — update, never create, and only records whose `name` the
@@ -27,6 +27,10 @@ The three actions differ only in what stage 4 does with the extracted rows:
   but is never written: `doc.update({"name": ...})` mutates `self.name`, and
   `BaseDocument.db_update` would then write this document's values onto whatever row
   the model named, with no permission check on that row.
+* `Propose Only` — write nothing. Park one `Crema Proposal` row per extracted row (or
+  file record), for a human to approve or discard — see `_propose` and `apply_proposal`
+  below. Approving replays the row through the same `_upsert`/`_upsert_files` a
+  `Create or Update Records` run would have used.
 * `No Changes` — no plan at all, and no writes. The plan machinery exists to map LLM
   output safely onto database fields; with nothing written there is nothing to validate.
 
@@ -42,9 +46,11 @@ out the whole run — and five such runs auto-disable the task.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import mimetypes
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, NamedTuple
 
@@ -54,8 +60,9 @@ from croniter import croniter
 import frappe
 from crema import _ocr, api, client, guardrails, log, policy, sandbox, security
 from crema import terms as _terms
+from frappe import _
 from frappe.model import data_fieldtypes
-from frappe.utils import add_days, cint, now_datetime, strip_html
+from frappe.utils import add_days, cint, flt, now_datetime, strip_html
 
 _PLAN_CONTENT_CHARS = 8000
 _EXTRACT_CONTENT_CHARS = 60_000
@@ -69,6 +76,9 @@ _SOURCE_LIMIT_DEFAULT = 50
 # scans attached would otherwise quietly multiply the cost of one run by twelve.
 _ATTACHMENT_MAX_PER_RECORD = 5
 _WEBHOOK_PAYLOAD_CHARS = 20_000
+# ponytail: a flat cap, not paging — source_limit tops out at 200, so one run cannot
+# approach this. Add paging if a future caller pushes past it.
+_WRITTEN_MAX = 1000
 
 _FILE_DOCTYPE = "File"
 _FILE_QUERY_FIELDS = ["name", "modified", "file_name", "file_url"]
@@ -296,6 +306,11 @@ def run_task(
     # fill its batch: a record changed *during* a long run must be read by the next one.
     started = now_datetime()
 
+    # Built here, before anything can fail — every _record() call below passes it, so
+    # last_written_json always describes *this* run, including a run that fails before
+    # it writes anything. See PLAN.md's "Undo a run".
+    written = _Written(doc.name)
+
     # Stamp last_run first and commit: a task that explodes must not hot-loop on tick().
     # last_run is the cron cursor only — the incremental watermark is per source, in each
     # child row's last_read, so a run may not move this one backwards.
@@ -309,7 +324,7 @@ def run_task(
         # e.g. the interface's provider was disabled. Left uncaught this skipped
         # _record() entirely, so last_status stayed stale and the 5-failure
         # auto-disable never fired while tick() re-enqueued the task every 15 minutes.
-        return _record(doc, "Failed", f"interface unresolvable — {_describe(exc)}")
+        return _record(doc, "Failed", f"interface unresolvable — {_describe(exc)}", written=written)
 
     # A copy, not a mutation: _resolve's dict may be shared, and everything downstream —
     # the sandbox, _read_documents' "skip my own writes" filter, _ocr's file loading —
@@ -321,7 +336,7 @@ def run_task(
     try:
         with sandbox.isolation(cfg["isolation_user"]):
             status, error, plan, result, watermarks = _run_inside(
-                doc, cfg, started, doc_doctype, doc_name, payload
+                doc, cfg, started, doc_doctype, doc_name, payload, written=written
             )
 
         # Outside the sandbox on purpose: db_set stamps modified_by with the session user,
@@ -336,7 +351,7 @@ def run_task(
                 frappe.db.set_value(
                     "Crema Automation Source", source_name, "last_read", read_up_to, update_modified=False
                 )
-        outcome = _record(doc, status, error, result)
+        outcome = _record(doc, status, error, result, written=written)
     finally:
         frappe.local.crema_in_automation = False
 
@@ -345,7 +360,13 @@ def run_task(
 
 
 def _run_inside(
-    doc, cfg: dict, started, doc_doctype: str | None, doc_name: str | None, payload: str | None = None
+    doc,
+    cfg: dict,
+    started,
+    doc_doctype: str | None,
+    doc_name: str | None,
+    payload: str | None = None,
+    written: _Written | None = None,
 ) -> tuple[str, str, dict | None, str, dict[str, Any]]:
     """Everything that runs as the isolation user. Returns
     (status, error, plan_to_store, result, watermarks)."""
@@ -368,8 +389,13 @@ def _run_inside(
         # target_doctype's own metadata per file (see _read_files). match_on is
         # admin-entered, not model-authored, for the same reason.
         match_fields = [f.strip() for f in (doc.match_on or "").split(",") if f.strip()]
+        mapping = {"doctype": doc.target_doctype, "match_fields": match_fields}
         try:
-            result = _summary(_upsert_files(doc.target_doctype, records, match_fields))
+            if doc.action == "Propose Only":
+                entries = [(r["_source_file"], r, r.get("confidence")) for r in records]
+                result = _propose(doc, mapping, entries)
+            else:
+                result = _summary(_upsert_files(doc.target_doctype, records, match_fields, written=written))
         except Exception as exc:
             return "Failed", _describe(exc), None, "", {}
         return "Success", "", None, _join_note(result, note), watermarks
@@ -381,7 +407,7 @@ def _run_inside(
             return "Failed", _describe(exc), None, "", {}
         return "Success", "", None, _join_note(report[:_RESULT_MAX_CHARS], note), watermarks
 
-    status, error, plan, result = _plan_and_execute(doc, content, allowed_names)
+    status, error, plan, result = _plan_and_execute(doc, content, allowed_names, written=written)
     return status, error, plan, _join_note(result, note), watermarks
 
 
@@ -389,7 +415,9 @@ def _join_note(result: str, note: str) -> str:
     return f"{result} ({note})" if result and note else result or note
 
 
-def _plan_and_execute(doc, content: str, allowed_names: set[str] | None) -> tuple[str, str, dict | None, str]:
+def _plan_and_execute(
+    doc, content: str, allowed_names: set[str] | None, written: _Written | None = None
+) -> tuple[str, str, dict | None, str]:
     """Execute the stored plan (planning first if there is none); on any failure,
     replan exactly once with the failure text appended and try again.
 
@@ -399,21 +427,27 @@ def _plan_and_execute(doc, content: str, allowed_names: set[str] | None) -> tupl
     stored = _stored_plan(doc)
     try:
         plan = stored if stored is not None else _make_plan(doc, content)
-        result = _execute(doc, plan, content, allowed_names)
+        result = _execute(doc, plan, content, allowed_names, written=written)
         return "Success", "", None if stored is not None else plan, result
     except Exception as exc:
         first_error = _describe(exc)
 
     try:
         plan = _make_plan(doc, content, failure=first_error)
-        result = _execute(doc, plan, content, allowed_names)
+        result = _execute(doc, plan, content, allowed_names, written=written)
         return "Replanned", "", plan, result
     except Exception as exc:
         return "Failed", f"{first_error} || replan: {_describe(exc)}", None, ""
 
 
-def _record(doc, status: str, error: str, result: str = "") -> str:
-    """Persist the outcome. Five consecutive failures disable the task."""
+def _record(doc, status: str, error: str, result: str = "", written: _Written | None = None) -> str:
+    """Persist the outcome. Five consecutive failures disable the task.
+
+    `last_written_json` is set on every call, including a Failed one — a run that
+    half-wrote before failing is exactly when "Undo Last Run" matters, and a run that
+    never got past `client._resolve` (see `run_task`) must clear out the previous run's
+    list rather than leave it stale."""
+    written_json = (written or _Written(doc.name)).as_json()
     if status == "Failed":
         failures = (doc.consecutive_failures or 0) + 1
         doc.db_set(
@@ -421,6 +455,7 @@ def _record(doc, status: str, error: str, result: str = "") -> str:
                 "last_status": "Failed",
                 "last_error": error[:_ERROR_MAX_CHARS],
                 "last_result": result[:_RESULT_MAX_CHARS] or None,
+                "last_written_json": written_json,
                 "consecutive_failures": failures,
             }
         )
@@ -436,6 +471,7 @@ def _record(doc, status: str, error: str, result: str = "") -> str:
                 "last_status": status,
                 "last_error": None,
                 "last_result": result[:_RESULT_MAX_CHARS] or None,
+                "last_written_json": written_json,
                 "consecutive_failures": 0,
             }
         )
@@ -562,6 +598,52 @@ class _SourceRead(NamedTuple):
     note: str
     read_up_to: Any
     records: list[dict]
+
+
+@dataclass
+class _Written:
+    """What one run's writers actually did, for `last_written_json` / `created_json` —
+    see PLAN.md's "Undo a run" item. Threaded as an accumulator, not a return value,
+    because `_plan_and_execute` may call `_execute` twice (a replan) and both attempts'
+    writes belong in one list.
+
+    `record` keeps a record in `created` only, even if a later `_upsert` call in the same
+    run updates it — a replan that creates a record, then fails, then on retry finds and
+    updates that same record must not ask undo to both delete it and flag it for review.
+    """
+
+    task: str
+    created: list[list[str]] = field(default_factory=list)
+    updated: list[list[str]] = field(default_factory=list)
+    truncated: bool = False
+
+    def record(self, doctype: str, name: str, *, created: bool) -> None:
+        pair = [doctype, name]
+        if pair in self.created:
+            return
+        target = self.created if created else self.updated
+        if len(self.created) + len(self.updated) >= _WRITTEN_MAX:
+            self.truncated = True
+            return
+        target.append(pair)
+
+    def as_json(self) -> str:
+        return frappe.as_json({"created": self.created, "updated": self.updated, "truncated": self.truncated})
+
+
+def _stamp(doc, written: _Written | None) -> None:
+    """Mark `doc` as written by this task, the same native provenance marker
+    `data_import`/`auto_repeat` set — see `frappe.core.doctype.version.version.for_insert`
+    and `Document.save_version`. Independent of undo: it shows up in the desk's own
+    Document History panel for any doctype that tracks changes, whether or not this run's
+    own list is ever used."""
+    if written is None:
+        return
+    doc.flags.updater_reference = {
+        "doctype": "Crema Automation Task",
+        "docname": written.task,
+        "label": _("via Crema"),
+    }
 
 
 def _read_one(
@@ -723,12 +805,20 @@ def _read_files(
     CremaBlockedError from layer 1 on poisoned document text, same as _read_documents'
     per-record scan drop — is skipped and noted rather than failing the whole source: one
     bad PDF must not disable the task after five runs.
+
+    `doc.confidence_floor` gates here, before any writer sees a record: api.extract()'s
+    confidence is the OCR pass's own measurement, and it is a per-file number — every
+    record a file describes shares it, so a file below the floor is dropped whole rather
+    than record by record. There is no equivalent floor for a plan-based extraction
+    (_extract): that path has no measured confidence, only the model's own output, and
+    gating on a self-reported number would not be a confidence check at all.
     """
     rows, read_up_to = _query_rows(_FILE_DOCTYPE, source, cfg, started, doc_name, _FILE_QUERY_FIELDS, preview)
     if not rows:
         return [], "", read_up_to
 
-    records, failures, unreadable = [], [], 0
+    floor = flt(doc.confidence_floor)
+    records, failures, unreadable, low_confidence = [], [], 0, 0
     for row in rows:
         if not _ocr_readable(row["file_name"]):
             unreadable += 1
@@ -738,14 +828,22 @@ def _read_files(
         except Exception as exc:
             failures.append(f"{row['file_name']} — {_describe(exc)}")
             continue
-        if result["records"]:
-            records.extend(result["records"])
-        else:
+        if not result["records"]:
             failures.append(f"{row['file_name']} — {result['reason'] or 'no records found'}")
+            continue
+        if result["confidence"] < floor:
+            low_confidence += 1
+            continue
+        for record in result["records"]:
+            record["confidence"] = result["confidence"]
+            record["_source_file"] = row["name"]
+        records.extend(result["records"])
 
     notes = []
     if unreadable:
         notes.append(f"{unreadable} file(s) skipped (not a PDF or image)")
+    if low_confidence:
+        notes.append(f"{low_confidence} file(s) skipped (confidence below {floor})")
     if failures:
         notes.append(f"{len(failures)} file(s) unreadable: {'; '.join(failures)}")
     return records, "; ".join(notes), read_up_to
@@ -941,11 +1039,195 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _execute(doc, plan: dict, content: str, allowed_names: set[str] | None) -> str:
+def _propose(doc, mapping: dict, entries: list[tuple[str, dict, float | None]]) -> str:
+    """Park one `Crema Proposal` row per entry instead of writing it — reached from
+    `_execute` for a plan row and from `_run_inside`'s File Query branch for a file
+    record. Returns a `_summary`-shaped string for `last_result`.
+
+    `entries` is (source_id, payload, confidence). `source_id` plus the payload's own
+    JSON is what makes `fingerprint` stable across a repeated run — see the module
+    docstring's Propose Only bullet: a plan row's source_id is the extraction call's own
+    identity (shared by every row from one run, so the payload tells them apart); a file
+    record's is the File document's `name` (_read_files already has it). The payload
+    never keeps `confidence`/`_source_file` — those are propose-only bookkeeping, not
+    part of what the writer will see once approved.
+
+    A duplicate fingerprint — this task, this source, this exact payload, seen before,
+    approved or not — inserts nothing and is not an error: that is the crash-recovery
+    case PLAN.md item 1 asks for. Any other insert failure IS an error: unlike a skipped
+    `_upsert` row, a lost proposal is lost work, so it propagates into
+    `_plan_and_execute`/`_run_inside` and the run records Failed, same as an `_upsert`
+    failure today.
+    """
+    counts = {"proposed": 0, "already proposed": 0}
+    for source_id, payload, confidence in entries:
+        payload = {k: v for k, v in payload.items() if k not in ("confidence", "_source_file")}
+        fingerprint = hashlib.sha256(
+            "|".join([doc.name, source_id, frappe.as_json(payload)]).encode()
+        ).hexdigest()
+        proposal = frappe.get_doc(
+            {
+                "doctype": "Crema Proposal",
+                "task": doc.name,
+                "target_doctype": mapping["doctype"],
+                "confidence": confidence,
+                "fingerprint": fingerprint,
+                "payload_json": frappe.as_json(payload),
+                "mapping_json": frappe.as_json(mapping),
+            }
+        )
+        try:
+            proposal.insert(ignore_permissions=True)
+            counts["proposed"] += 1
+        except frappe.UniqueValidationError:
+            counts["already proposed"] += 1
+    return _summary(counts)
+
+
+def apply_proposal(name: str) -> str:
+    """Approve one `Crema Proposal`: replay it through the writer a `Create or Update
+    Records` run would have used, then stamp the outcome. Reached from
+    `api.approve_proposals`, which is the only caller and already holds the System
+    Manager fence.
+
+    Runs inside the task's own sandbox, as its own isolation user — an approval is a
+    write this task's account is allowed to make, same as an unattended run's. The
+    reentrancy guard is set for the same reason `run_task` sets it (see `on_doc_event`):
+    approving is the run's write, made later and by a human's click instead of the
+    scheduler, and must not re-trigger a Document Event task watching this doctype.
+    """
+    proposal = frappe.get_doc("Crema Proposal", name)
+    if proposal.status != "Pending":
+        raise AutomationError(f"'{name}' is already {proposal.status}.")
+
+    doc = frappe.get_doc("Crema Automation Task", proposal.task)
+    cfg = client._resolve(doc.interface)
+    cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
+    mapping = frappe.parse_json(proposal.mapping_json)
+    payload = frappe.parse_json(proposal.payload_json)
+    written = _Written(doc.name)
+
+    frappe.local.crema_in_automation = True
+    try:
+        with sandbox.isolation(cfg["isolation_user"]):
+            if "field_map" in mapping:
+                outcome = _summary(_upsert(mapping, [payload], written=written))
+            else:
+                outcome = _summary(
+                    _upsert_files(mapping["doctype"], [payload], mapping["match_fields"], written=written)
+                )
+    finally:
+        frappe.local.crema_in_automation = False
+
+    proposal.db_set(
+        {"status": "Approved", "outcome": outcome, "created_json": frappe.as_json(written.created)}
+    )
+    return outcome
+
+
+def discard_proposal(name: str) -> None:
+    """Discard one `Crema Proposal` — no writer involved. Reached from
+    `api.discard_proposals`."""
+    proposal = frappe.get_doc("Crema Proposal", name)
+    if proposal.status != "Pending":
+        raise AutomationError(f"'{name}' is already {proposal.status}.")
+    proposal.db_set("status", "Discarded")
+
+
+def _undo_created(created: list[list[str]]) -> tuple[list[list[str]], list[str]]:
+    """Delete every [doctype, name] pair. `frappe.delete_doc` keeps its own fences on —
+    the isolation user's permissions and the link-exists check — so a record another
+    document now links to is refused, not force-deleted. A pair that fails to delete
+    stays in the returned remaining list, so the person can clear the reason and retry
+    undo later."""
+    remaining, failed = [], []
+    for doctype, name in created:
+        try:
+            frappe.delete_doc(doctype, name, force=0, ignore_permissions=False, ignore_missing=True)
+        except Exception as exc:
+            remaining.append([doctype, name])
+            failed.append(f"{doctype} {name}: {_describe(exc)}")
+    return remaining, failed
+
+
+def undo_last_run(task: str) -> dict[str, Any]:
+    """Delete every record the task's last run created; leave every record it updated
+    alone, for a person to review by hand — see PLAN.md's "Undo a run". Reached from
+    `api.undo_last_run`, which already holds the System Manager fence.
+
+    Runs inside the task's own sandbox, as its own isolation user, the same as
+    `apply_proposal`: undoing is the reverse of a write that account was allowed to make,
+    and no more.
+    """
+    doc = frappe.get_doc("Crema Automation Task", task)
+    written = frappe.parse_json(doc.last_written_json or "{}")
+    created = written.get("created") or []
+    if not created:
+        raise AutomationError(f"'{task}' has no created records to undo.")
+
+    cfg = client._resolve(doc.interface)
+    cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
+
+    frappe.local.crema_in_automation = True
+    try:
+        with sandbox.isolation(cfg["isolation_user"]):
+            remaining, failed = _undo_created(created)
+    finally:
+        frappe.local.crema_in_automation = False
+
+    doc.db_set(
+        "last_written_json",
+        frappe.as_json(
+            {
+                "created": remaining,
+                "updated": written.get("updated") or [],
+                "truncated": written.get("truncated", False),
+                "undone_at": now_datetime().isoformat(),
+            }
+        ),
+    )
+    return {"deleted": len(created) - len(remaining), "failed": failed}
+
+
+def undo_proposal(name: str) -> dict[str, Any]:
+    """Reverse one Approved `Crema Proposal`: delete what approving it created, then
+    return the row to Pending so it can be approved again or discarded. Reached from
+    `api.undo_proposals`. `fingerprint` is untouched and stays unique, so a repeated
+    source read still finds this row instead of parking a duplicate."""
+    proposal = frappe.get_doc("Crema Proposal", name)
+    if proposal.status != "Approved":
+        raise AutomationError(f"'{name}' is not Approved.")
+
+    doc = frappe.get_doc("Crema Automation Task", proposal.task)
+    cfg = client._resolve(doc.interface)
+    cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
+    created = frappe.parse_json(proposal.created_json or "[]")
+
+    frappe.local.crema_in_automation = True
+    try:
+        with sandbox.isolation(cfg["isolation_user"]):
+            remaining, failed = _undo_created(created)
+    finally:
+        frappe.local.crema_in_automation = False
+
+    if remaining:
+        proposal.db_set("created_json", frappe.as_json(remaining))
+    else:
+        proposal.db_set({"status": "Pending", "outcome": None, "created_json": None})
+    return {"deleted": len(created) - len(remaining), "failed": failed}
+
+
+def _execute(
+    doc, plan: dict, content: str, allowed_names: set[str] | None, written: _Written | None = None
+) -> str:
     """Run stage 4 and return a human-readable count for `last_result`."""
     mapping = plan["map"]
+    if doc.action == "Propose Only":
+        source_id = hashlib.sha256(f"{plan['extract']['prompt']}\n\n{content}".encode()).hexdigest()
+        rows = _extract(doc, plan, content)
+        return _propose(doc, mapping, [(source_id, row, None) for row in rows])
     if doc.action != "Update the Records It Read":
-        return _summary(_upsert(mapping, _extract(doc, plan, content)))
+        return _summary(_upsert(mapping, _extract(doc, plan, content), written=written))
 
     # Checked before the extraction call, so a plan of the wrong shape costs nothing.
     # Raised, not thrown: this lands in _plan_and_execute's replan, so the failure text
@@ -957,7 +1239,7 @@ def _execute(doc, plan: dict, content: str, allowed_names: set[str] | None) -> s
     # child rows — a child_table here would append against nothing it can dedup on.
     mapping = {key: value for key, value in mapping.items() if key != "child_table"}
     rows = _extract(doc, plan, content)
-    return _summary(_upsert(mapping, rows, create=False, allowed_names=allowed_names))
+    return _summary(_upsert(mapping, rows, create=False, allowed_names=allowed_names, written=written))
 
 
 def _summary(counts: dict[str, int]) -> str:
@@ -1023,10 +1305,17 @@ def _match_existing(
 
 
 def _upsert(
-    mapping: dict, rows: list[dict], *, create: bool = True, allowed_names: set[str] | None = None
+    mapping: dict,
+    rows: list[dict],
+    *,
+    create: bool = True,
+    allowed_names: set[str] | None = None,
+    written: _Written | None = None,
 ) -> dict[str, int]:
     """Find-or-create one record per row, then (optionally) upsert one child row from the
-    same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts."""
+    same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts.
+    `written`, if given, is appended with each saved record's (doctype, name) — see
+    `_Written`."""
     doctype = mapping["doctype"]
     child = mapping.get("child_table")
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
@@ -1056,13 +1345,18 @@ def _upsert(
         doc.update(values)
         if child:
             _upsert_child(doc, child, row)
+        _stamp(doc, written)
         doc.save()
         counts["updated" if match else "created"] += 1
+        if written is not None:
+            written.record(doctype, doc.name, created=not match)
 
     return counts
 
 
-def _upsert_files(doctype: str, records: list[dict], match_fields: list[str]) -> dict[str, int]:
+def _upsert_files(
+    doctype: str, records: list[dict], match_fields: list[str], *, written: _Written | None = None
+) -> dict[str, int]:
     """The File Query writer. `records` are already {"set", "child_set"} dicts straight
     from api.extract() — _filter_diff has already sanitised every key against the target
     (and child) doctype's own meta, so there is no field_map to apply, unlike _upsert.
@@ -1086,8 +1380,11 @@ def _upsert_files(doctype: str, records: list[dict], match_fields: list[str]) ->
 
         doc.update(values)
         _replace_children(doc, child_set)
+        _stamp(doc, written)
         doc.save()
         counts["updated" if match else "created"] += 1
+        if written is not None:
+            written.record(doctype, doc.name, created=not match)
 
     return counts
 

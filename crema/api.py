@@ -914,3 +914,71 @@ def dry_run_automation(task: str) -> dict:
         return automation.dry_run(task)
     except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
         return _error_response(exc)
+
+
+def _proposal_names(names: str | list[str]) -> list[str]:
+    return frappe.parse_json(names) if isinstance(names, str) else names
+
+
+@frappe.whitelist()
+def approve_proposals(names: str | list[str]) -> list[dict]:
+    """Approve one or more `Crema Proposal` rows — the form's Approve button and the
+    list view's bulk action both call this. Each name is independent: one bad row must
+    not stop the rest from going through. Returns the failures only, as
+    `[{"name", "error"}, ...]`; an empty list is every row approved."""
+    frappe.only_for("System Manager")
+    from crema import automation
+
+    failures = []
+    for name in _proposal_names(names):
+        try:
+            automation.apply_proposal(name)
+        except Exception as exc:
+            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
+    return failures
+
+
+@frappe.whitelist()
+def discard_proposals(names: str | list[str]) -> list[dict]:
+    """Discard one or more `Crema Proposal` rows. See `approve_proposals` for the shape
+    of what this returns."""
+    frappe.only_for("System Manager")
+    from crema import automation
+
+    failures = []
+    for name in _proposal_names(names):
+        try:
+            automation.discard_proposal(name)
+        except Exception as exc:
+            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
+    return failures
+
+
+@frappe.whitelist()
+def undo_proposals(names: str | list[str]) -> list[dict]:
+    """Reverse one or more Approved `Crema Proposal` rows: delete what approving them
+    created and return each to Pending. See `approve_proposals` for the shape of what
+    this returns."""
+    frappe.only_for("System Manager")
+    from crema import automation
+
+    failures = []
+    for name in _proposal_names(names):
+        try:
+            automation.undo_proposal(name)
+        except Exception as exc:
+            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
+    return failures
+
+
+@frappe.whitelist()
+def undo_last_run(task: str) -> dict:
+    """Delete every record a Crema Automation Task's last run created, leaving every
+    record it updated for manual review — see PLAN.md's "Undo a run"."""
+    frappe.only_for("System Manager")
+    from crema import automation
+
+    try:
+        return automation.undo_last_run(task)
+    except Exception as exc:
+        frappe.throw(_log_mod.redact(str(exc)))

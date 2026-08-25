@@ -1071,7 +1071,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             get_guardrails()
 
     # --- health()/is_configured() — no role gate of their own; the app-level check
-    # is what the consuming app applies before calling in-process (see ROADMAP) -----
+    # is what the consuming app applies before calling in-process (see PLAN.md) -----
 
     def test_health_unconfigured_interface_reports_not_configured(self):
         """ "transcribe" has no FALLBACKS entry (audio cannot fall back to a chat
@@ -1436,7 +1436,7 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
 
 class IntegrationTestCremaHistory(CremaFixtureTestCase):
     """ask(history=[...]) — a caller-supplied transcript, not a chatbot crema manages
-    itself. See ROADMAP.md's closing line for the distinction."""
+    itself. See PLAN.md's Rejected list (a chat surface) for the distinction."""
 
     @classmethod
     def setUpClass(cls) -> None:

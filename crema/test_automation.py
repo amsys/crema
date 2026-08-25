@@ -627,7 +627,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
             automation._validate_plan(plan, "ToDo")
 
     def test_validate_plan_rejects_a_doctype_this_site_has_blocked(self):
-        """INSPIRATION.md item 6 — a System Manager's own red line, not a permission
+        """The blocked-doctype list — a System Manager's own red line, not a permission
         question: the isolation user could otherwise write ToDo just fine."""
         plan = _todo_plan()  # map.doctype == "ToDo"
         with patch("crema.automation.policy.blocked_doctypes", return_value={"ToDo"}):
@@ -2162,6 +2162,55 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         self.assertNotIn("used_stored_plan", result)
         self.assertEqual(frappe.db.count("Contact"), before)
 
+    # --- confidence floor ---------------------------------------------------------
+
+    def test_a_file_below_the_confidence_floor_is_skipped_and_named_in_last_result(self):
+        self._make_file()
+        task = self._make_file_task(confidence_floor=0.9)
+
+        status, mock = self._run_files(
+            task, [_ocr_result(confidence=0.5), _extraction_result({"first_name": "Jane"})]
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(mock.call_count, 2)  # OCR, then extraction — the floor gates after both
+        self.assertFalse(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        task.reload()
+        self.assertIn("confidence below 0.9", task.last_result)
+
+    def test_a_file_at_the_confidence_floor_is_written_as_usual(self):
+        self._make_file()
+        task = self._make_file_task(confidence_floor=0.5)
+
+        status, _mock = self._run_files(
+            task, [_ocr_result(confidence=0.5), _extraction_result({"first_name": "Jane"})]
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertTrue(frappe.db.exists("Contact", {"first_name": "Jane"}))
+
+    # --- Propose Only ---------------------------------------------------------------
+
+    def test_propose_only_parks_a_file_record_with_its_confidence_and_writes_nothing(self):
+        self._make_file()
+        task = self._make_file_task(action="Propose Only", confidence_floor=0.5)
+
+        status, _mock = self._run_files(
+            task, [_ocr_result(confidence=0.9), _extraction_result({"first_name": "Jane"})]
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertFalse(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        proposals = frappe.get_all(
+            "Crema Proposal", filters={"task": task.name}, fields=["status", "confidence", "payload_json"]
+        )
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].status, "Pending")
+        self.assertAlmostEqual(proposals[0].confidence, 0.9, places=2)
+        self.assertEqual(frappe.parse_json(proposals[0].payload_json)["set"], {"first_name": "Jane"})
+        task.reload()
+        self.assertIn("1 proposed", task.last_result)
+
     # --- authoring-time fences ---------------------------------------------------
 
     def test_update_the_records_it_read_is_refused_with_a_file_source(self):
@@ -2194,3 +2243,320 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
     def test_match_on_rejects_an_unknown_field(self):
         with self.assertRaises(frappe.ValidationError):
             self._make_file_task(match_on="not_a_real_field")
+
+
+# ---------------------------------------------------------------------------
+# Propose Only — a plan-based run parks rows instead of writing them
+# ---------------------------------------------------------------------------
+
+
+class IntegrationTestCremaAutomationProposals(CremaFixtureTestCase):
+    """automation._propose/apply_proposal/discard_proposal against a plan-based
+    (Document Query / URL) run — the File Query side of Propose Only is covered in
+    IntegrationTestCremaAutomationFileQuery instead, since it needs that class's own
+    client._complete boundary."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures(TEST_INTERFACE, guardrails={"scan": "Off"})
+
+    @staticmethod
+    def _todo(description: str) -> str:
+        """A row for the Document Query source to actually find — an empty result short-
+        circuits _run_inside before EXTRACT ever runs, same as IntegrationTestCremaAutomationSources._todo."""
+        doc = frappe.get_doc(
+            {
+                "doctype": "ToDo",
+                "description": description,
+                "allocated_to": TEST_ISOLATION_USER,
+                "priority": "Low",
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    @staticmethod
+    def _propose_task(**kw):
+        kw.setdefault("action", "Propose Only")
+        kw.setdefault("plan_json", frappe.as_json(_todo_plan()))
+        return _make_query_task(**kw)
+
+    def test_a_propose_only_run_parks_one_proposal_per_row_and_writes_nothing(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+
+        status, _ = _run(task.name, [_todo_rows(marker)])
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(frappe.db.count("ToDo", {"description": ["like", f"%{marker}%"]}), 0)
+        proposals = frappe.get_all("Crema Proposal", filters={"task": task.name}, fields=["status"])
+        self.assertEqual(len(proposals), 2)
+        self.assertTrue(all(p.status == "Pending" for p in proposals))
+        task.reload()
+        self.assertIn("2 proposed", task.last_result)
+
+    def test_rerunning_the_same_task_does_not_duplicate_a_proposal(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+
+        status, _ = _run(task.name, [_todo_rows(marker)])
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(frappe.db.count("Crema Proposal", {"task": task.name}), 2)
+        task.reload()
+        self.assertIn("2 already proposed", task.last_result)
+
+    def test_approving_a_proposal_writes_the_record_and_stamps_the_outcome(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+
+        outcome = automation.apply_proposal(proposal)
+
+        self.assertIn("1 created", outcome)
+        self.assertTrue(frappe.db.exists("ToDo", {"description": ["like", f"%{marker}%"]}))
+        row = frappe.db.get_value("Crema Proposal", proposal, ["status", "outcome"], as_dict=True)
+        self.assertEqual(row.status, "Approved")
+        self.assertEqual(row.outcome, outcome)
+
+    def test_discarding_a_proposal_writes_nothing(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+
+        automation.discard_proposal(proposal)
+
+        self.assertEqual(frappe.db.get_value("Crema Proposal", proposal, "status"), "Discarded")
+        self.assertEqual(frappe.db.count("ToDo", {"description": ["like", f"%{marker}%"]}), 0)
+
+    def test_approving_an_already_approved_proposal_is_refused(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+        automation.apply_proposal(proposal)
+
+        with self.assertRaises(automation.AutomationError):
+            automation.apply_proposal(proposal)
+
+    def test_approving_a_proposal_records_what_it_created(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+
+        automation.apply_proposal(proposal)
+
+        created = frappe.parse_json(frappe.db.get_value("Crema Proposal", proposal, "created_json"))
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0][0], "ToDo")
+        self.assertTrue(frappe.db.exists("ToDo", created[0][1]))
+
+    def test_undoing_an_approved_proposal_deletes_it_and_returns_to_pending(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+        automation.apply_proposal(proposal)
+        created_json = frappe.db.get_value("Crema Proposal", proposal, "created_json")
+        created_name = frappe.parse_json(created_json)[0][1]
+
+        result = automation.undo_proposal(proposal)
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertFalse(frappe.db.exists("ToDo", created_name))
+        row = frappe.db.get_value(
+            "Crema Proposal", proposal, ["status", "outcome", "created_json"], as_dict=True
+        )
+        self.assertEqual(row.status, "Pending")
+        self.assertIsNone(row.outcome)
+        self.assertIsNone(row.created_json)
+
+    def test_undoing_a_pending_proposal_is_refused(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+
+        with self.assertRaises(automation.AutomationError):
+            automation.undo_proposal(proposal)
+
+
+class IntegrationTestCremaAutomationUndo(CremaFixtureTestCase):
+    """`_Written`, `_stamp`, and `undo_last_run` — see PLAN.md's "Undo a run". The
+    `Crema Proposal` side of undo lives in IntegrationTestCremaAutomationProposals
+    instead, next to apply_proposal/discard_proposal."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures(TEST_INTERFACE, guardrails={"scan": "Off"})
+
+    @staticmethod
+    def _todo(description: str, **kw) -> str:
+        doc = frappe.get_doc(
+            {
+                "doctype": "ToDo",
+                "description": description,
+                "allocated_to": TEST_ISOLATION_USER,
+                "priority": "Low",
+                **kw,
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        return doc.name
+
+    @staticmethod
+    def _created(task) -> list[list[str]]:
+        return frappe.parse_json(frappe.db.get_value("Crema Automation Task", task, "last_written_json"))[
+            "created"
+        ]
+
+    def test_a_run_records_the_records_it_created_and_updated(self):
+        marker = uuid.uuid4().hex[:10]
+        existing = self._todo(f"{marker} one", priority="Medium")
+        task = _make_task()
+
+        status, _ = _run(task.name, [_todo_plan(), _todo_rows(marker)])
+
+        self.assertEqual(status, "Success")
+        task.reload()
+        written = frappe.parse_json(task.last_written_json)
+        self.assertEqual(len(written["created"]), 1)
+        self.assertEqual(written["updated"], [["ToDo", existing]])
+
+    def test_undo_deletes_created_records_and_keeps_updated_ones(self):
+        marker = uuid.uuid4().hex[:10]
+        existing = self._todo(f"{marker} one", priority="Medium")
+        task = _make_task()
+        _run(task.name, [_todo_plan(), _todo_rows(marker)])
+        created_name = self._created(task.name)[0][1]
+
+        result = automation.undo_last_run(task.name)
+
+        self.assertEqual(result, {"deleted": 1, "failed": []})
+        self.assertFalse(frappe.db.exists("ToDo", created_name))
+        self.assertTrue(frappe.db.exists("ToDo", existing))
+        self.assertEqual(self._created(task.name), [])
+
+    def test_a_delete_failure_keeps_that_record_in_the_list(self):
+        marker = uuid.uuid4().hex[:10]
+        task = _make_task()
+        _run(task.name, [_todo_plan(), _todo_rows(marker)])
+        bad_doctype, bad_name = self._created(task.name)[0]
+        real_delete_doc = frappe.delete_doc
+
+        def _flaky_delete(doctype, name, *args, **kw):
+            if name == bad_name:
+                raise frappe.LinkExistsError("linked elsewhere")
+            return real_delete_doc(doctype, name, *args, **kw)
+
+        with patch("frappe.delete_doc", side_effect=_flaky_delete):
+            result = automation.undo_last_run(task.name)
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(len(result["failed"]), 1)
+        self.assertTrue(frappe.db.exists(bad_doctype, bad_name))
+        self.assertEqual(self._created(task.name), [[bad_doctype, bad_name]])
+
+    def test_a_second_run_replaces_the_previous_written_list(self):
+        marker_one = uuid.uuid4().hex[:10]
+        marker_two = uuid.uuid4().hex[:10]
+        task = _make_task()
+        _run(task.name, [_todo_plan(), _todo_rows(marker_one)])
+        first_names = {name for _, name in self._created(task.name)}
+
+        _run(task.name, [_todo_rows(marker_two)])
+
+        second_names = {name for _, name in self._created(task.name)}
+        self.assertEqual(len(second_names), 2)
+        self.assertFalse(first_names & second_names)
+
+    def test_an_unresolvable_interface_clears_the_stale_written_list(self):
+        marker = uuid.uuid4().hex[:10]
+        task = _make_task()
+        _run(task.name, [_todo_plan(), _todo_rows(marker)])
+        self.assertTrue(self._created(task.name))
+
+        with (
+            patch("crema.client._resolve", side_effect=CremaConfigError("no provider")),
+            patch("frappe.db.commit"),
+        ):
+            status = automation.run_task(task.name)
+
+        self.assertEqual(status, "Failed")
+        self.assertEqual(self._created(task.name), [])
+
+    def test_a_failed_run_still_records_what_it_wrote(self):
+        marker = uuid.uuid4().hex[:10]
+        task = _make_task(plan_json=frappe.as_json(_todo_plan()))
+        bad_rows = {
+            "rows": [
+                {"text": f"{marker} one", "prio": "Low", "who": TEST_ISOLATION_USER},
+                {"text": f"{marker} two", "prio": "Not A Real Priority", "who": TEST_ISOLATION_USER},
+            ]
+        }
+
+        status, ask_json = _run(task.name, [bad_rows, _todo_plan(), bad_rows])
+
+        self.assertEqual(status, "Failed")
+        self.assertEqual(ask_json.call_count, 3)
+        created = self._created(task.name)
+        self.assertEqual(len(created), 1)
+        self.assertIn(f"{marker} one", frappe.db.get_value("ToDo", created[0][1], "description"))
+
+    def test_undo_refuses_when_the_last_run_created_nothing(self):
+        target = self._todo("_test_crema_undo_target")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+
+        status, _ = _run(task.name, [{"rows": [{"id": target, "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        with self.assertRaises(automation.AutomationError):
+            automation.undo_last_run(task.name)
+
+    def test_stamp_sets_the_updater_reference_to_the_task(self):
+        # Not asserted via a real Version row: Document._save sets
+        # flags.ignore_version = frappe.in_test before every save in this suite, so
+        # save_version() never runs under the test harness regardless of this stamp.
+        # _stamp is what run_task's writers call before doc.save() — this is what it does.
+        written = automation._Written("_test_crema_task_x")
+        doc = frappe.new_doc("ToDo")
+
+        automation._stamp(doc, written)
+
+        self.assertEqual(
+            doc.flags.updater_reference,
+            {"doctype": "Crema Automation Task", "docname": "_test_crema_task_x", "label": "via Crema"},
+        )
+
+    def test_stamp_does_nothing_when_written_is_none(self):
+        doc = frappe.new_doc("ToDo")
+
+        automation._stamp(doc, None)
+
+        self.assertIsNone(doc.flags.get("updater_reference"))
+
+    def test_a_propose_only_run_records_no_written_records(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_undo_propose_source")
+        task = _make_query_task(action="Propose Only", plan_json=frappe.as_json(_todo_plan()))
+
+        status, _ = _run(task.name, [_todo_rows(marker)])
+
+        self.assertEqual(status, "Success")
+        task.reload()
+        written = frappe.parse_json(task.last_written_json)
+        self.assertEqual(written, {"created": [], "updated": [], "truncated": False})

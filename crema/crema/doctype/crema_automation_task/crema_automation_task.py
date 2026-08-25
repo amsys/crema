@@ -42,7 +42,11 @@ _SCHEDULE_PRESETS = {
 
 # A stored plan is written for one (source, target, action, instruction) shape. Change any
 # of them and it must be re-planned rather than re-run against a shape it never saw. The
-# sources are compared separately — see _sources_signature.
+# sources are compared separately — see _sources_signature. `action` being here means
+# switching between Create or Update Records and Propose Only also replans — one wasted
+# LLM call, and the reviewed plan is lost — rather than reusing a plan written for the
+# other action; folding the two together would add a special case to shared logic to
+# save that one call, so it is left as is.
 _PLAN_INPUTS = ("instruction", "target_doctype", "action")
 
 # What an Incoming Email task watches. Frappe writes one of these per received message,
@@ -243,16 +247,16 @@ class CremaAutomationTask(Document):
             validate_email_address(address, throw=True)
 
         if self.file_sources():
-            if self.action != "Create or Update Records":
+            if self.action not in ("Create or Update Records", "Propose Only"):
                 frappe.throw(
                     _(
-                        "A File Query source only supports Create or Update Records — it always "
-                        "produces new-or-changed records, never a report or an update to the "
-                        "records it read."
+                        "A File Query source only supports Create or Update Records or Propose Only "
+                        "— it always produces new-or-changed records, never a report or an update to "
+                        "the records it read."
                     )
                 )
             if not self.target_doctype:
-                frappe.throw(_("Create or Update Records needs a Record Type to Write."))
+                frappe.throw(_("{0} needs a Record Type to Write.").format(_(self.action)))
             self._validate_match_on()
         elif self.action == "Update the Records It Read":
             # See the module docstring — this is the fence, not a convenience check.
@@ -271,7 +275,7 @@ class CremaAutomationTask(Document):
             self.target_doctype = None
             self.match_on = None
         elif not self.target_doctype:
-            frappe.throw(_("Create or Update Records needs a Record Type to Write."))
+            frappe.throw(_("{0} needs a Record Type to Write.").format(_(self.action)))
         else:
             self.match_on = None
 

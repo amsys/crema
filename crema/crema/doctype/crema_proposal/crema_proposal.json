@@ -1,0 +1,133 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-08-25 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "task",
+  "status",
+  "column_break_top",
+  "target_doctype",
+  "confidence",
+  "section_detail",
+  "outcome",
+  "created_json",
+  "fingerprint",
+  "payload_json",
+  "mapping_json"
+ ],
+ "fields": [
+  {
+   "description": "The Propose Only task that parked this row.",
+   "fieldname": "task",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Task",
+   "options": "Crema Automation Task",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Pending",
+   "description": "Pending — waiting for a human to approve or discard it. Approved — written to the record type below. Discarded — never written.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nApproved\nDiscarded",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_top",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "The record type this row would create or change once approved.",
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Record Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "description": "The OCR pass's confidence in the file this row was read from, 0 to 1. Empty for a row read from text rather than a file.",
+   "fieldname": "confidence",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Confidence",
+   "precision": "2",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_detail",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
+   "description": "What approving this row did — the same record counts an unattended run would have recorded.",
+   "fieldname": "outcome",
+   "fieldtype": "Small Text",
+   "label": "Outcome",
+   "read_only": 1
+  },
+  {
+   "description": "The record approving this row created, for the Undo action. Empty for an Approved row that only updated an existing record, and cleared once undone.",
+   "fieldname": "created_json",
+   "fieldtype": "Code",
+   "label": "Created (JSON)",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "description": "Identifies this row so a repeated run finds it instead of filing a duplicate.",
+   "fieldname": "fingerprint",
+   "fieldtype": "Data",
+   "label": "Fingerprint",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "description": "The extracted row (or file record), unchanged, as the writer would receive it.",
+   "fieldname": "payload_json",
+   "fieldtype": "Code",
+   "label": "Payload (JSON)",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "description": "How the payload maps onto the record type — the same shape the writer uses.",
+   "fieldname": "mapping_json",
+   "fieldtype": "Code",
+   "label": "Mapping (JSON)",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-08-25 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Crema",
+ "name": "Crema Proposal",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "target_doctype",
+ "track_changes": 1
+}

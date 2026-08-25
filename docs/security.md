@@ -583,7 +583,7 @@ known vulnerability inside that range, the pin flags the range itself.
 
 ## Planned hardening
 
-Work not yet done, kept here rather than in ROADMAP.md because each item is a gap in a
+Work not yet done, kept here rather than in PLAN.md because each item is a gap in a
 guarantee this page already states.
 
 - **SSRF egress control for `automation._fetch`.** A deny-list for private and

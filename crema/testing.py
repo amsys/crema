@@ -6,7 +6,7 @@ succeed before its own mock of client._complete is ever reached, or every call i
 suite raises CremaConfigError first. crema's own suite has had this exact sequence in
 test_fixtures._ensure_provider/_ensure_interface for a while — this module is that same
 sequence, promoted to a public, documented name a downstream app can actually import.
-See PLAN.md item 8 and docs/use.md's "Testing an app that uses crema".
+See docs/use.md's "Testing an app that uses crema".
 """
 
 from __future__ import annotations

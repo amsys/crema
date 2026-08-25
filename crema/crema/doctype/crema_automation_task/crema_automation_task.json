@@ -11,6 +11,7 @@
   "next_run",
   "last_run",
   "last_result",
+  "last_written_json",
   "column_break_status",
   "consecutive_failures",
   "last_error",
@@ -36,6 +37,7 @@
   "action",
   "target_doctype",
   "match_on",
+  "confidence_floor",
   "notify_to",
   "section_plan",
   "plan_target_doctype",
@@ -179,28 +181,37 @@
   },
   {
    "default": "Create or Update Records",
-   "description": "<b>Create or Update Records</b> — add new records, or change them if they already exist. <b>Update the Records It Read</b> — change only the records this task read; it never adds one, and it needs exactly one Document Query source. <b>No Changes</b> — write nothing, just save the answer.",
+   "description": "<b>Create or Update Records</b> — add new records, or change them if they already exist. <b>Update the Records It Read</b> — change only the records this task read; it never adds one, and it needs exactly one Document Query source. <b>Propose Only</b> — work out what Create or Update Records would have written, and park it for a person to approve or discard instead of writing it. <b>No Changes</b> — write nothing, just save the answer.",
    "fieldname": "action",
    "fieldtype": "Select",
    "label": "Action",
-   "options": "Create or Update Records\nUpdate the Records It Read\nNo Changes",
+   "options": "Create or Update Records\nUpdate the Records It Read\nPropose Only\nNo Changes",
    "reqd": 1
   },
   {
-   "depends_on": "eval:doc.action==\"Create or Update Records\"",
+   "depends_on": "eval:[\"Create or Update Records\", \"Propose Only\"].includes(doc.action)",
    "description": "The only kind of record this task can create or change. Crema checks every run against it, so the task can never write anywhere else.",
    "fieldname": "target_doctype",
    "fieldtype": "Link",
    "label": "Record Type to Write",
-   "mandatory_depends_on": "eval:doc.action==\"Create or Update Records\"",
+   "mandatory_depends_on": "eval:[\"Create or Update Records\", \"Propose Only\"].includes(doc.action)",
    "options": "DocType"
   },
   {
-   "depends_on": "eval:doc.action==\"Create or Update Records\" && (doc.sources||[]).some(r=>r.source_type==\"File Query\")",
+   "depends_on": "eval:[\"Create or Update Records\", \"Propose Only\"].includes(doc.action) && (doc.sources||[]).some(r=>r.source_type==\"File Query\")",
    "description": "Which field or fields (comma-separated) identify the same record across runs — for example email_id, or invoice_no. A file whose values match an existing record updates it instead of creating a duplicate. Required for a File Query source.",
    "fieldname": "match_on",
    "fieldtype": "Data",
    "label": "Match Records On"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:(doc.sources||[]).some(r=>r.source_type==\"File Query\")",
+   "description": "A file read below this confidence, 0 to 1, is skipped rather than proposed or written. Applies only to a File Query source — Crema has no equivalent measurement for text read from a page or a record. 0 accepts everything.",
+   "fieldname": "confidence_floor",
+   "fieldtype": "Float",
+   "label": "Lowest Confidence to Accept",
+   "precision": "2"
   },
   {
    "description": "Email addresses to send the result to after each successful run, separated by commas. Works with any action: a task that writes records emails what it did. Leave empty to only save it on this task.",
@@ -289,6 +300,14 @@
    "fieldname": "last_result",
    "fieldtype": "Text",
    "label": "Last Result",
+   "read_only": 1
+  },
+  {
+   "description": "The records the last run created and updated, for the Undo Last Run action. Empty once every created record has been deleted, or once a later run replaces it.",
+   "fieldname": "last_written_json",
+   "fieldtype": "Code",
+   "label": "Last Written (JSON)",
+   "options": "JSON",
    "read_only": 1
   },
   {

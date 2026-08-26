@@ -15,7 +15,7 @@ dependencies = [
     # PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1, already set in env/bin/activate.
     # >=1.83 clears the 1.82.7/1.82.8 supply-chain compromise (see docs/security.md's
     # Secrets section); <2 keeps an unreviewed major from arriving on a routine bump.
-    "litellm>=1.83,<2",
+    "litellm>=1.98.0,<2",
     "pymupdf",
     # The two below are layer 1 (crema/security.py) only, both pure-Python tables:
     # `ftfy` to repair mojibake, `anyascii` to transliterate look-alike letters to ASCII

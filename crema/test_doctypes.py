@@ -1481,6 +1481,13 @@ class IntegrationTestCremaLogChain(CremaFixtureTestCase):
     every later method's own "clean chain" precondition.
     """
 
+    def setUp(self) -> None:
+        super().setUp()
+        # The site's own Crema Log rows (a desk call, a cypress run) sit before this
+        # test's rows in the whole-table walk and break its clean-chain premise.
+        # The delete runs inside the per-test savepoint, so the rows come back.
+        frappe.db.delete("Crema Log")
+
     @staticmethod
     def _insert(prompt_sha: str) -> str:
         log.insert("simple", "test-model", "Success", None, prompt_sha=prompt_sha)

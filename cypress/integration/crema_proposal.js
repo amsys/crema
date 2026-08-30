@@ -45,8 +45,20 @@ const PROPOSALS = [
 let names = [];
 
 // Whether this file seeded Crema Settings' defaults, i.e. whether after() has anything to
-// undo there.
+// undo there — plus the values the site held before, so after() restores them instead of
+// blanking: a bench can carry a Default Isolation User with no Default Provider, and
+// that user is not this file's to clear.
 let seeded_defaults = false;
+let prior_defaults = { default_model: "", default_isolation_user: "" };
+
+// add_custom_button renders into the page header (.page-actions), so every lookup of an
+// Approve/Discard/Undo button is scoped there. An unscoped cy.contains("button",
+// "Discard") also matches the form timeline's own comment-box Discard button, which
+// frappe keeps in the DOM display:none — that one is first in document order, so it wins
+// the match and every assertion then reads the wrong button.
+function action_button(label) {
+	return cy.get(".page-actions").contains("button", label);
+}
 
 // Same helper, same reason, as desk_ui.js's own: frappe never removes a hidden dialog
 // from the DOM, so .modal.show is the only reliable handle on the visible one.
@@ -160,6 +172,10 @@ context("Crema Proposal review", () => {
 		}).then((settings) => {
 			if (settings.default_provider) return;
 			seeded_defaults = true;
+			prior_defaults = {
+				default_model: settings.default_model || "",
+				default_isolation_user: settings.default_isolation_user || "",
+			};
 			cy.insert_doc(
 				"Crema Provider",
 				{
@@ -231,13 +247,17 @@ context("Crema Proposal review", () => {
 		cy.remove_doc("Crema Automation Task", TASK, true);
 		if (seeded_defaults) {
 			// CremaProvider.on_trash (_release_from_settings) clears Default Provider and
-			// Default Model itself — the isolation user is this file's to clear, and it
-			// has to go before the User it names can be deleted.
+			// Default Model itself — the model and isolation user are restored to what
+			// the site held before this file seeded, and the restore has to land before
+			// the User the seed named can be deleted.
 			cy.remove_doc("Crema Provider", PROVIDER, true);
 			cy.call("frappe.client.set_value", {
 				doctype: "Crema Settings",
 				name: "Crema Settings",
-				fieldname: { default_isolation_user: "" },
+				fieldname: {
+					default_model: prior_defaults.default_model,
+					default_isolation_user: prior_defaults.default_isolation_user,
+				},
 			});
 		}
 		cy.remove_doc("User", RUNNER, true);
@@ -261,41 +281,41 @@ context("Crema Proposal review", () => {
 		cy.get("@preview").should("not.contain.text", "unmapped_key");
 		cy.get("@preview").should("not.contain.text", UNMAPPED);
 
-		cy.contains("button", "Approve").should("be.visible");
-		cy.contains("button", "Discard").should("be.visible");
+		action_button("Approve").should("be.visible");
+		action_button("Discard").should("be.visible");
 		// Undo is for Approved rows only.
-		cy.contains("button", "Undo").should("not.exist");
+		action_button("Undo").should("not.exist");
 	});
 
 	it("approves a pending row from the form, and Undo puts the record back", () => {
 		cy.visit(`/app/crema-proposal/${names[0]}`);
-		cy.contains("button", "Approve").click();
+		action_button("Approve").click();
 
 		// A real write, made as the task's Runs As account — not a status flip.
 		cy.window().its("cur_frm.doc.status").should("eq", "Approved");
 		contacts_named(PROPOSALS[0].who).should("have.length", 1);
 
 		// reload_doc re-runs refresh, so the buttons follow the new status.
-		cy.contains("button", "Approve").should("not.exist");
-		cy.contains("button", "Discard").should("not.exist");
+		action_button("Approve").should("not.exist");
+		action_button("Discard").should("not.exist");
 
-		cy.contains("button", "Undo").click();
+		action_button("Undo").click();
 		cy.window().its("cur_frm.doc.status").should("eq", "Pending");
 		contacts_named(PROPOSALS[0].who).should("have.length", 0);
-		cy.contains("button", "Undo").should("not.exist");
-		cy.contains("button", "Approve").should("be.visible");
+		action_button("Undo").should("not.exist");
+		action_button("Approve").should("be.visible");
 	});
 
 	it("discards a pending row from the form, and writes nothing", () => {
 		cy.visit(`/app/crema-proposal/${names[1]}`);
-		cy.contains("button", "Discard").click();
+		action_button("Discard").click();
 
 		cy.window().its("cur_frm.doc.status").should("eq", "Discarded");
 		contacts_named(PROPOSALS[1].who).should("have.length", 0);
-		cy.contains("button", "Approve").should("not.exist");
-		cy.contains("button", "Discard").should("not.exist");
+		action_button("Approve").should("not.exist");
+		action_button("Discard").should("not.exist");
 		// Nothing was written, so there is nothing to reverse.
-		cy.contains("button", "Undo").should("not.exist");
+		action_button("Undo").should("not.exist");
 	});
 
 	it("previews every parked write before a bulk approve, and writes only on confirm", () => {

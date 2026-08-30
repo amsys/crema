@@ -137,6 +137,15 @@ class IntegrationTestCremaProvider(CremaFixtureTestCase):
     def test_create_from_template_creates_and_sets_default(self):
         from crema.crema.doctype.crema_provider.crema_provider import create_from_template
 
+        # set_as_default saves Crema Settings, and the provider/isolation pairing rule
+        # refuses a Default Provider with no isolation user anywhere — a genuinely
+        # fresh site has none, so provide the precondition instead of borrowing it
+        # from whatever the site happens to hold. The per-test savepoint undoes it.
+        if not frappe.get_single("Crema Settings").default_isolation_user:
+            _ensure_user(TEST_ISOLATION_USER)
+            frappe.db.set_single_value("Crema Settings", "default_isolation_user", TEST_ISOLATION_USER)
+            frappe.clear_document_cache("Crema Settings")
+
         name = f"_test_crema_wizard_{uuid.uuid4().hex[:8]}"
         try:
             result = create_from_template(

@@ -58,7 +58,9 @@ class CremaSettings(Document):
         admin's later edits in the desk survive the next reconcile. "prompt", "fallback"
         and "label" are read separately (interfaces.prompt_for/fallback_for/label_for),
         not seeded onto the row: none of the three is a Crema Model Assignment
-        fieldname."""
+        fieldname. A hook key that is none of those three AND not a real column would
+        otherwise vanish silently at insert (get_valid_dict drops it) — warn instead, so
+        a stale or misspelled key in a consuming app's hooks.py leaves a trace."""
         by_name = {row.interface: row for row in self.assignments if row.interface}
         self.assignments = []
         app_cfg = interfaces.app_interfaces()
@@ -67,9 +69,17 @@ class CremaSettings(Document):
             if row is None:
                 row = self.append("assignments", {})
                 row.interface = name
+                valid_columns = row.meta.get_valid_columns()
                 for field, value in app_cfg.get(name, {}).items():
-                    if field not in ("prompt", "fallback", "label"):
-                        setattr(row, field, value)
+                    if field in ("prompt", "fallback", "label"):
+                        continue
+                    if field not in valid_columns:
+                        frappe.logger("crema").warning(
+                            f"{name}: crema_interfaces key '{field}' is not a Crema Model "
+                            "Assignment field — ignored"
+                        )
+                        continue
+                    setattr(row, field, value)
             else:
                 self.assignments.append(row)
             row.interface_label = interfaces.label_for(name)

@@ -1204,6 +1204,32 @@ def _propose(doc, mapping: dict, entries: list[tuple[str, dict, float | None]]) 
     return _summary(counts)
 
 
+def _lock_proposal(name: str) -> Any:
+    """Read one `Crema Proposal`'s mutable fields under a row lock, so two concurrent
+    approvals (or undos) of the same row can't both pass the status guard, both write,
+    and have the second `db_set` overwrite the first one's `created_json`.
+
+    Same idiom, and the same reasoning, as CremaLog._tail_chain_state: the lock is held
+    to the end of the calling request's transaction (frappe commits once, at the end),
+    so a second caller blocks here until the first one finishes and then reads the
+    status the first one stamped, instead of the Pending it saw a moment earlier.
+
+    `status` and `created_json` come off this locked row, never off the `frappe.get_doc`
+    after it: a plain read can serve an older snapshot of the same row, which is exactly
+    the stale value the lock exists to keep out. Every other field of a proposal is set
+    at insert and never updated, so reading those from the document is safe.
+
+    Returns an empty row for a name that does not exist; the caller's `frappe.get_doc`
+    raises `DoesNotExistError` for that case, as it did before the lock.
+    """
+    row = frappe.db.sql(
+        "select status, created_json from `tabCrema Proposal` where name = %s for update",
+        name,
+        as_dict=True,
+    )
+    return row[0] if row else frappe._dict()
+
+
 def apply_proposal(name: str) -> str:
     """Approve one `Crema Proposal`: replay it through the writer a `Create or Update
     Records` run would have used, then stamp the outcome. Reached from
@@ -1215,10 +1241,14 @@ def apply_proposal(name: str) -> str:
     reentrancy guard is set for the same reason `run_task` sets it (see `on_doc_event`):
     approving is the run's write, made later and by a human's click instead of the
     scheduler, and must not re-trigger a Document Event task watching this doctype.
+
+    The status guard reads the row under a lock (`_lock_proposal`), so two overlapping
+    approvals of one proposal write once, not twice.
     """
+    locked = _lock_proposal(name)
     proposal = frappe.get_doc("Crema Proposal", name)
-    if proposal.status != "Pending":
-        raise AutomationError(f"'{name}' is already {proposal.status}.")
+    if locked.status != "Pending":
+        raise AutomationError(f"'{name}' is already {locked.status}.")
 
     doc = frappe.get_doc("Crema Automation Task", proposal.task)
     cfg = client._resolve(doc.interface)
@@ -1247,10 +1277,18 @@ def apply_proposal(name: str) -> str:
 
 def discard_proposal(name: str) -> None:
     """Discard one `Crema Proposal` — no writer involved. Reached from
-    `api.discard_proposals`."""
+    `api.discard_proposals`.
+
+    Locked the same way as `apply_proposal`/`undo_proposal`: an unlocked read here could
+    race an overlapping `apply_proposal` on the same row — discard reads Pending, approve
+    commits a real write, discard's unconditional `db_set` then stamps Discarded over a
+    row that was just Approved, orphaning the created record with no Undo path (Undo only
+    ever shows for Approved).
+    """
+    locked = _lock_proposal(name)
     proposal = frappe.get_doc("Crema Proposal", name)
-    if proposal.status != "Pending":
-        raise AutomationError(f"'{name}' is already {proposal.status}.")
+    if locked.status != "Pending":
+        raise AutomationError(f"'{name}' is already {locked.status}.")
     proposal.db_set("status", "Discarded")
 
 
@@ -1313,15 +1351,19 @@ def undo_proposal(name: str) -> dict[str, Any]:
     """Reverse one Approved `Crema Proposal`: delete what approving it created, then
     return the row to Pending so it can be approved again or discarded. Reached from
     `api.undo_proposals`. `fingerprint` is untouched and stays unique, so a repeated
-    source read still finds this row instead of parking a duplicate."""
+    source read still finds this row instead of parking a duplicate.
+
+    The status guard reads the row under a lock (`_lock_proposal`), so two overlapping
+    undos of one proposal delete once, not twice."""
+    locked = _lock_proposal(name)
     proposal = frappe.get_doc("Crema Proposal", name)
-    if proposal.status != "Approved":
+    if locked.status != "Approved":
         raise AutomationError(f"'{name}' is not Approved.")
 
     doc = frappe.get_doc("Crema Automation Task", proposal.task)
     cfg = client._resolve(doc.interface)
     cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
-    created = frappe.parse_json(proposal.created_json or "[]")
+    created = frappe.parse_json(locked.created_json or "[]")
 
     frappe.local.crema_in_automation = True
     try:

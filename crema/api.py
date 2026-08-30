@@ -1028,10 +1028,10 @@ def _check_webhook_signature(
     if not hmac.compare_digest(expected, signature):
         frappe.throw(_("'{0}': signature does not match.").format(task), frappe.PermissionError)
 
-    nonce_key = cache.webhook_nonce_key(signature)
-    if frappe.cache.get_value(nonce_key):
+    nonce_key = frappe.cache.make_key(cache.webhook_nonce_key(signature))
+    # nosemgrep: frappe-cache-breaks-multitenancy — make_key above scopes the key per site
+    if not frappe.cache.set(nonce_key, 1, nx=True, ex=_WEBHOOK_NONCE_TTL_SECONDS):
         frappe.throw(_("'{0}': this call was already used.").format(task), frappe.PermissionError)
-    frappe.cache.set_value(nonce_key, 1, expires_in_sec=_WEBHOOK_NONCE_TTL_SECONDS)
 
 
 @frappe.whitelist()

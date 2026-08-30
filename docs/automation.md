@@ -97,6 +97,7 @@ Never edited by hand; a System Manager only reads, approves, or discards a row.
 | `status` | Select | `Pending`, `Approved`, or `Discarded`. |
 | `target_doctype` | Link (DocType) | Label **Record Type**. What this row would create or change once approved. |
 | `confidence` | Float | The OCR pass's confidence in the file this row was read from, 0 to 1. Empty for a row read from text rather than a file. |
+| `diff_preview` | HTML (read-only) | Label **Proposed Write**. The fields approving this row writes, as a table. Built on the form from `payload_json` and `mapping_json`; it is not stored. |
 | `outcome` | Small Text (read-only) | What approving this row did — the same counts an unattended run would have recorded. |
 | `created_json` | Code (read-only) | The record approving this row created. Feeds the **Undo** button on an Approved row — see [Undo a run](#undo-a-run). Empty when approving only updated an existing record. |
 | `fingerprint` | Data (read-only) | Identifies this row so a repeated run finds it instead of filing a duplicate. |
@@ -334,6 +335,10 @@ and stamps what it did; **Discard** removes it from the queue and writes nothing
 Approved row also shows **Undo**: it deletes the record approving it created and returns
 the row to Pending, so it can be approved again or discarded. All three work on one row
 from its form, or on several at once from the list view's Actions menu.
+
+The proposal form shows **Proposed Write** at the top: the fields that approving the row
+writes, as a table. **Approve** from the list view first shows the same table for every
+row you selected, and writes nothing until you confirm.
 
 A run that reads the same source again does not file a duplicate proposal for content
 it already parked — approved, discarded, or still pending. This is what makes it safe

@@ -386,6 +386,31 @@ function crema_diff_table(record) {
 	)}</th></tr></thead>${rows || empty_row}</table>`;
 }
 
+// One parked Crema Proposal, in crema_diff_table's shape. Two payload shapes reach here,
+// the same two apply_proposal branches on: a plan row (the mapping has a field_map) is a
+// flat source-key dict the writer runs through that map, so only the mapped keys are ever
+// written and only those may show here; a File Query row is already a {set, child_set}
+// record from api.extract().
+function crema_proposal_record(payload_json, mapping_json) {
+	const payload = JSON.parse(payload_json || "{}");
+	const mapping = JSON.parse(mapping_json || "{}");
+	const map_row = (field_map) =>
+		Object.fromEntries(
+			Object.entries(field_map || {})
+				.filter(([key]) => key in payload)
+				.map(([key, fieldname]) => [fieldname, payload[key]])
+		);
+	if (!mapping.field_map) {
+		return { set: payload.set || {}, child_set: payload.child_set || {} };
+	}
+	const child = mapping.child_table;
+	const child_values = child ? map_row(child.field_map) : {};
+	return {
+		set: map_row(mapping.field_map),
+		child_set: Object.keys(child_values).length ? { [child.fieldname]: [child_values] } : {},
+	};
+}
+
 // Both create paths end here — a record read out of an uploaded document (Path A), and
 // a record described in a typed request (the "create" action, below). Fills an unsaved
 // form and routes to it; nothing is written until the user saves. Must run inside
@@ -1528,6 +1553,21 @@ function crema_open_dialog(doctype, prefill) {
 			allow_web_link: false,
 			allow_take_photo: false,
 			on_success: (file_doc) => {
+				// A user can start a second upload before the first one's on_success
+				// fires (an eager double-click, or clicking again because nothing
+				// looked like it happened yet) — each queues its own billed
+				// extract_async job and both would race for this same dialog. Check
+				// the wrapper's hidden state first: once one on_success has hidden
+				// it, a second, concurrent upload's on_success finds it already
+				// hidden and is dropped instead of queueing a second job. It stays
+				// hidden afterwards regardless — the dialog moves on to the preview
+				// and never shows this wrapper again — so re-enabling it does not
+				// apply here. Note :hidden is also true if an ancestor (the dialog
+				// itself) is hidden, so closing the dialog mid-upload drops the
+				// extract too instead of queueing it — a deliberate side effect,
+				// not just the double-click guard: an abandoned dialog should not
+				// bill for a result nobody will see.
+				if (dialog.fields_dict.upload.$wrapper.is(":hidden")) return;
 				dialog.fields_dict.upload.$wrapper.hide();
 				crema_extract_into_new_doc(
 					doctype,
@@ -1617,7 +1657,28 @@ function crema_open_transform_dialog(frm) {
 // side stops it), so `fieldname in data.set` and reading exactly that key, nothing else
 // out of data.set/data.child_set, is what keeps this the one-field button it claims to
 // be. See crema_field_draft_control below for where this is opened from.
+
+// One field, current value against the drafted one. crema_diff_table shows the proposed
+// value alone, which is enough for a whole record but not for a single field the user can
+// already see filled in — here the old value is the point of the preview.
+function crema_field_draft_table(label, old_value, new_value) {
+	const cell = (v) =>
+		v === undefined || v === null || v === ""
+			? `<span class="text-muted">${__("Empty")}</span>`
+			: frappe.utils.escape_html(String(v));
+	return `<table class="table table-bordered"><thead><tr><th colspan="2">${frappe.utils.escape_html(
+		__(label)
+	)}</th></tr></thead><tbody>
+			<tr><td style="width: 25%;">${__("Now")}</td><td>${cell(old_value)}</td></tr>
+			<tr><td>${__("Draft")}</td><td>${cell(new_value)}</td></tr>
+		</tbody></table>`;
+}
+
 function crema_open_field_draft_dialog(frm, fieldname, label) {
+	// The dialog can stay open while the user keeps typing in the same field. Remember
+	// the value it started from, so Apply can tell an untouched field from one the user
+	// edited meanwhile and must not overwrite without a warning.
+	const original_value = frm.doc[fieldname];
 	const dialog = new frappe.ui.Dialog({
 		title: __("Draft {0}", [__(label)]),
 		fields: [
@@ -1659,17 +1720,30 @@ function crema_open_field_draft_dialog(frm, fieldname, label) {
 						"options",
 						`<div class="text-muted small">${frappe.utils.escape_html(
 							data.reason || ""
-						)}</div>${crema_diff_table({ set: { [fieldname]: value } })}`
+						)}</div>${crema_field_draft_table(label, original_value, value)}`
 					);
 					dialog.refresh();
 					dialog.set_primary_action(__("Apply"), () => {
-						crema_apply_diff(
-							frm.doctype,
-							frm.docname,
-							{ set: { [fieldname]: value } },
-							frm
-						);
-						dialog.hide();
+						const apply = () => {
+							crema_apply_diff(
+								frm.doctype,
+								frm.docname,
+								{ set: { [fieldname]: value } },
+								frm
+							);
+							dialog.hide();
+						};
+						// Compare against the live value, not the one the preview was built
+						// from: the user can type into the field while this dialog waits.
+						if (frm.doc[fieldname] === original_value) apply();
+						else
+							frappe.confirm(
+								__(
+									"You changed {0} while this dialog was open. Apply replaces what you typed, and you cannot undo it. Continue?",
+									[__(label)]
+								),
+								apply
+							);
 					});
 				},
 				error: crema_show_error,
@@ -1939,3 +2013,7 @@ window.crema_show_error = crema_show_error;
 // The automation form's Dry Run preview renders extracted rows and a plan's field map
 // with the same key/value table the extract and transform previews already use.
 window.crema_diff_table = crema_diff_table;
+// crema_proposal.js and crema_proposal_list.js render a parked proposal with the same
+// table, on the form and in the bulk-Approve confirmation.
+window.crema_proposal_record = crema_proposal_record;
+window.crema_confirm_records = crema_confirm_records;

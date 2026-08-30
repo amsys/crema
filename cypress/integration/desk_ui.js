@@ -98,6 +98,14 @@ function crema_stub_extract(filename) {
 }
 
 function crema_deliver_extract(records, reason) {
+	// frappe.realtime connects lazily, on the first on() — which crema registers only
+	// at the enqueue a moment before this runs. The publish is fire-and-forget: sent
+	// while the handshake is still open, it broadcasts to a room this browser has not
+	// joined yet and the preview never opens. Wait for the socket, then give the
+	// server's room-join round trip a moment — `connected` alone does not prove room
+	// membership (frappe core's socket_updates.js sleeps for the same reason).
+	cy.window().its("frappe.realtime.socket.connected").should("eq", true);
+	cy.wait(500);
 	return cy.call("frappe.tests.ui_test_helpers.publish_realtime", {
 		event: "crema_extract",
 		message: {
@@ -822,6 +830,22 @@ context("Crema Settings", () => {
 		cy.get('[data-fieldname="assignments"]').should("exist");
 	});
 
+	after(() => {
+		// The kill switch stops every LLM call site-wide, and the specs that follow this
+		// file assume it is off — so it must not survive a test that failed halfway
+		// through toggling it.
+		cy.visit("/app/crema-settings");
+		cy.call("frappe.client.set_value", {
+			doctype: "Crema Settings",
+			name: "Crema Settings",
+			fieldname: {
+				disabled: 0,
+				auto_disable_unreachable: 0,
+				default_monthly_budget_usd_per_user: 0,
+			},
+		});
+	});
+
 	// The Use Cases grid always shows exactly one row per interfaces.names()
 	// (core PREDEFINED + whatever installed apps register via the crema_interfaces
 	// hook), seeded at install/migrate, none addable or removable (crema_settings.js
@@ -919,6 +943,63 @@ context("Crema Settings", () => {
 			"contain",
 			"is not offered by"
 		);
+	});
+
+	// The Operations section — the site-wide kill switch and the hourly reachability
+	// sweep — plus the per-user ceiling beside the site-wide budget. None of the three has
+	// any client-side behaviour of its own in crema_settings.js: `disabled` is read by
+	// policy.disabled on the server at call time, auto_disable_unreachable by the hourly
+	// client.check_providers sweep, and the per-user ceiling by client._load_from_db. So
+	// what a browser can check is that each field is on the form and that a save keeps it.
+	it("carries the kill switch, the per-user budget and the auto-disable check", () => {
+		cy.get('.frappe-control[data-fieldname="disabled"]').should(
+			"contain.text",
+			"Crema Is Off"
+		);
+		cy.get('.frappe-control[data-fieldname="auto_disable_unreachable"]').should(
+			"contain.text",
+			"Switch Off Services That Do Not Answer"
+		);
+		cy.get('.frappe-control[data-fieldname="default_monthly_budget_usd_per_user"]').should(
+			"contain.text",
+			"Per-User Monthly Budget"
+		);
+	});
+
+	it("saves all three Operations settings, then switches the kill switch back off", () => {
+		cy.get(
+			'.frappe-control[data-fieldname="disabled"] .input-area input[type="checkbox"]'
+		).check();
+		cy.get(
+			'.frappe-control[data-fieldname="auto_disable_unreachable"] .input-area input[type="checkbox"]'
+		).check();
+		cy.window().then((win) =>
+			win.cur_frm.set_value("default_monthly_budget_usd_per_user", 12)
+		);
+		cy.window().then((win) => win.cur_frm.save());
+		cy.get(".page-head").should("not.contain.text", "Not Saved");
+
+		// A full reload rather than reading cur_frm again: the point is that the three
+		// values reached the database, not that the form still holds what was set on it.
+		cy.visit("/app/crema-settings");
+		cy.window().its("cur_frm.doc.disabled").should("eq", 1);
+		cy.window().its("cur_frm.doc.auto_disable_unreachable").should("eq", 1);
+		cy.window().its("cur_frm.doc.default_monthly_budget_usd_per_user").should("eq", 12);
+
+		// Switched back off here, not only in after(): every test after this one — in
+		// this file and the next — runs against a site whose LLM calls still work.
+		cy.get(
+			'.frappe-control[data-fieldname="disabled"] .input-area input[type="checkbox"]'
+		).uncheck();
+		cy.get(
+			'.frappe-control[data-fieldname="auto_disable_unreachable"] .input-area input[type="checkbox"]'
+		).uncheck();
+		cy.window().then((win) => win.cur_frm.set_value("default_monthly_budget_usd_per_user", 0));
+		cy.window().then((win) => win.cur_frm.save());
+		cy.get(".page-head").should("not.contain.text", "Not Saved");
+
+		cy.visit("/app/crema-settings");
+		cy.window().its("cur_frm.doc.disabled").should("eq", 0);
 	});
 });
 

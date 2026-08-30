@@ -1414,6 +1414,13 @@ class IntegrationTestCremaLogInsert(IntegrationTestCase):
         row = frappe.get_last_doc("Crema Log", filters={"interface": "simple", "status": "Success"})
         self.assertEqual(row.provider, "_Test Crema Provider")
 
+    def test_insert_stamps_the_crema_app_version(self):
+        import crema
+
+        log.insert("simple", "test-model", "Success", None, prompt_sha="app-version-probe")
+        row = frappe.get_doc("Crema Log", {"prompt_sha": "app-version-probe"})
+        self.assertEqual(row.app_version, crema.__version__)
+
 
 class IntegrationTestCremaLogMeta(IntegrationTestCase):
     """Crema Log list/report metadata — title, columns, and app-registered interface
@@ -1501,6 +1508,21 @@ class IntegrationTestCremaLogChain(CremaFixtureTestCase):
         self.assertTrue(log.verify_chain()["ok"], "must be clean before the tamper")
 
         frappe.db.set_value("Crema Log", middle, "detail", "tampered after the fact")
+
+        result = log.verify_chain()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_break"], middle)
+
+    def test_editing_served_model_makes_verify_chain_report_that_row(self):
+        """served_model is chained (CHAIN_FIELDS) precisely so an incident's audit trail
+        can't be quietly repointed at a different model after the fact."""
+        tag = uuid.uuid4().hex
+        self._insert(f"chain-served-a-{tag}")
+        middle = self._insert(f"chain-served-b-{tag}")
+        self._insert(f"chain-served-c-{tag}")
+        self.assertTrue(log.verify_chain()["ok"], "must be clean before the tamper")
+
+        frappe.db.set_value("Crema Log", middle, "served_model", "a-different-model")
 
         result = log.verify_chain()
         self.assertFalse(result["ok"])

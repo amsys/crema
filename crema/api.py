@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import hmac
 import json
 import mimetypes
 import time
@@ -45,6 +46,12 @@ __all__ = [
 _USER_RL_LIMIT = 60
 _USER_RL_SECONDS = 3600
 
+# trigger_automation's optional HMAC: how far a timestamp may drift either side of now,
+# and how long an accepted signature is remembered as spent (twice the window, so a
+# signature can never be replayed once it falls out of the freshness check either).
+_WEBHOOK_WINDOW_SECONDS = 300
+_WEBHOOK_NONCE_TTL_SECONDS = _WEBHOOK_WINDOW_SECONDS * 2
+
 _EXTRACT_RULES = """Read the document below and fill in the fields of the target doctype.
 Use ONLY the fieldnames listed — never invent one. Omit any field the document does not
 state; do not guess a value. Decide for yourself how many separate documents this file
@@ -65,18 +72,43 @@ def _prompt_hash(
     response_format: dict | None,
     history: list[dict] | None = None,
 ) -> str:
-    parts = "|".join(
-        [
-            cfg["interface"],
-            cfg.get("model") or "",
-            cfg.get("system_prompt") or "",
-            prompt,
-            context or "",
-            json.dumps(response_format, sort_keys=True) if response_format else "",
-            json.dumps(history) if history else "",
-        ]
-    )
-    return hashlib.sha256(parts.encode()).hexdigest()
+    """One value, deliberately: this is both the response-cache key
+    (cache.response_key) and the audit log's prompt_sha. Splitting them would let
+    prompt_sha stay blind to a discriminator that changes the reply, which is worse
+    for an audit trail than a fingerprint whose recipe grew by two fields.
+
+    cfg["requested"] is in it because guardrails._plan filters rows by the interface
+    the caller asked for, not the one the fallback walk resolved to (cfg["interface"])
+    — without it, two requested interfaces that fall back to the same provider and
+    share a system prompt would share one cache entry, and a reply produced under a
+    permissive guardrail posture could be served to a strict one.
+
+    cfg["isolation_user"] is in it because it is the sandbox every context read runs
+    under (see docs/security.md — The answer cache) — repointing an interface at a
+    different isolation user must not let an old, differently-scoped reply survive
+    the change.
+
+    No session user is in it, on purpose: nothing in a request is assembled under the
+    *calling* user's permissions, so an identical request implies identical readable
+    inputs whoever asks — see docs/security.md — The answer cache for the argument in
+    full.
+
+    A JSON list, not a "|" join: a join is ambiguous between prompt="a|b" and
+    prompt="a", context="b" — two different resolved prompts that must not share a
+    cache entry.
+    """
+    parts = [
+        cfg.get("requested") or cfg["interface"],
+        cfg["interface"],
+        cfg.get("isolation_user") or "",
+        cfg.get("model") or "",
+        cfg.get("system_prompt") or "",
+        prompt,
+        context or "",
+        json.dumps(response_format, sort_keys=True) if response_format else "",
+        json.dumps(history) if history else "",
+    ]
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 
 def _user_content(prompt: str, context: str | None) -> str:
@@ -643,6 +675,13 @@ def _check_user_rate_limit() -> None:
         )
 
 
+def _error_body(exc: CremaBlockedError | CremaConfigError | CremaBudgetError) -> dict:
+    """{"blocked", "reason"} shared by every caller that shapes these three exceptions
+    instead of letting them escape. `blocked` stays reserved for an actual
+    security-guard block."""
+    return {"blocked": isinstance(exc, CremaBlockedError), "reason": str(exc)}
+
+
 def _error_response(exc: CremaBlockedError | CremaConfigError | CremaBudgetError) -> dict:
     """417 body shared by ask_api/extract_api/transform_api for the three exceptions
     they shape rather than let escape.
@@ -652,10 +691,10 @@ def _error_response(exc: CremaBlockedError | CremaConfigError | CremaBudgetError
     `raise`, not frappe.throw, so frappe never populates `_server_messages` for
     them, and the desk JS's 417 handler renders nothing on its own. Without this,
     an unshaped one reaches the browser as an empty body: a cleared spinner and no
-    message at all. `blocked` stays reserved for an actual security-guard block.
+    message at all.
     """
     frappe.local.response["http_status_code"] = 417
-    return {"blocked": isinstance(exc, CremaBlockedError), "reason": str(exc)}
+    return _error_body(exc)
 
 
 @frappe.whitelist()
@@ -722,6 +761,95 @@ def extract_api(doctype: str, file_url: str, instruction: str | None = None) -> 
         return extract(doctype, file_url, instruction)
     except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
         return _error_response(exc)
+
+
+_EXTRACT_ASYNC_TIMEOUT = 900  # comfortably above the ~360s worst case: ocr, its
+# advanced_ocr escalation, then the extraction call, each retried once (client.py's
+# num_retries=1) at a provider's own timeout_seconds (default 60, no ceiling).
+
+
+@frappe.whitelist()
+@rate_limit(limit=60, seconds=3600)
+def extract_async(
+    doctype: str, file_url: str, instruction: str | None = None, request_id: str | None = None
+) -> str:
+    """Background HTTP entry point for `extract()` — `POST /api/method/crema.api.extract_async`.
+    For extract() specifically: unlike ask()/transform(), which are one provider call the
+    user is already watching, extract() can hold a web worker for minutes (see
+    _EXTRACT_ASYNC_TIMEOUT) — long enough to starve other users on a small bench, not just
+    the one waiting.
+
+    Same gates as extract_api, applied here rather than in run_extract, the job this
+    queues: _check_user_rate_limit is a no-op outside a real HTTP request
+    (frappe.local.request is unset in a worker), so checking it there instead would let
+    every queued call skip the per-user budget entirely.
+
+    Returns immediately with `request_id` (client-supplied, so the caller can generate
+    it before the request and use it to open a listener first — or generated here if
+    omitted) instead of a result: the answer arrives later as a `crema_extract`
+    frappe.realtime event carrying the same request_id, published by run_extract.
+    """
+    frappe.only_for(("System Manager", "Crema User"))
+    _check_user_rate_limit()
+    if not isinstance(file_url, str):
+        frappe.throw(_("file_url must be a File URL string"))
+
+    request_id = request_id or frappe.generate_hash(length=8)
+    frappe.enqueue(
+        "crema.api.run_extract",
+        doctype=doctype,
+        file_url=file_url,
+        instruction=instruction,
+        request_id=request_id,
+        queue="long",
+        timeout=_EXTRACT_ASYNC_TIMEOUT,
+        job_id=f"crema-extract-{request_id}",
+        deduplicate=True,
+    )
+    return request_id
+
+
+def run_extract(doctype: str, file_url: str, instruction: str | None, request_id: str) -> None:
+    """The job extract_async queues. Never whitelisted — frappe.enqueue resolves this
+    dotted path itself, and a whitelisted twin would be a second, ungated entry point
+    into extract() with none of extract_async's checks.
+
+    Publishes to the ENQUEUING user's own room, never a bare room-less event: an extract
+    result carries document content, and frappe.publish_realtime with no user/room/doctype
+    falls through to the whole site (frappe.realtime.get_site_room). `user` below is
+    exactly right for that because frappe.enqueue's execute_job calls
+    frappe.set_user(user) with the session user it captured at enqueue time, before this
+    function runs — the same identity extract()'s own permission checks then run under.
+    """
+    user = frappe.session.user
+    try:
+        result = extract(doctype, file_url, instruction)
+    except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
+        frappe.publish_realtime(
+            "crema_extract", {"request_id": request_id, "ok": False, **_error_body(exc)}, user=user
+        )
+        return
+    except Exception:
+        # A job that dies silently leaves the desk waiting forever — publish a generic,
+        # non-leaking failure before the re-raise that lands it in the RQ failed registry
+        # and frappe's own error log (crema.automation's equivalent: _describe/_plain,
+        # which this skips — that redaction is for text stored back onto a doctype field,
+        # not for a message about to leave the server over the wire).
+        frappe.log_error(title=f"Crema extract failed: {request_id}"[:140])
+        frappe.publish_realtime(
+            "crema_extract",
+            {
+                "request_id": request_id,
+                "ok": False,
+                "blocked": False,
+                "reason": _("Crema could not read this document."),
+            },
+            user=user,
+        )
+        raise
+    frappe.publish_realtime(
+        "crema_extract", {"request_id": request_id, "ok": True, "result": result}, user=user
+    )
 
 
 @frappe.whitelist()
@@ -865,9 +993,52 @@ def run_automation_now(task: str) -> str:
     return automation.enqueue_task(task)
 
 
+def _webhook_signature(secret: str, task: str, timestamp: str, payload: str) -> str:
+    """The HMAC a signed trigger_automation call must carry — hex SHA-256 over
+    "{timestamp}.{task}.{payload}", keyed by the task's own webhook_secret."""
+    message = f"{timestamp}.{task}.{payload}".encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def _check_webhook_signature(
+    doc, task: str, payload: str, timestamp: str | None, signature: str | None
+) -> None:
+    """The optional half of trigger_automation's auth: while `doc.webhook_secret` is set,
+    every call must carry a fresh, matching, not-yet-seen signature. Empty secret means
+    unchanged behaviour — Frappe token auth alone, as before this existed.
+
+    Verified against `payload` as received, before automation truncates it, because that
+    is what the caller actually signed.
+    """
+    secret = doc.get_password("webhook_secret", raise_exception=False)
+    if not secret:
+        return
+
+    if not timestamp or not signature:
+        frappe.throw(_("'{0}' requires a signed call.").format(task), frappe.PermissionError)
+
+    try:
+        age = time.time() - int(timestamp)
+    except ValueError:
+        frappe.throw(_("'{0}': timestamp is not a number.").format(task), frappe.PermissionError)
+    if abs(age) > _WEBHOOK_WINDOW_SECONDS:
+        frappe.throw(_("'{0}': timestamp is too old or in the future.").format(task), frappe.PermissionError)
+
+    expected = _webhook_signature(secret, task, timestamp, payload)
+    if not hmac.compare_digest(expected, signature):
+        frappe.throw(_("'{0}': signature does not match.").format(task), frappe.PermissionError)
+
+    nonce_key = cache.webhook_nonce_key(signature)
+    if frappe.cache.get_value(nonce_key):
+        frappe.throw(_("'{0}': this call was already used.").format(task), frappe.PermissionError)
+    frappe.cache.set_value(nonce_key, 1, expires_in_sec=_WEBHOOK_NONCE_TTL_SECONDS)
+
+
 @frappe.whitelist()
 @rate_limit(limit=60, seconds=3600)
-def trigger_automation(task: str, payload: str | None = None) -> str:
+def trigger_automation(
+    task: str, payload: str | None = None, timestamp: str | None = None, signature: str | None = None
+) -> str:
     """Start a Crema Automation Task from outside the site. Returns the job id.
 
     Authentication is frappe's own — an API key and secret in the Authorization header,
@@ -881,6 +1052,10 @@ def trigger_automation(task: str, payload: str | None = None) -> str:
 
     `payload` is optional text read as one more source. It is truncated here and scanned by
     layer 1 downstream like any other content.
+
+    While the task carries a Webhook Secret, `timestamp` and `signature` are also required
+    — see `_check_webhook_signature`. A task with no secret set accepts a call exactly as
+    before this existed.
     """
     doc = frappe.get_doc("Crema Automation Task", task)
     doc.check_permission("read")
@@ -889,6 +1064,8 @@ def trigger_automation(task: str, payload: str | None = None) -> str:
         frappe.throw(_("'{0}' is not a Webhook task.").format(task), frappe.PermissionError)
     if not doc.enabled:
         frappe.throw(_("'{0}' is switched off.").format(task), frappe.PermissionError)
+
+    _check_webhook_signature(doc, task, payload or "", timestamp, signature)
 
     from crema import automation
 

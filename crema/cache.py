@@ -62,3 +62,9 @@ def clear_health_words() -> None:
     """Crema Health Word saved/deleted: drop the cached word list so the next request
     picks up the change."""
     frappe.cache.delete_value(health_words_key())
+
+
+def webhook_nonce_key(signature: str) -> str:
+    """Key marking one trigger_automation signature as already used, for replay
+    protection — see api._check_webhook_signature."""
+    return f"crema:webhook:{signature}"

@@ -64,19 +64,20 @@ The rows are read in the order shown, but the order changes nothing: each row is
 its own and the results are joined. The grid is deliberately not numbered.
 
 **Per Run** and **Changed** apply to a Document Query or a File Query. **Files**
-(attachments) applies to a Document Query only — a File Query already reads files, so
-it has nothing of its own to attach. A URL row shows all three empty, and clears them
-when you save.
+(attachments) and **Lines** (child table rows) apply to a Document Query only — a File
+Query already reads files, so it has nothing of its own to attach or read as lines. A
+URL row shows all four empty, and clears them when you save.
 
 | Field | Type | Notes |
 |---|---|---|
 | `source_type` | Select | Label **Type**. `URL`, `Document Query`, or `File Query`. |
-| `source_url` | Data | For a URL source. The only address this source reads. Only a System Manager can set it. |
+| `source_url` | Data | For a URL source. The only address this source reads. Only a System Manager can set it. Must resolve to a public address — a private, loopback, or link-local address (including a redirect to one) is refused when the source runs. |
 | `source_doctype` | Link (DocType) | Label **Record Type to Read**. For a Document Query source. Only a System Manager can set it. A File Query source always reads `File` — this is filled in for you and not shown. |
 | `source_filters` | Code (JSON) | Label **Which Records**. Click the table to set them. For a File Query, filters narrow which files — for example `attached_to_doctype`, `is_private`, or `file_name`. |
 | `source_limit` | Int | Label **Per Run**. Most records (or files) to read in one run. 50 by default for a Document Query, 200 maximum; 10 by default for a File Query, 50 maximum — each file costs at least two AI calls, against one per record for a Document Query. |
 | `incremental` | Check | Label **Changed**. Read only records (or files) changed since this source was last read. On by default. Has no effect on a Document Event run, which always reads the one record (or file) that triggered it. |
 | `read_attachments` | Check | Label **Files**. Also read the files attached to each record. See [Attachments](#attachments) below. Not available on a File Query source. |
+| `read_children` | Check | Label **Lines**. Also read each record's line items — invoice items, or BOM components, for example. Up to 20 lines for each record. Not available on a File Query source. |
 | `last_read` | Datetime (read-only) | Label **Read Up To**. How far this source has been read. Clear it to read everything again. |
 | `source_label` | Data (read-only) | Label **What**. Filled in for you: the record type, the address, or `Files`, and the number of filters (`Communication · 2 filters`). A grid column only — it does not appear when you open the row. |
 
@@ -181,6 +182,9 @@ The source downloads `source_url` and reduces it to text. HTML is stripped. A PD
 through the OCR pipeline: embedded text when the PDF has it, vision OCR when it does
 not.
 
+The download refuses to reach a private, loopback, or link-local address, on the start
+URL and on every redirect hop — see [docs/security.md](security.md#known-limits).
+
 ### Document Query
 
 The source reads records of `source_doctype` that match `source_filters`.
@@ -190,9 +194,12 @@ the account set for the use case. The query never returns a record that account 
 read, so the model never sees it. The query also skips fields above permission level 0 and
 password fields.
 
-The query reads the record's own fields only. It does not read child tables (the
-item lines of an invoice, for example) or comments. Switch on **Files** to also read
-the files attached to each record.
+The query reads the record's own fields. It does not read comments. Switch on
+**Files** to also read the files attached to each record. Switch on **Lines** to also
+read each record's line items — the item lines of an invoice, or the components of a
+BOM, for example. Crema reads up to 20 lines for each record, split across every
+table on the doctype if it has more than one; a record that lost lines to this limit
+shows in `last_result` as `(1 record(s) had table lines left out)`.
 
 When the Text Scan row applies to the task's use case, the run also scans each
 record on its own before the batch goes to the model, and drops any record the scan
@@ -429,6 +436,29 @@ The reply is the id of the queued job.
 * A Webhook task that uses webhook data may have no sources at all, and read only what the
   caller sends.
 * At most 60 calls per hour per address.
+
+### Sign the call
+
+**Webhook Secret**, on the same task, is optional. Set it and every call must also carry
+`timestamp` (Unix seconds) and `signature`:
+
+```
+signature = hex(HMAC-SHA256("{timestamp}.{task}.{payload}", key=webhook_secret))
+```
+
+`payload` is the exact text sent, or an empty string if the field is absent — sign it
+before any truncation on the crema side. Crema refuses a call that is unsigned, whose
+timestamp is more than 5 minutes old or in the future, whose signature does not match, or
+whose signature was already used once. A task with no Webhook Secret set accepts a call on
+the Frappe API key and secret alone, exactly as before this existed.
+
+```
+POST /api/method/crema.api.trigger_automation
+Authorization: token <api_key>:<api_secret>
+Content-Type: application/x-www-form-urlencoded
+
+task=Invoice%20from%20portal&payload=%7B%22order%22%3A%2041%7D&timestamp=1756400000&signature=9f2c...
+```
 
 ## The plan
 

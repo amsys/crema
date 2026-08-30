@@ -11,7 +11,11 @@
   "api_key",
   "column_break_status",
   "enabled",
-  "timeout_seconds"
+  "timeout_seconds",
+  "section_health",
+  "last_checked",
+  "last_check_detail",
+  "auto_disabled"
  ],
  "fields": [
   {
@@ -54,10 +58,37 @@
    "fieldname": "timeout_seconds",
    "fieldtype": "Int",
    "label": "Wait Up To (seconds)"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_health",
+   "fieldtype": "Section Break",
+   "label": "Health"
+  },
+  {
+   "description": "When the hourly check last ran against this service. Blank until Crema Settings' \"Switch Off Services That Do Not Answer\" is on.",
+   "fieldname": "last_checked",
+   "fieldtype": "Datetime",
+   "label": "Last Checked",
+   "read_only": 1
+  },
+  {
+   "description": "What the last check found: the number of models it saw, or the error it got.",
+   "fieldname": "last_check_detail",
+   "fieldtype": "Small Text",
+   "label": "Last Check Result",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "auto_disabled",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-07-28 00:00:00.000000",
+ "modified": "2026-08-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Provider",

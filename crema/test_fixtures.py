@@ -254,7 +254,7 @@ _GUARDRAIL_FIXTURE_FIELDS = ("action", "interfaces")
 # The suite's baseline posture: the scan on everywhere (matching the old
 # enable_prompt_scan=1 fixture default), everything else off — a test that wants the
 # trap or masking switches exactly that one row on via _set_guardrail.
-_GUARDRAIL_BASELINE = {"scan": "Block", "pi": "Off", "phi": "Off", "trap": "Off"}
+_GUARDRAIL_BASELINE = {"scan": "Block", "reply": "Off", "pi": "Off", "phi": "Off", "trap": "Off"}
 
 
 def _ensure_guardrails(**actions: str) -> None:

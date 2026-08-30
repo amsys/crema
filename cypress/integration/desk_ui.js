@@ -75,15 +75,38 @@ function crema_drop_and_upload(filename) {
 // doctype: "File" is load-bearing: FileUploader.vue only treats the upload_file
 // response as a file doc at all when message.doctype === "File" — without it,
 // file_doc stays null and .file_url throws.
-function crema_stub_extract(filename, records, reason) {
+//
+// extract() itself is backgrounded now (crema.api.extract_async, queued as
+// crema.api.run_extract) — this stub only covers the enqueue call, which always
+// returns the same fixed request_id. The eventual answer is delivered separately, by
+// crema_deliver_extract below, over a REAL realtime round trip — the same test-only
+// endpoint (frappe.tests.ui_test_helpers.publish_realtime) frappe core's own
+// socket_updates.js spec uses — rather than a stub, since what's under test is that
+// crema.bundle.js's frappe.realtime.on("crema_extract", ...) listener picks the event
+// up and reopens the dialog crema_extract_into_new_doc already closed.
+const CREMA_EXTRACT_REQUEST_ID = "cy-extract-test";
+
+function crema_stub_extract(filename) {
 	cy.intercept("POST", "/api/method/upload_file", {
 		statusCode: 200,
 		body: { message: { doctype: "File", file_url: `/files/${filename}`, name: filename } },
 	}).as("upload");
-	cy.intercept("POST", "/api/method/crema.api.extract_api", {
+	cy.intercept("POST", "/api/method/crema.api.extract_async", {
 		statusCode: 200,
-		body: { message: { records, reason, confidence: 0.9 } },
+		body: { message: CREMA_EXTRACT_REQUEST_ID },
 	}).as("extract");
+}
+
+function crema_deliver_extract(records, reason) {
+	return cy.call("frappe.tests.ui_test_helpers.publish_realtime", {
+		event: "crema_extract",
+		message: {
+			request_id: CREMA_EXTRACT_REQUEST_ID,
+			ok: true,
+			result: { records, reason, confidence: 0.9 },
+		},
+		user: "Administrator",
+	});
 }
 
 context("Crema desk UI", () => {
@@ -391,16 +414,16 @@ context("Crema desk UI", () => {
 	});
 
 	it("opens a new unsaved form for a single-record extract", () => {
-		crema_stub_extract(
-			"single.pdf",
-			[{ set: { first_name: "Call Acme back" }, child_set: {} }],
-			"one contact found"
-		);
+		crema_stub_extract("single.pdf");
 
 		cy.get("[data-crema]").click();
 		crema_drop_and_upload("single.pdf");
 		cy.wait("@upload");
 		cy.wait("@extract");
+		crema_deliver_extract(
+			[{ set: { first_name: "Call Acme back" }, child_set: {} }],
+			"one contact found"
+		);
 
 		// crema_show_extract_preview shows a diff and waits for the user to confirm —
 		// it does not route on its own.
@@ -417,19 +440,19 @@ context("Crema desk UI", () => {
 	});
 
 	it("renders one row per record and an import button for a multi-record extract", () => {
-		crema_stub_extract(
-			"contacts.pdf",
+		crema_stub_extract("contacts.pdf");
+
+		cy.get("[data-crema]").click();
+		crema_drop_and_upload("contacts.pdf");
+		cy.wait("@upload");
+		cy.wait("@extract");
+		crema_deliver_extract(
 			[
 				{ set: { first_name: "First" }, child_set: {} },
 				{ set: { first_name: "Second" }, child_set: {} },
 			],
 			"two contacts found"
 		);
-
-		cy.get("[data-crema]").click();
-		crema_drop_and_upload("contacts.pdf");
-		cy.wait("@upload");
-		cy.wait("@extract");
 		crema_modal().within(() => {
 			// One outer row per record, each holding its own nested Field/Value table
 			// (crema_diff_table) — "table tbody tr" alone also matches those inner rows, so
@@ -445,19 +468,19 @@ context("Crema desk UI", () => {
 		// file_url" branch by accident, and a network failure was silent outright. The
 		// dialog is already hidden by the time this fires (primary_action hides it
 		// before calling crema_import_records), so a message here is the only signal.
-		crema_stub_extract(
-			"contacts.pdf",
+		crema_stub_extract("contacts.pdf");
+
+		cy.get("[data-crema]").click();
+		crema_drop_and_upload("contacts.pdf");
+		cy.wait("@upload");
+		cy.wait("@extract");
+		crema_deliver_extract(
 			[
 				{ set: { first_name: "First" }, child_set: {} },
 				{ set: { first_name: "Second" }, child_set: {} },
 			],
 			"two contacts found"
 		);
-
-		cy.get("[data-crema]").click();
-		crema_drop_and_upload("contacts.pdf");
-		cy.wait("@upload");
-		cy.wait("@extract");
 
 		// Registered only now: the source PDF's own upload above must succeed, or the
 		// intercept below would fail it and the extract call would never happen.
@@ -918,6 +941,7 @@ context("Crema Guardrails", () => {
 		cy.get('[data-fieldname="guardrail_help"]').within(() => {
 			for (const label of [
 				"Text Scan",
+				"Reply Filter",
 				"Hide Personal Information",
 				"Hide Health Information",
 				"Reply Check",

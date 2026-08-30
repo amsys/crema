@@ -10,9 +10,13 @@ CremaFixtureTestCase.
 
 from __future__ import annotations
 
+import uuid
+from unittest.mock import patch
+
 import frappe
-from crema import guardrails
-from crema.patches import consolidate_guardrails
+from crema import guardrails, log
+from crema.patches import consolidate_guardrails, rechain_crema_log_for_version_fields
+from crema.test_fixtures import CremaFixtureTestCase
 from frappe.tests import IntegrationTestCase, UnitTestCase
 
 _COLUMNS = {
@@ -143,3 +147,63 @@ class IntegrationTestCremaConsolidateGuardrails(IntegrationTestCase):
         self.assertEqual(self._guardrail_row("pi").action, "Log Only")
         self.assertEqual(self._filter_set(self._guardrail_row("pi")), {"simple"})
         self.assertEqual(self._guardrail_row("phi").action, "Off")
+
+
+class IntegrationTestCremaRechainCremaLog(CremaFixtureTestCase):
+    """crema.patches.rechain_crema_log_for_version_fields — verifies a pre-upgrade
+    chain under the frozen old field tuple before re-chaining it under the new one.
+
+    Subclasses CremaFixtureTestCase for its per-test savepoint alone, same reason as
+    IntegrationTestCremaLogChain in test_doctypes.py: log.verify_chain walks the whole
+    table, so one test's rows surviving into the next would corrupt every later test's
+    own "clean chain" precondition."""
+
+    @staticmethod
+    def _insert(prompt_sha: str) -> str:
+        log.insert("simple", "test-model", "Success", None, prompt_sha=prompt_sha)
+        return frappe.get_doc("Crema Log", {"prompt_sha": prompt_sha}).name
+
+    @staticmethod
+    def _simulate_pre_upgrade_chain(names: list[str]) -> None:
+        """Overwrite each row's chain_sha with what before_insert would have stamped
+        before served_model/app_version existed — simulates a site's real state right
+        before this patch runs."""
+        from crema.crema.doctype.crema_log.crema_log import chain_hash
+
+        fields = rechain_crema_log_for_version_fields._OLD_CHAIN_FIELDS
+        previous = None
+        for name in names:
+            row = frappe.db.get_value("Crema Log", name, list(fields), as_dict=True)
+            new_sha = chain_hash(row, previous, fields=fields)
+            frappe.db.set_value("Crema Log", name, "chain_sha", new_sha, update_modified=False)
+            previous = new_sha
+
+    def test_a_clean_pre_upgrade_chain_is_rechained_and_verifies(self):
+        tag = uuid.uuid4().hex
+        names = [self._insert(f"rechain-clean-{i}-{tag}") for i in range(3)]
+        self._simulate_pre_upgrade_chain(names)
+        self.assertFalse(
+            log.verify_chain()["ok"], "sanity: verifying under the new field tuple must fail beforehand"
+        )
+
+        rechain_crema_log_for_version_fields.execute()
+
+        result = log.verify_chain()
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["first_break"])
+
+    def test_a_break_before_the_upgrade_is_left_untouched(self):
+        tag = uuid.uuid4().hex
+        names = [self._insert(f"rechain-broken-{i}-{tag}") for i in range(3)]
+        self._simulate_pre_upgrade_chain(names)
+        frappe.db.set_value(
+            "Crema Log", names[1], "detail", "tampered before the upgrade", update_modified=False
+        )
+        before = [frappe.db.get_value("Crema Log", n, "chain_sha") for n in names]
+
+        with patch("frappe.log_error") as mock_log_error:
+            rechain_crema_log_for_version_fields.execute()
+        mock_log_error.assert_called_once()
+
+        after = [frappe.db.get_value("Crema Log", n, "chain_sha") for n in names]
+        self.assertEqual(before, after, "a pre-existing tamper must not be silently re-hashed away")

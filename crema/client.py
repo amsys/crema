@@ -16,6 +16,7 @@ import frappe
 from crema import cache, interfaces, policy
 from crema import log as _log
 from crema.exceptions import CremaBlockedError, CremaConfigError
+from frappe import _
 from frappe.utils import cint, now_datetime
 from frappe.utils.caching import redis_cache
 
@@ -100,7 +101,12 @@ def _resolve(interface: str) -> dict[str, Any]:
     Raises CremaConfigError when the site-wide kill switch is enabled (policy.disabled).
     """
     if policy.disabled():
-        raise CremaConfigError("crema is disabled")
+        raise CremaConfigError(
+            _(
+                "Crema is disabled. A System Manager can re-enable it in Crema Settings, "
+                "unless the site configuration disabled it."
+            )
+        )
 
     name = interface
     seen: set[str] = set()

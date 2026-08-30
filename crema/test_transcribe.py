@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 from crema import client
 from crema.api import transcribe
-from crema.exceptions import CremaBudgetError, CremaConfigError
+from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
 from crema.test_fixtures import (
     TEST_PROVIDER,
     CremaFixtureTestCase,
@@ -106,6 +106,20 @@ class IntegrationTestCremaTranscribe(CremaFixtureTestCase):
 
         log = frappe.get_last_doc("Crema Log", filters={"interface": "transcribe", "status": "Error"})
         self.assertIn("provider exploded", log.detail)
+
+    def test_masking_block_logs_a_blocked_row_not_an_error_row(self):
+        """FCR-FINDINGS F2: client._transcribe's own guardrails.blocks_unmaskable gate
+        raises CremaBlockedError — it must land in the Crema Log as Blocked, matching
+        _Ask.__call__ and _ocr.ocr(), not fall through to the generic Error branch."""
+        with patch(
+            "crema.client._transcribe",
+            side_effect=CremaBlockedError("masking: audio content cannot be masked"),
+        ):
+            with self.assertRaises(CremaBlockedError):
+                transcribe(_AUDIO_BYTES)
+
+        log = frappe.get_last_doc("Crema Log", filters={"interface": "transcribe", "status": "Blocked"})
+        self.assertIn("masking", log.detail)
 
     def test_transcribe_builds_expected_litellm_kwargs(self):
         """crema.client._transcribe's kwargs shape -- _transcribe's sibling of

@@ -1047,6 +1047,43 @@ class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
             names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
             self.assertNotIn("_test_app_iface", names)
 
+    def test_reconcile_warns_and_drops_an_unknown_key_but_keeps_a_valid_sibling(self):
+        """A crema_interfaces key that is not "prompt"/"fallback"/"label" and not a
+        Crema Model Assignment field would otherwise vanish silently at insert
+        (get_valid_dict drops it) — FCR-FINDINGS F1. Reconcile must warn, keep the
+        row, and still seed a valid sibling key."""
+        fake = {
+            "_test_app_iface_bad_key": {
+                "prompt": "p",
+                "max_tokens": 512,
+                "enable_prompt_scan": 1,  # not a Crema Model Assignment field
+            }
+        }
+        try:
+            with (
+                patch("crema.interfaces.app_interfaces", return_value=fake),
+                patch("frappe.logger") as mock_logger,
+            ):
+                settings = frappe.get_single("Crema Settings")
+                settings.save(ignore_permissions=True)
+
+            mock_logger.assert_called_once_with("crema")
+            warning = mock_logger.return_value.warning.call_args[0][0]
+            self.assertIn("_test_app_iface_bad_key", warning)
+            self.assertIn("enable_prompt_scan", warning)
+
+            row = next(
+                r
+                for r in frappe.get_single("Crema Settings").assignments
+                if r.interface == "_test_app_iface_bad_key"
+            )
+            self.assertEqual(row.max_tokens, 512)
+            self.assertIsNone(row.get("enable_prompt_scan"))
+        finally:
+            frappe.get_single("Crema Settings").save(ignore_permissions=True)
+            names = {r.interface for r in frappe.get_single("Crema Settings").assignments}
+            self.assertNotIn("_test_app_iface_bad_key", names)
+
     def test_row_with_provider_and_no_model_warns_on_save_but_still_saves(self):
         """A provider with no effective model resolves to a broken litellm model
         string at call time (client._complete) — CremaSettings.validate warns instead

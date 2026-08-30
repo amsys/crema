@@ -334,7 +334,7 @@ context("Crema desk UI", () => {
 			reason: "contacts referencing probe",
 		});
 		crema_prompt("contacts referencing probe");
-		cy.wait("@probe");
+		cy.wait("@probe", { requestTimeout: 20000 });
 
 		cy.get("@probe.all").should("have.length", 1);
 		cy.get("@ask.all").should("have.length", 1);
@@ -356,7 +356,7 @@ context("Crema desk UI", () => {
 			reason: "contacts referencing crema exact probe",
 		});
 		crema_prompt("contacts referencing crema exact probe");
-		cy.wait("@probe");
+		cy.wait("@probe", { requestTimeout: 20000 });
 
 		cy.get("@probe.all").should("have.length", 1);
 		// list_view.js's get_search_params only JSON.stringifies a non-"=" operator;

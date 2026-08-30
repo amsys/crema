@@ -236,6 +236,10 @@ _DASHBOARD_CHARTS = [
         "timespan": "Last Month",
         "time_interval": "Daily",
         "type": "Line",
+        # cost_usd is always USD regardless of the site's own default currency — pin it
+        # explicitly rather than let frappe fall back to frappe.defaults' site currency,
+        # which would mislabel this chart on any site whose default isn't USD.
+        "currency": "USD",
     },
     {
         "name": "Crema Calls by Status",
@@ -244,6 +248,13 @@ _DASHBOARD_CHARTS = [
         "group_by_type": "Count",
         "timeseries": 0,
         "type": "Donut",
+        # A plain count of Crema Log rows, not a sum of anything — but Dashboard Chart's
+        # own `currency` field defaults from the site's default currency on every new
+        # document regardless of chart_type, since Crema Log has a Currency field
+        # (cost_usd). Left at that default, the desk formats every count on this donut
+        # as a dollar amount ("$ 1.00" for one Success call) instead of a plain number.
+        # Blank it explicitly — Count has nothing to denominate.
+        "currency": "",
     },
 ]
 
@@ -290,6 +301,12 @@ def sync_dashboard() -> None:
 
     for chart in _DASHBOARD_CHARTS:
         if frappe.db.exists("Dashboard Chart", chart["name"]):
+            # Restamped rather than skipped, same reasoning as the cards above: currency
+            # is stamped from the site default at creation time regardless of chart_type,
+            # so a site that installed before this fix has a Count chart mislabeled in
+            # dollars — restamping it here is the only way an already-installed site
+            # self-heals on the next migrate.
+            frappe.db.set_value("Dashboard Chart", chart["name"], "currency", chart.get("currency"))
             continue
         doc = frappe.new_doc("Dashboard Chart")
         doc.update(

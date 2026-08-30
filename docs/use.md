@@ -226,6 +226,11 @@ Published to the calling user's own session only — never broadcast site-wide, 
 result can carry document content. This is what the desk's own file-upload path
 (below) uses.
 
+Known limit: the browser must stay on the page until the `crema_extract` event
+arrives. If the tab closes or reloads first, the queued job still runs and still
+bills, but no listener is left to receive the result, and the server does not store
+it for later. The result is lost. Retry the extract in a fresh tab.
+
 ### `POST /api/method/crema.api.ocr_api`
 
 | Parameter | Required | Notes |

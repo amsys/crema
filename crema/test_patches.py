@@ -14,9 +14,9 @@ import uuid
 from unittest.mock import patch
 
 import frappe
-from crema import guardrails, log
+from crema import log
 from crema.patches import consolidate_guardrails, rechain_crema_log_for_version_fields
-from crema.test_fixtures import CremaFixtureTestCase
+from crema.test_fixtures import _GUARDRAIL_BASELINE, CremaFixtureTestCase
 from frappe.tests import IntegrationTestCase, UnitTestCase
 
 _COLUMNS = {
@@ -66,8 +66,7 @@ class IntegrationTestCremaConsolidateGuardrails(IntegrationTestCase):
         _clear_column_cache()
         doc = frappe.get_single("Crema Guardrails")
         for row in doc.guardrails:
-            module = guardrails._BUILTINS.get(row.guardrail)
-            row.action = module.default_action if module else "Off"
+            row.action = _GUARDRAIL_BASELINE.get(row.guardrail, "Off")
             row.interfaces = ""
         doc.save(ignore_permissions=True)
         frappe.clear_document_cache("Crema Guardrails")
@@ -157,6 +156,13 @@ class IntegrationTestCremaRechainCremaLog(CremaFixtureTestCase):
     IntegrationTestCremaLogChain in test_doctypes.py: log.verify_chain walks the whole
     table, so one test's rows surviving into the next would corrupt every later test's
     own "clean chain" precondition."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Same reason as IntegrationTestCremaLogChain: the site's own Crema Log rows
+        # sit before this test's rows in the whole-table walk and break the clean
+        # pre-upgrade-chain premise. Rolled back by the per-test savepoint.
+        frappe.db.delete("Crema Log")
 
     @staticmethod
     def _insert(prompt_sha: str) -> str:

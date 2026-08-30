@@ -9,12 +9,11 @@ branch and a fresh install has none of the four.
 One Guardrails row cannot express per-interface ACTIONS, only a per-interface filter:
 where the old rows disagreed on a ladder value (output_trap Block here, Log Only
 there), the MOST SEVERE value wins and the filter is the union of every interface that
-had the check on. The old security row's custom system_prompt (if any) becomes the AI
-Guard row's guard_prompt, and its provider/model become the AI Guard row's
-guard_provider/guard_model — the AI Guard now owns a provider directly rather than
-borrowing an interface's, so this DOES map, unlike the interface name the old
-"Checked By" picker needed. The security assignment row itself is removed by
-CremaSettings._reconcile_assignments on this same migrate's after_migrate hook.
+had the check on. The old security row's custom system_prompt, provider, and model are
+not carried over: the next patch in patches.txt, drop_ai_guard, removes the AI Guard
+config outright, so migrating those fields here would be wasted work. The security
+assignment row itself is removed by CremaSettings._reconcile_assignments on this same
+migrate's after_migrate hook.
 
 Also drops the "Checked By" Property Setter (Crema Guardrail.guard_interface): that
 field is gone, replaced by guard_provider/guard_model.
@@ -56,8 +55,6 @@ def execute() -> None:
         return
 
     def ladder(row, column: str) -> str:
-        if column not in columns:
-            return "Off"
         value = row.get(column)
         if column in ("enable_prompt_scan", "enable_llm_guard"):
             return "Block" if value else "Off"
@@ -73,28 +70,16 @@ def execute() -> None:
     doc = frappe.get_single("Crema Guardrails")
     for grow in doc.guardrails:
         column = per_guardrail.get(grow.guardrail)
-        if column is None:
-            continue  # "phi" is new — stays at its seeded default (Off)
+        if column is None or column not in columns:
+            # "phi" is new, and a guardrail whose own legacy column never existed on
+            # this site has nothing to fold — keep the seeded default. Folding an
+            # absent column as "Off" would clobber scan's seeded "Block" on any site
+            # that carries only a partial set of orphaned columns.
+            continue
         actions = {row.interface: ladder(row, column) for row in rows}
         enabled = [name for name, action in actions.items() if action != "Off"]
         grow.action = _most_severe(list(actions.values()))
         grow.interfaces = "" if set(enabled) >= {row.interface for row in rows} else ", ".join(enabled)
-
-    if "enable_llm_guard" in columns:
-        old_row = frappe.db.sql(
-            "select system_prompt, provider, model from `tabCrema Model Assignment`"
-            " where parent = 'Crema Settings' and interface = 'security'",
-            as_dict=True,
-        )
-        guard_row = next((r for r in doc.guardrails if r.guardrail == "llm_guard"), None)
-        if guard_row is not None and old_row:
-            old_row = old_row[0]
-            if old_row.system_prompt:
-                guard_row.guard_prompt = old_row.system_prompt
-            if old_row.provider:
-                guard_row.guard_provider = old_row.provider
-            if old_row.model:
-                guard_row.guard_model = old_row.model
 
     # The guard's save-time executor check would throw here if the old site had the
     # guard on but no resolvable provider — that is exactly the fail-loud

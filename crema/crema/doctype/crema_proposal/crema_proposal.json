@@ -10,6 +10,8 @@
   "column_break_top",
   "target_doctype",
   "confidence",
+  "section_preview",
+  "diff_preview",
   "section_detail",
   "outcome",
   "created_json",
@@ -63,6 +65,16 @@
    "read_only": 1
   },
   {
+   "fieldname": "section_preview",
+   "fieldtype": "Section Break"
+  },
+  {
+   "description": "The fields approving this row writes to the record type above. The raw payload and mapping are in Detail below.",
+   "fieldname": "diff_preview",
+   "fieldtype": "HTML",
+   "label": "Proposed Write"
+  },
+  {
    "collapsible": 1,
    "fieldname": "section_detail",
    "fieldtype": "Section Break",
@@ -109,7 +121,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-25 00:00:00.000000",
+ "modified": "2026-08-30 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Proposal",

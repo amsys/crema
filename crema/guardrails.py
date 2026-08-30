@@ -27,12 +27,22 @@ Another app adds its own guardrail through a `crema_guardrails` dict in its hook
 `{key: module_object_or_dotted_path}` — read exactly like interfaces.app_interfaces()
 reads `crema_interfaces` (per-app module import, first app wins, built-in keys are
 never overridable). An external check (a toxicity API, an NER masker) is a
-`before()`-only module.
+`before()`-only module. An output-side filter (the Reply Filter, or an app's own) is
+the mirror case, an `after()`-only module — it should seed near the TOP of the row
+order, second only to the Text Scan, so its `after()` runs LAST and sees the fully
+mask-restored, nonce-stripped text rather than an intermediate form.
+
+An app that only wants its own injection patterns on the Text Scan — no new row, no
+new module — adds a `crema_scan_patterns` dict instead: `{reason: pattern_string}`,
+read by `scan_patterns()` below the same way, and merged into `security.scan`'s
+canonicalized pattern loop as `extra` (see `_Scan.before`). This is the caller-side
+merge `security.py` itself cannot do — it stays free of any frappe import.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from typing import Any
 
@@ -101,10 +111,14 @@ def _record_mask_miss(reason: str) -> None:
 
 
 def _record_note(reason: str) -> None:
-    """Stash any other non-blocking guardrail note (a Log Only scan hit) onto
-    frappe.local — the third sibling of crema_trap/crema_mask, drained the same
-    way by crema.log.insert."""
-    frappe.local.crema_note = reason
+    """Stash any other non-blocking guardrail note (a Log Only scan hit, a Log Only
+    reply-filter removal) onto frappe.local — the third sibling of crema_trap/
+    crema_mask, drained the same way by crema.log.insert. Appends rather than
+    overwrites: the scan (before the provider call) and the Reply Filter (after it)
+    can both fire Log Only in the same request, and a second note must not silently
+    erase the first."""
+    prior = getattr(frappe.local, "crema_note", None)
+    frappe.local.crema_note = f"{prior}; {reason}" if prior else reason
 
 
 def _drain_terms() -> list:
@@ -133,7 +147,10 @@ def _allowed_names() -> frozenset[str]:
 
 class _Scan:
     """Layer 1 — the pure regex/unicode scan (crema.security.scan). The only pre-cache
-    module: free, fail-closed, and it must also cover a request the cache would answer."""
+    module: free, fail-closed, and it must also cover a request the cache would answer.
+    Passes every installed app's own patterns (scan_patterns()) through as `extra`, so
+    an app-registered pattern gets the same canonicalisation, row action, and use-case
+    filter as a built-in one."""
 
     key = "scan"
     label = "Text Scan"
@@ -142,7 +159,7 @@ class _Scan:
     pre_cache = True
 
     def before(self, ctx: Ctx) -> None:
-        reason = security.scan(ctx.text or "")
+        reason = security.scan(ctx.text or "", extra=scan_patterns())
         if not reason:
             return
         if ctx.action == "Log Only":
@@ -216,6 +233,71 @@ class _Mask:
             else:
                 raise CremaBlockedError(reason)
         ctx.response = restored
+
+
+# A output-side content filter: removes remote image/link targets from a reply, so an
+# app that renders the reply as markdown or HTML cannot be made to call another server
+# on render (see docs/security.md's "Crema's own desk UI escapes..." Known limit).
+_MD_TARGET_RE = re.compile(r"(!?\[[^\]]*\]\(\s*<?)([^)\s]+)([^)]*\))")
+_HTML_TARGET_RE = re.compile(r'((?:src|href)=")([^"]+)(")', re.I)
+
+
+def _is_remote(target: str) -> bool:
+    """A target is remote if it names a scheme (`https:`, `data:`, `javascript:`) or
+    is protocol-relative (`//host/...`). A path relative to this site (`/files/x.png`)
+    is not — it never leaves the server that rendered it."""
+    return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:|^//", target))
+
+
+def _strip_remote_targets(text: str) -> tuple[str, int]:
+    """Replace every remote markdown image/link target and HTML src/href value in
+    `text` with `#`, leaving the surrounding text (and local targets) untouched.
+    Returns (cleaned text, count removed). Pure and frappe-free, like mask.py.
+
+    ponytail: a regex pass over markdown/HTML, not a real parser — markdown reference
+    definitions ("[id]: https://...") and HTML attributes other than src/href are not
+    covered. Fails open (a miss leaves the target) rather than risking a false
+    positive that corrupts an ordinary reply. Add a real parser if this proves not
+    enough."""
+    count = 0
+
+    def _sub(m: re.Match) -> str:
+        nonlocal count
+        if not _is_remote(m.group(2)):
+            return m.group(0)
+        count += 1
+        return f"{m.group(1)}#{m.group(3)}"
+
+    text = _MD_TARGET_RE.sub(_sub, text)
+    text = _HTML_TARGET_RE.sub(_sub, text)
+    return text, count
+
+
+class _ReplyFilter:
+    """An output-side content filter — after()-only, no before(). Neutralises remote
+    image/link targets in the reply so an embedding app that renders it as markdown or
+    HTML cannot be made to call another server on render. Retry Once has no meaning
+    here, same as masking: a retry cannot unwrite a reply already generated, so it is
+    treated as Block."""
+
+    key = "reply"
+    label = "Reply Filter"
+    help = "Removes image and link targets from the reply, so displaying it cannot call another server."
+    default_action = "Off"
+    pre_cache = False
+
+    def after(self, ctx: Ctx) -> None:
+        if ctx.retry:
+            return  # an earlier after() hook already doomed this response
+        cleaned, count = _strip_remote_targets(ctx.response or "")
+        ctx.response = cleaned
+        if not count:
+            return
+        reason = f"reply filter: removed {count} remote target(s)"
+        if ctx.action == "Log Only":
+            _record_note(reason)
+        else:
+            raise CremaBlockedError(reason)
 
 
 # Layer 3 (the reply check): a per-call random nonce the model is told to echo back,
@@ -338,6 +420,7 @@ def _phi_patterns() -> list:
 
 _BUILTINS: dict[str, Any] = {
     "scan": _Scan(),
+    "reply": _ReplyFilter(),
     "pi": _Mask(
         "pi",
         "Hide Personal Information",
@@ -403,6 +486,44 @@ def _module(key: str) -> Any | None:
     except Exception:
         frappe.logger("crema").warning(f"crema_guardrails module '{entry}' did not resolve — skipped")
         return None
+
+
+def scan_patterns() -> tuple[tuple[str, str], ...]:
+    """Every installed app's own injection patterns, for security.scan's `extra` —
+    read exactly like registry()/interfaces.app_interfaces() read their own hooks.py
+    dict (per-app module import, no frappe.get_hooks: see the module docstring's
+    reasoning), except the value here is `{reason: pattern_string}`, not a module
+    object, so there is no lazy dotted-path form to resolve.
+
+    A pattern that fails to compile is dropped — only that one, with a warning — so
+    one third-party typo cannot break every call's scan. A reason already claimed by
+    an earlier app is dropped too, first-app-wins, the same rule registry() applies
+    to a guardrail key. Returned as a tuple of (pattern, reason) pairs: hashable, so
+    security._patterns can cache on it, and security.py never needs to know about
+    frappe.get_installed_apps."""
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for app in frappe.get_installed_apps():
+        try:
+            hooks_module = frappe.get_module(f"{app}.hooks")
+        except ImportError:
+            continue
+        declared = getattr(hooks_module, "crema_scan_patterns", None)
+        if not declared:
+            continue
+        for reason, pattern in declared.items():
+            if reason in seen:
+                continue
+            try:
+                re.compile(pattern, re.I | re.S)
+            except re.error:
+                frappe.logger("crema").warning(
+                    f"{app}: crema_scan_patterns '{reason}' did not compile — pattern skipped"
+                )
+                continue
+            seen.add(reason)
+            pairs.append((pattern, reason))
+    return tuple(pairs)
 
 
 def label_for(key: str) -> str:

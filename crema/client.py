@@ -16,6 +16,7 @@ import frappe
 from crema import cache, interfaces, policy
 from crema import log as _log
 from crema.exceptions import CremaBlockedError, CremaConfigError
+from frappe.utils import cint, now_datetime
 from frappe.utils.caching import redis_cache
 
 
@@ -192,6 +193,7 @@ def _record_usage(response: Any) -> None:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "cost_usd": 0.0,
+            "served_model": None,
         }
 
     usage = getattr(response, "usage", None)
@@ -203,6 +205,16 @@ def _record_usage(response: Any) -> None:
     acc["prompt_tokens"] += int(_as_number(getattr(usage, "prompt_tokens", 0)))
     acc["completion_tokens"] += int(_as_number(getattr(usage, "completion_tokens", 0)))
     acc["cost_usd"] += proxy_cost if proxy_cost is not None else _as_number(hidden.get("response_cost"))
+
+    # The isinstance check, not a bare truthy getattr, is load-bearing for the same
+    # reason as _as_number/_proxy_cost above: a bare MagicMock test double auto-vivifies
+    # response.model into another MagicMock rather than raising or returning None. Last
+    # write wins on purpose — a fallback chain or _ocr's escalation can log several calls
+    # under one row, and the served model that matters is the one behind the answer
+    # actually returned.
+    served = getattr(response, "model", None)
+    if isinstance(served, str) and served:
+        acc["served_model"] = served
 
 
 def _record_transcript(msgs: list[dict], content: str) -> None:
@@ -376,3 +388,55 @@ def check_connection(provider: str) -> dict[str, Any]:
     if error is None:
         return {"ok": True, "reachable": True, "detail": f"{len(ids)} models"}
     return {"ok": False, "reachable": reachable, "detail": error}
+
+
+def check_providers() -> None:
+    """Scheduler entry point (hourly — same cadence as list_models' cache): the
+    scheduled half of automatic fallback. check_connection is the existing live probe
+    a human triggers by opening the Providers panel; this is what feeds an unreachable
+    provider's `enabled` back automatically, so a dead provider stops being a fallback
+    target instead of staying `enabled` forever.
+
+    Off by default, and off entirely under the kill switch or Crema Settings'
+    "Switch Off Services That Do Not Answer": a gateway that serves completions but
+    does not implement /models would otherwise be switched off every sweep — an outage
+    caused by the health check itself.
+
+    No flap counter: a transient timeout disables a provider for one hour and the next
+    sweep restores it, with fallback covering the gap in between.
+    ponytail: a provider that flaps hourly gets disabled and re-enabled hourly forever,
+    with no visibility beyond last_check_detail. Add a consecutive-failure counter
+    (the same shape automation._MAX_FAILURES uses) if that ever shows up in practice.
+    """
+    if policy.disabled():
+        return
+    if not cint(frappe.get_cached_doc("Crema Settings").get("auto_disable_unreachable")):
+        return
+
+    flipped = False
+    for provider in frappe.get_all("Crema Provider", fields=["name", "enabled", "auto_disabled"]):
+        try:
+            status = check_connection(provider.name)
+        except Exception as exc:
+            frappe.log_error(
+                title=f"Crema provider health check failed: {provider.name}"[:140],
+                message=_log.redact(str(exc)),
+            )
+            continue
+
+        values = {"last_checked": now_datetime(), "last_check_detail": status["detail"]}
+        if provider.enabled and not status["ok"]:
+            values.update(enabled=0, auto_disabled=1)
+            flipped = True
+        elif not provider.enabled and provider.auto_disabled and status["ok"]:
+            values.update(enabled=1, auto_disabled=0)
+            flipped = True
+        frappe.db.set_value("Crema Provider", provider.name, values, update_modified=False)
+
+    if flipped:
+        # Load-bearing, not a courtesy: _resolve_one's redis cache is keyed per
+        # interface, so a flip that skipped this would leave a resolved config
+        # pointing at a provider that just changed out from under it.
+        cache.clear_provider()
+        # nosemgrep: frappe-manual-commit — a scheduler job commits its own work
+        frappe.db.commit()

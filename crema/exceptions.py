@@ -11,7 +11,8 @@ import frappe
 
 
 class CremaBlockedError(frappe.ValidationError):
-    """Raised when a prompt is blocked by a security layer."""
+    """Raised when a prompt is blocked by a security layer, or a source fetch is
+    refused by automation._check_egress."""
 
 
 class CremaConfigError(frappe.ValidationError):

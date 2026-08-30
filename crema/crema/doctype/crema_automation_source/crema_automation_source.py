@@ -44,6 +44,7 @@ class CremaAutomationSource(Document):
                 frappe.throw(_("A Document Query source needs a Record Type to Read."))
             self._validate_query(self.source_doctype, _DEFAULT_SOURCE_LIMIT, _MAX_SOURCE_LIMIT)
             self.read_attachments = cint(self.read_attachments)
+            self.read_children = cint(self.read_children)
         elif self.source_type == "File Query":
             # Pinned, not admin-chosen: a File Query always reads the File doctype itself
             # (the bytes), never a doctype's own fields — that is what a Document Query is
@@ -52,17 +53,19 @@ class CremaAutomationSource(Document):
             # gives it "File" to key on with no extra code.
             self._validate_query(_FILE_DOCTYPE, _DEFAULT_FILE_SOURCE_LIMIT, _MAX_FILE_SOURCE_LIMIT)
             self.read_attachments = 0  # a File Query IS the file read; nothing to attach
+            self.read_children = 0  # a File Query reads bytes, not a doctype's own fields
         else:
             self.source_doctype = None
             self.source_filters = None
             self.last_read = None
-            # These four are grid columns now, and a grid cell shows its stored value
+            # These five are grid columns now, and a grid cell shows its stored value
             # whatever the row's type is — a `depends_on` on a grid column mutates the
             # shared docfield and so cannot hide a cell per row. Clearing them is what
             # keeps a URL row from claiming a per-run cap it does not have.
             self.source_limit = 0
             self.incremental = 0
             self.read_attachments = 0
+            self.read_children = 0
 
         self.source_label = self._label()
 

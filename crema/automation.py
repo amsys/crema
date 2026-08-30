@@ -48,11 +48,14 @@ from __future__ import annotations
 
 import hashlib
 import html
+import ipaddress
 import mimetypes
 import re
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, NamedTuple
+from urllib.parse import urljoin, urlparse
 
 import requests
 from croniter import croniter
@@ -60,6 +63,7 @@ from croniter import croniter
 import frappe
 from crema import _ocr, api, client, guardrails, log, policy, sandbox, security
 from crema import terms as _terms
+from crema.exceptions import CremaBlockedError
 from frappe import _
 from frappe.model import data_fieldtypes
 from frappe.utils import add_days, cint, flt, now_datetime, strip_html
@@ -71,10 +75,15 @@ _LOG_RETENTION_DAYS = 30  # fallback if Crema Settings.log_retention_days is uns
 _ERROR_MAX_CHARS = 2000
 _RESULT_MAX_CHARS = 20_000
 _FETCH_TIMEOUT = 60
+_FETCH_MAX_REDIRECTS = 5
 _SOURCE_LIMIT_DEFAULT = 50
 # One OCR call per attachment, billed and logged like any other. A record with a dozen
 # scans attached would otherwise quietly multiply the cost of one run by twelve.
 _ATTACHMENT_MAX_PER_RECORD = 5
+# Per record, across every one of that record's child tables combined -- one number
+# bounds the payload however many Table fields a doctype has. A 500-line invoice would
+# otherwise multiply one record's share of the content budget on its own.
+_CHILD_MAX_ROWS_PER_RECORD = 20
 _WEBHOOK_PAYLOAD_CHARS = 20_000
 # ponytail: a flat cap, not paging — source_limit tops out at 200, so one run cannot
 # approach this. Add paging if a future caller pushes past it.
@@ -688,6 +697,14 @@ def _source_fields(doctype: str) -> list[str]:
     return ["name", "modified", *fields]
 
 
+def _child_fields(child_doctype: str) -> list[str]:
+    """The fields one child row of a Document Query source reads -- _source_fields'
+    fence (data_fieldtypes, no Password, no permlevel) minus `name`/`modified`, which
+    are per-row noise a child row's own identity and edit time add nothing over the
+    parent record's."""
+    return [f for f in _source_fields(child_doctype) if f not in ("name", "modified")]
+
+
 def _normalized_filters(raw: Any) -> list[list]:
     """One filter shape downstream. frappe.ui.FilterGroup writes a list of
     [fieldname, operator, value] (or 4-element, doctype-prefixed) rows; a hand-written
@@ -748,6 +765,15 @@ def _read_documents(
     if not rows:
         return "", set(), "", read_up_to
 
+    notes = []
+    if source.read_children:
+        # Before the scan triage below, not after: a child row's own text is a better
+        # injection surface than the parent's, and it must be scanned along with it --
+        # not sail through unscanned because it arrived one line later.
+        child_note = _attach_children(source.source_doctype, rows)
+        if child_note:
+            notes.append(child_note)
+
     kept, dropped = rows, 0
     interface = cfg.get("requested") or cfg.get("interface") or ""
     if guardrails.active("scan", interface) != "Off":
@@ -755,10 +781,12 @@ def _read_documents(
         # content. Without it one soft hyphen in one record blocks all 50, and five
         # such runs disable the task. Only meaningful when the text scan actually
         # applies to this task's interface.
-        kept = [row for row in rows if not security.scan(frappe.as_json(row))]
+        extra = guardrails.scan_patterns()
+        kept = [row for row in rows if not security.scan(frappe.as_json(row), extra=extra)]
         dropped = len(rows) - len(kept)
 
-    notes = [f"{dropped} skipped by the security scan"] if dropped else []
+    if dropped:
+        notes.append(f"{dropped} skipped by the security scan")
     if not kept:
         return "", set(), "; ".join(notes), read_up_to
 
@@ -849,6 +877,59 @@ def _read_files(
     return records, "; ".join(notes), read_up_to
 
 
+def _attach_children(doctype: str, rows: list) -> str:
+    """Merge each Table/Table MultiSelect field's rows onto the matching parent row
+    dict, under the table's own fieldname -- so a Sales Invoice reaches the model with
+    its item lines, a BOM with its components, where today it travels with none
+    (`_source_fields` keeps to `data_fieldtypes`, which excludes both). Mutates `rows`
+    in place.
+
+    One frappe.get_list per child table for the WHOLE batch, not one per record --
+    `parent_doctype` is what keeps this get_list (never get_all) fenced by frappe's
+    own child-table permission check (`has_child_permission` resolves it through
+    `parent_doctype`), the same argument `_read_attachments` already makes for File.
+
+    `_CHILD_MAX_ROWS_PER_RECORD` is a per-record budget shared across every table, in
+    field order: an earlier table drains it first, a later one gets whatever is left.
+    The query's own `limit` only bounds the whole batch, not one record's share, so the
+    per-record cap is enforced here, after the read. Returns a note naming how many
+    records had at least one line left out, in the shape `_read_attachments` returns.
+    """
+    meta = frappe.get_meta(doctype)
+    tables = [df for df in meta.fields if df.fieldtype in ("Table", "Table MultiSelect") and df.options]
+    if not tables:
+        return ""
+
+    by_name = {row["name"]: row for row in rows}
+    names = list(by_name)
+    remaining = dict.fromkeys(names, _CHILD_MAX_ROWS_PER_RECORD)
+    truncated: set[str] = set()
+
+    for df in tables:
+        child_rows = frappe.get_list(
+            df.options,
+            parent_doctype=doctype,
+            filters={"parent": ["in", names], "parenttype": doctype, "parentfield": df.fieldname},
+            fields=[*_child_fields(df.options), "parent"],
+            order_by="parent asc, idx asc",
+            limit=len(names) * _CHILD_MAX_ROWS_PER_RECORD,
+        )
+        grouped: dict[str, list[dict]] = {}
+        for child in child_rows:
+            grouped.setdefault(child.pop("parent"), []).append(child)
+
+        for name, group in grouped.items():
+            budget = remaining.get(name, 0)
+            if len(group) > budget:
+                truncated.add(name)
+            kept = group[:budget]
+            remaining[name] = budget - len(kept)
+            if kept:
+                by_name[name][df.fieldname] = kept
+
+    return f"{len(truncated)} record(s) had table lines left out" if truncated else ""
+
+
 def _read_attachments(doctype: str, rows: list) -> tuple[str, str]:
     """OCR the files attached to each record and return them as labelled text blocks.
 
@@ -887,11 +968,50 @@ def _read_attachments(doctype: str, rows: list) -> tuple[str, str]:
     return "\n\n".join(blocks), note
 
 
+def _check_egress(url: str) -> None:
+    """Refuse a URL fetch aimed at anything but the open internet: cloud metadata
+    endpoints (169.254.169.254 and its IPv6 twin), loopback, and every other private or
+    reserved range. `_fetch` calls this before every hop of a redirect chain, not only
+    the first, since a public URL is free to redirect to a private one.
+
+    Resolves the host itself rather than delegating to requests: a private/loopback
+    check on the URL string alone would miss a hostname that merely resolves there.
+    A host that fails to resolve at all is let through -- there is nothing to connect
+    to, so requests.get fails on its own a moment later, and this keeps the test
+    suite's unresolvable *.invalid fixtures working unchanged. A DNS answer that
+    changes between this check and requests' own resolution (rebinding) is a residual
+    gap -- see docs/security.md."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise CremaBlockedError(f"source fetch: unsupported scheme in '{url}'")
+    host = parsed.hostname
+    if not host:
+        raise CremaBlockedError(f"source fetch: no host in '{url}'")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror:
+        return
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0]).is_global:
+            raise CremaBlockedError(f"source fetch: '{host}' resolves to a non-public address")
+
+
 def _fetch(url: str) -> str:
     """Fetch `url` and reduce it to plain text. PDFs go through the crema._ocr pipeline
     (embedded text when present, vision OCR when scanned), HTML is stripped, anything
-    else is used as-is."""
-    response = requests.get(url, timeout=_FETCH_TIMEOUT)
+    else is used as-is.
+
+    Redirects are followed manually, one hop at a time, with _check_egress run before
+    each one -- a public URL that 302s to a private address must be refused on the
+    second hop, not just the first."""
+    for _hop in range(_FETCH_MAX_REDIRECTS + 1):
+        _check_egress(url)
+        response = requests.get(url, timeout=_FETCH_TIMEOUT, allow_redirects=False)
+        if not response.is_redirect:
+            break
+        url = urljoin(url, response.headers.get("location") or "")
+    else:
+        raise CremaBlockedError(f"source fetch: too many redirects starting at '{url}'")
     response.raise_for_status()
 
     body = response.content

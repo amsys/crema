@@ -17,6 +17,7 @@
   "source_limit",
   "incremental",
   "read_attachments",
+  "read_children",
   "last_read"
  ],
  "fields": [
@@ -110,6 +111,15 @@
    "label": "Files"
   },
   {
+   "columns": 1,
+   "depends_on": "eval:doc.source_type==\"Document Query\"",
+   "description": "Also read each record's line items, for example invoice items or BOM components. Crema reads up to 20 lines for each record.",
+   "fieldname": "read_children",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Lines"
+  },
+  {
    "depends_on": "eval:doc.source_type==\"Document Query\"||doc.source_type==\"File Query\"",
    "description": "How far this source has been read. Records changed after this time are read on the next run. Clear it to read everything again.",
    "fieldname": "last_read",
@@ -119,7 +129,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-03 00:00:00.000000",
+ "modified": "2026-08-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Automation Source",

@@ -20,7 +20,8 @@
   "section_restrictions",
   "blocked_doctypes",
   "section_operations",
-  "disabled"
+  "disabled",
+  "auto_disable_unreachable"
  ],
  "fields": [
   {
@@ -115,10 +116,17 @@
    "fieldname": "disabled",
    "fieldtype": "Check",
    "label": "Crema Is Off"
+  },
+  {
+   "default": "0",
+   "description": "Switch this on to check every AI service once an hour and switch off any that does not answer. Crema switches an unreachable service back on by itself once it answers again. A service you switch off yourself stays off.",
+   "fieldname": "auto_disable_unreachable",
+   "fieldtype": "Check",
+   "label": "Switch Off Services That Do Not Answer"
   }
  ],
  "links": [],
- "modified": "2026-08-07 00:00:00.000000",
+ "modified": "2026-08-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Settings",

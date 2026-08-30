@@ -70,8 +70,9 @@ can register their own — see [docs/configure.md](docs/configure.md).
 - **One entry point** — no public function accepts a model, provider, or API key;
   only an interface name.
 - **Guardrails** — one ordered, pluggable list of safety checks on every request —
-  a local prompt scan, a reply check — each with its own
-  action and use-case filter, and a hook for an app to add its own check
+  a local prompt scan, a reply filter, a reply check — each with its own
+  action and use-case filter, a hook for an app to add its own check, and a hook
+  for an app to add its own scan patterns
   ([docs/security.md](docs/security.md#guardrails)).
 - **Works behind a gateway** — point a Crema Provider at litellm-proxy (or another
   gateway) for prompt-injection detection, NER-based PII masking, and per-key spend

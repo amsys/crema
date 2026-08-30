@@ -24,74 +24,19 @@ Each Included and Rejected call below is the same line, applied again.
 
 The strong parts, seen from a consuming app: one import (`from crema import ask`),
 no provider name or key in app code, typed exceptions, a supported test bootstrap
-(`crema.testing`), a hook for a site's own guardrail (`crema_guardrails`), an
-interface registry for an app's own use cases (`crema_interfaces`), per-interface
-and per-user budgets, and one audit row per call that never stores content. The
-identity to build on, and the thing to be remembered for: **propose, never write** —
-every surface returns a proposal that a human or the caller applies.
+(`crema.testing`), a hook for a site's own guardrail (`crema_guardrails`), a hook
+for an app's own scan patterns (`crema_scan_patterns`), an interface registry for
+an app's own use cases (`crema_interfaces`), per-interface and per-user budgets,
+and one audit row per call that never stores content. The identity to build on, and
+the thing to be remembered for: **propose, never write** — every surface returns a
+proposal that a human or the caller applies.
 
 The gaps that ordered the list below: automation is the one surface that writes
-unattended; a consuming app has no hook on the model's reply; a cached reply is not
-scoped to a user; and a slow completion holds a web worker for its whole duration.
+unattended, and a slow completion holds a web worker for its whole duration.
 
 ## Included
 
 Ordered by benefit to a programmer integrating crema.
-
-### The integration surface
-
-1. **An output-side content filter hook.** `log.redact` scrubs only a provider's
-   own API key out of error text, never the model's reply. A consuming app that
-   needs a PII or secret-term filter on responses runs its own regex layer today.
-   Give it the same shape `crema_guardrails` has on the input side. This is also
-   the future home for the markdown-image exfiltration defence named in the
-   security page's Known limits.
-2. **Per-app scan patterns.** An app can register an interface but cannot add its
-   own injection patterns. `security.scan` stays free of Frappe imports, so this is
-   a caller-side merge one level up — the same shape `_scan_context` uses for
-   `history` — not a hooks lookup inside `scan()`.
-3. **Webhook replay protection.** `api.trigger_automation` trusts Frappe token auth
-   alone. An optional shared-secret HMAC over payload + timestamp, with a freshness
-   window, closes the replay case for the one crema entry point an external system
-   fires.
-
-### Guarantee gaps (detail in docs/security.md — Planned hardening)
-
-4. **A user-scoped response cache.** The cache key today has no user and no
-   requested-interface name, so a reply cached for one user can serve another, and
-   two interfaces that fall back to the same provider collide. Add the session user
-   and the requested interface to the key, or record precisely why each omission is
-   safe.
-5. **Version stamping in audit rows.** Record `response.model` (the model actually
-   served) and the crema app version in Crema Log, inside `CHAIN_FIELDS`, so an
-   incident replays against the exact stack that produced it.
-6. **SSRF egress control for `automation._fetch`.** A deny-list for private and
-   loopback addresses, or an allow-listed egress proxy, closing the
-   redirect-following gap.
-
-### Experience and plumbing
-
-7. **Buffer-then-release streaming.** The full reply arrives, the guardrail onion
-   runs, and the desk renders progressively over `frappe.publish_realtime`. No
-   guarantee weakens — the trap validates its nonce and masking swaps its tokens on
-   the complete response. A wait of a few seconds is fine in an ERP form.
-8. **Background execution for long completions.** An opt-in enqueue path — the
-   worker shape automation already uses — with the result delivered over
-   `frappe.publish_realtime`. Frees the web worker; pairs with item 7.
-9. **Child tables in a Document Query.** `_source_fields` keeps to
-   `data_fieldtypes`, so a record travels to the model without its line items —
-   no item rows on a Sales Invoice, no components on a BOM. Serialise each child
-   row through the same explicit-fieldlist fence, capped per record.
-10. **Scheduled provider health checks.** `client.check_connection` is the existing
-    half; a scheduled version of the same check, feeding provider `enabled`
-    automatically, is the missing half of automatic fallback.
-11. **Multi-stage record matching.** Stage `crema_widen_if_empty` (exact `=`, then
-    `like`, then per-word) so the desk view path's term fallback lands more often —
-    still inside the `crema_readable_fields` fence, still no second LLM call.
-12. **A field-writing helper.** A button on long text fields that drafts content in
-    place, over the existing `transform` instruction→diff path. A thin UI layer,
-    and the kind of small bounded desk feature that fits "interface layer, not
-    chatbot" — it edits one field the user is already allowed to edit.
 
 ### Included, but not next
 
@@ -152,12 +97,187 @@ Each with the reason, so the argument does not repeat.
   than building transport.
 - **Live context injection** (a company snapshot in every prompt). Widens the data
   sent per call; crema's posture is minimum content per call.
+- **Buffer-then-release streaming.** No desk surface renders a prose reply in the
+  first place — `crema_ask` consumes a structured view spec, the transform dialog a
+  diff, extract a record list. A server-side chunked publish loop would be machinery
+  built for a consumer that does not exist; once a reply is delivered over
+  `frappe.publish_realtime` (see Background execution for `extract` in Done, below),
+  any future prose surface can reveal it progressively in its own JS with no crema
+  change.
 - **True token-by-token streaming with checks on.** The shape would be a
-  sliding-window scan with mid-stream kill and retract — real new machinery, not
-  before someone needs it. Item 9's buffer-then-release covers the ERP case.
+  sliding-window scan with mid-stream kill and retract — real new machinery for a
+  consumer (a prose reply surface) that does not exist, same reasoning as
+  buffer-then-release above.
+- **Background execution for `ask`/`transform`.** Both are one provider call the
+  user is already watching, at a provider's own `timeout_seconds` (default 60). An
+  async path delivers the same answer at the same moment and costs a new endpoint, a
+  worker entry, a realtime channel, a correlation id, and a second error shape, for
+  no benefit to the person waiting. `extract` is different — see Done, below, for the
+  reasoning and the version that shipped instead.
 
 ## Done (the record the absorbed notes carried)
 
+- **A per-field draft button.** A writable Text/Long Text/Small Text field on a saved
+  document now carries its own small button next to its label — `ControlText.prototype.
+  refresh`, the same hook and "already attached" guard core's own
+  `show_translatable_button` uses for a translation button in the same spot, not
+  `make_input()`: a field's writable/hidden status and a document's local/saved status
+  can both change after the control is first built (a new document becomes saved;
+  `depends_on` flips a field read-only), and `refresh()` is what re-evaluates them on
+  every render. Reuses `transform`'s existing instruction→diff path, scoped to one
+  field: the client keeps only `data.set[fieldname]` from the reply, dropping anything
+  else the model proposed, the same discipline `_filter_diff` already applies
+  server-side to an invented fieldname. `Text Editor` is out of scope (its own toolbar,
+  a different control class). No server change — `transform_api` needed nothing new.
+- **Background execution for `extract`.** `extract` can hold a web worker for minutes on
+  a scanned file (OCR, its `advanced_ocr` escalation, then the extraction call, each
+  retried once) — long enough to starve every other user on a small bench, not only the
+  one who asked. Added `api.extract_async` — the same gates as `extract_api` (role, both
+  rate limits), applied in the request that queues the job, not the worker:
+  `_check_user_rate_limit` is a no-op without `frappe.local.request`, so checking it in
+  the worker instead would let a queued call skip the per-user budget entirely. The
+  worker, `api.run_extract`, is deliberately unwhitelisted (`frappe.enqueue` resolves
+  the dotted path itself — a whitelisted twin would be a second, ungated entry point
+  into `extract()`) and publishes its result over `frappe.realtime`, always scoped to
+  the enqueuing user (`user=frappe.session.user`, the identity `frappe.enqueue`'s own
+  `execute_job` set before the job ran) — never a bare, room-less publish: a result
+  carries document content, and `publish_realtime`'s own default with no room is the
+  whole site. The desk's own file-upload path (`crema_extract_into_new_doc`) now calls
+  `extract_async` and closes its dialog instead of freezing the page; a
+  `frappe.realtime.on("crema_extract", ...)` listener reopens the same dialog object
+  when the result lands — `dialog.hide()` only toggles Bootstrap's own `.show` class, so
+  the dialog and its fields survive to be re-populated. That listener is registered
+  lazily, on the first extract, not as a bare top-level `frappe.realtime.on` call at
+  bundle load: `RealTimeClient.on()` (frappe core's `socketio_client.js`) is a silent
+  no-op until `frappe.realtime.init()` has run, which happens in `Application.startup()`
+  on `$(document).ready` — after every `app_include_js` bundle's own top-level code,
+  this one included, has already been evaluated as a `<script>` tag. Caught by an actual
+  cypress run against a real socket, not by the Python suite, which mocks at
+  `client._complete` and never exercises the browser's own listener. `ask`/`transform`
+  stay foreground, and there is no server-side progressive streaming — see Rejected.
+- **Child tables in a Document Query.** `_source_fields` kept to `data_fieldtypes`,
+  which excludes `Table`/`Table MultiSelect` — a Sales Invoice reached the model with
+  no item lines, a BOM with no components. Added an opt-in **Lines** box
+  (`read_children`) on a Document Query source: `automation._attach_children` merges
+  each `Table`/`Table MultiSelect` field's rows onto the matching parent row dict,
+  under the table's own fieldname, through `_child_fields` — `_source_fields` minus
+  `name`/`modified` — so the read fence (`data_fieldtypes`, no `Password`, no
+  permlevel) is defined in exactly one place. One `frappe.get_list` per child table
+  for the whole batch, `parent_doctype=doctype` so frappe's own child-table
+  permission check stays the fence, never `get_all`. `_CHILD_MAX_ROWS_PER_RECORD`
+  (20) is a budget per record shared across every table on the doctype, in field
+  order, enforced in Python after the read since the query's own `limit` only bounds
+  the whole batch. Called in `_read_documents` **before** the per-row security-scan
+  triage, not after: a child row's text is a better injection surface than the
+  parent's own fields, and a poisoned line item must drop the whole record, not sail
+  through unscanned. `CremaAutomationSource.validate` zeroes it on the URL and File
+  Query branches, the same value-based honesty the grid's other per-row columns
+  already need.
+- **Scheduled provider health checks.** `client.check_connection` was the existing
+  half — a live, uncached probe a human triggers by opening the Providers panel —
+  with nothing running it on a schedule, so a provider that stopped answering stayed
+  `enabled` and `client._resolve` kept picking it. Added `client.check_providers`
+  (hourly scheduler entry), gated on a new Crema Settings box, **Switch Off Services
+  That Do Not Answer** (`auto_disable_unreachable`), off by default: a gateway that
+  serves completions but does not implement `/models` would otherwise be switched
+  off every sweep — an outage caused by the health check itself. Per provider, each
+  in its own try/except: stamps `last_checked`/`last_check_detail` (new Crema
+  Provider fields) via `frappe.db.set_value`, flips an unreachable `enabled` provider
+  off (`auto_disabled=1`) or a recovered `auto_disabled` one back on, and calls
+  `cache.clear_provider()` once if anything flipped — load-bearing, since
+  `_resolve_one`'s redis cache is keyed per interface and a flip that skipped it
+  would leave a resolved config pointing at the provider that just changed.
+  `CremaProvider.validate` unconditionally clears `auto_disabled`, so a human save
+  always re-asserts intent: the sweep writes through `frappe.db.set_value`, which
+  does not run `validate`, so only a provider crema itself switched off is ever
+  switched back on. No flap counter — a transient timeout disables a provider for
+  one hour and the next sweep restores it, with fallback covering the gap; the
+  ceiling carries a `ponytail:` comment naming the counter as the upgrade path.
+- **Multi-stage record matching — already shipped.** `crema_widen_if_empty`
+  (`crema.bundle.js`) already stages a whole-term `like` probe, a free `=` upgrade
+  when a row's winning field equals the term, then a per-word probe, with Cypress
+  coverage at `cypress/integration/desk_ui.js`. Landed in `aa23b12` (2026-08-07);
+  this entry retires the corresponding Included item, which had drifted out of sync
+  with the code.
+- **SSRF egress control for `automation._fetch`.** `_fetch` was a bare `requests.get`
+  with redirects followed and no host check. Added `automation._check_egress`: refuses
+  a non-http(s) scheme, resolves the host with `socket.getaddrinfo`, and refuses any
+  address `ipaddress.ip_address(...).is_global` calls non-global (private, loopback,
+  link-local — so a cloud metadata endpoint at `169.254.169.254` is refused the same as
+  `127.0.0.1`). `_fetch` now follows redirects itself, one hop at a time
+  (`allow_redirects=False`), running the check before every hop rather than only the
+  first — a public start URL that 302s to a private address is caught on the second
+  hop. A host that fails to resolve at all is let through deliberately: there is
+  nothing yet to classify, and `requests` fails on it a moment later — this is also
+  what keeps the test suite's unresolvable `*.invalid` fixtures (RFC 6761) working with
+  no DNS mock. The residual gap, recorded in `docs/security.md`'s Known limits: the
+  check resolves the host once and `requests` resolves it again a moment later, so a
+  DNS answer that changes between the two (rebinding) is not caught.
+- **Version stamping in audit rows.** A Crema Log row recorded only the *configured*
+  model name, never the model a provider's response actually reported, and no crema
+  app version — an incident could not be replayed against the exact stack that
+  produced it. `client._record_usage` now reads `response.model` (guarded by
+  `isinstance`, the same MagicMock-auto-vivification trap `_as_number`/`_proxy_cost`
+  already guard against) into the request-local usage accumulator as `served_model`;
+  last write wins on purpose, so a fallback chain or an OCR escalation billing two
+  provider calls under one row shows the model behind the answer actually returned.
+  `log.insert` stamps that alongside `app_version` (`crema.__version__`) on every row.
+  Both joined `CHAIN_FIELDS`, so a migration was required: `crema.patches.
+  rechain_crema_log_for_version_fields` re-verifies every existing row's chain under
+  the frozen pre-change field tuple first, and only re-chains under the new tuple if
+  that verification is clean end to end — a tamper that predates the upgrade stays
+  visible instead of being silently re-hashed away. Existing rows are not backfilled;
+  `served_model`/`app_version` stay blank on them.
+- **A user-scoped response cache — resolved without adding the user.** The cache
+  key (`api._prompt_hash`, also the audit log's `prompt_sha`) gained the
+  *requested* interface name and the isolation user: `guardrails._plan` filters
+  guardrail rows by `cfg["requested"]`, not the fallback-resolved `cfg["interface"]`
+  the old key carried, so two use cases falling back to the same provider and
+  sharing a system prompt could collide into one entry and serve a permissive
+  reply to a strict interface. The session user stays out on purpose — no part of
+  a crema request is assembled under the calling user's permissions, every read
+  happens inside `sandbox.isolation(cfg["isolation_user"])`, so an identical
+  request implies identical readable inputs whoever asks. That argument is now
+  written down (`docs/security.md` — "The answer cache") and pinned by
+  `test_a_cached_reply_is_shared_between_two_users`, rather than assumed. The hash
+  also switched from a `"|"` join to `json.dumps` of an ordered list, closing a
+  free ambiguity: `prompt="a|b"` and `prompt="a", context="b"` used to hash
+  identically.
+- **Webhook replay protection.** `api.trigger_automation` trusted Frappe token auth
+  alone — a captured request could be re-sent unchanged and would start the task
+  again. Added an optional `webhook_secret` (Password) on Crema Automation Task;
+  while set, `trigger_automation` also requires `timestamp` and `signature` — hex
+  HMAC-SHA256 of `{timestamp}.{task}.{payload}`, keyed by the secret, checked with
+  `hmac.compare_digest`. A timestamp more than 5 minutes off is refused, and a seen
+  signature is spent — `frappe.cache` marks it for twice the freshness window, so
+  the same signed call cannot both pass the window check and be replayed inside it.
+  Verified against the payload as received, before automation's own truncation. A
+  task with no secret set is unchanged: Frappe token auth alone, as before.
+- **Per-app scan patterns.** An app could register an interface (`crema_interfaces`)
+  or a whole guardrail (`crema_guardrails`), but had no way to add its own
+  injection patterns to the Text Scan — a `pre_cache` guardrail module would have
+  had to reimplement `security._canon`'s four-step canonicalisation itself, or lose
+  to a fullwidth or Cyrillic spelling. Shipped `crema_scan_patterns` — a
+  `{reason: pattern_string}` dict in an app's `hooks.py`, read by the new
+  `guardrails.scan_patterns()` (first app wins a duplicate reason, an uncompilable
+  pattern is dropped with a warning), and passed into `security.scan`'s new `extra`
+  argument. `security.py` stays free of any Frappe import: the merge happens in
+  `_Scan.before` and in `automation._read_documents`'s per-row triage — the scan's
+  other caller — not inside `scan()` itself. An app pattern is appended LAST, so a
+  built-in reason still wins when both match, and it is compiled with the same
+  `re.I | re.S` and seen through the same canonicalisation as every built-in one.
+- **The Reply Filter guardrail.** The output-side hook the old item 1 asked for
+  already existed — `guardrails.run`'s `after(ctx)` half, documented in
+  `docs/configure.md`'s "Add your own guardrail" — it just had no built-in use and a
+  stale security-page line ("Crema has no equivalent hook") nobody had gone back to
+  fix. Shipped the use the security page's Known limits already promised: a built-in
+  `reply` guardrail (`Off` by default) that rewrites remote markdown image/link
+  targets and HTML `src`/`href` to `#`, closing the zero-click exfiltration channel
+  a rendered reply can open. Seeded second in `_BUILTINS` (right after the Text
+  Scan), so its `after()` — reverse row order — runs LAST and sees the fully
+  mask-restored, nonce-stripped reply. `client._transcribe` still bypasses the
+  onion entirely and is recorded as a Known limit, not fixed here — new machinery
+  for a path with no system prompt.
 - **Undo a run.** `_upsert`/`_upsert_files` take a `written` accumulator and record
   each saved record's (doctype, name) as created or updated, deduplicated so a
   replan retry that later updates its own earlier create still counts as created.

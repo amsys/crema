@@ -1909,6 +1909,7 @@ class IntegrationTestCremaMasking(CremaFixtureTestCase):
         cfg["requested"] (the name asked for), so a pi row scoped to "translation"
         still applies when "simple" serves the call, while the same row reads Off
         for "simple" itself."""
+        _clear_defaults()  # the fallback premise needs a blank Default Provider
         _ensure_interface("simple", cache_ttl=0)
         _set_guardrail("pi", "Block", interfaces_filter="translation")
 

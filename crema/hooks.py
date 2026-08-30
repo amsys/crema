@@ -76,5 +76,6 @@ doc_events = {
 # expression: a finer schedule still runs at most once per tick.
 scheduler_events = {
     "cron": {"*/15 * * * *": ["crema.automation.tick"]},
+    "hourly": ["crema.client.check_providers"],
     "daily": ["crema.automation.cleanup_logs"],
 }

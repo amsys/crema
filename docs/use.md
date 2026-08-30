@@ -116,6 +116,11 @@ for record in result["records"]:
     doc.insert()
 ```
 
+`extract` can make up to three provider calls (OCR, its `advanced_ocr` escalation, then
+the mapping call) — long enough on a slow provider to hold a web worker for minutes. A
+Python caller running in-process pays that cost directly; the HTTP endpoint does not —
+see `extract_async` below.
+
 ## `transcribe` — speech to text
 
 ```python
@@ -167,9 +172,10 @@ To set an interface's model, provider, or monthly budget from code instead of th
 
 ## HTTP endpoints
 
-Four call endpoints expose `ask`, `extract`, `ocr`, and `transform` over HTTP. All four
-need the `System Manager` role or the `Crema User` role. A set of System-Manager
-utility endpoints sits beside them — see the table further down.
+Five call endpoints expose `ask`, `extract` (two ways — see below), `ocr`, and
+`transform` over HTTP. All five need the `System Manager` role or the `Crema User`
+role. A set of System-Manager utility endpoints sits beside them — see the table
+further down.
 
 ### `POST /api/method/crema.api.ask_api`
 
@@ -187,6 +193,38 @@ utility endpoints sits beside them — see the table further down.
 | `doctype` | yes | |
 | `file_url` | yes | A File URL. Raw bytes are not accepted over HTTP. |
 | `instruction` | no | |
+
+Answers inline, like the other three call endpoints — the request holds a web worker
+until `extract` finishes, which can be minutes on a slow provider. Prefer
+`extract_async` below for anything a user is not actively waiting on.
+
+### `POST /api/method/crema.api.extract_async`
+
+| Parameter | Required | Notes |
+|---|---|---|
+| `doctype` | yes | |
+| `file_url` | yes | A File URL. Raw bytes are not accepted over HTTP. |
+| `instruction` | no | |
+| `request_id` | no | Echoed back — see below. Generated for you if omitted. |
+
+The background twin of `extract_api`: instead of answering inline, it queues the
+`extract()` call and returns `request_id` immediately — the request never holds a
+worker for the read itself. The same-shaped `{"blocked": bool, "reason": ...}` a
+blocked/budget/config failure would have returned inline instead arrives later, as a
+`frappe.realtime` event:
+
+```js
+frappe.realtime.on("crema_extract", (data) => {
+    // data.request_id — matches what extract_async returned
+    // data.ok         — true on success, false on any of the three failure shapes
+    // data.result     — extract()'s own {"records", "reason", "confidence"}, when ok
+    // data.blocked, data.reason — present when not ok, same meaning as the 417 body
+});
+```
+
+Published to the calling user's own session only — never broadcast site-wide, since a
+result can carry document content. This is what the desk's own file-upload path
+(below) uses.
 
 ### `POST /api/method/crema.api.ocr_api`
 
@@ -229,9 +267,11 @@ Sign in with a Frappe API key and secret (`Authorization: token <key>:<secret>`)
 |---|---|
 | `task` | Required. The task name. Refused unless its trigger is `Webhook` and it is on. |
 | `payload` | Optional text, at most 20,000 characters. Read as one more source. |
+| `timestamp` | Unix seconds. Required only while the task's Webhook Secret is set. |
+| `signature` | Hex HMAC-SHA256 of `{timestamp}.{task}.{payload}`, keyed by the Webhook Secret. Required only while it is set. |
 
 Returns the id of the queued job. 60 calls per hour per client IP. See
-[automation.md](automation.md).
+[automation.md](automation.md#sign-the-call).
 
 ### Utility endpoints
 
@@ -249,17 +289,21 @@ All System Manager only, all `POST /api/method/<name>`:
 
 ### Rate limits
 
-Two limits guard the four call endpoints. Each endpoint allows 60 calls per hour
+Two limits guard the five call endpoints. Each endpoint allows 60 calls per hour
 per client IP; the buckets are separate per endpoint, so one IP can spend at most
-240 calls per hour across the four. Each session user gets one shared bucket of 60
-calls per hour across all four together. These limits do not apply to a Python
-caller running in-process (bench console, a background job).
+300 calls per hour across the five. Each session user gets one shared bucket of 60
+calls per hour across all five together — `extract_async` spends from it at the
+point it queues the job, not when the job runs, so a queued call cannot be used to
+get around it. These limits do not apply to a Python caller running in-process
+(bench console, a background job).
 
 ### Errors
 
 A blocked prompt or document, a monthly budget already spent, or a configuration
 error — for example, an unresolved interface — all return HTTP status 417, with the
-same body shape:
+same body shape. `extract_async` is the one exception: it has already answered with a
+`request_id` by the time any of these could fire, so the same shape arrives instead as
+a `crema_extract` realtime event with `ok: false` — see its own section above.
 
 ```json
 {"blocked": true, "reason": "..."}
@@ -346,9 +390,12 @@ model, and fields you cannot write never reach a save.
   view that does not answer what you asked.
 - **Drop a document onto the upload area.** The upload area takes one local file, by
   drag-and-drop or by clicking to pick it — there is no file browser, web link, or
-  camera option. The system reads it (`extract_api`) and shows a preview — the proposed
-  record(s), the model's reason, and the OCR confidence. How many records the document
-  holds is the model's own call, not a checkbox you tick up front:
+  camera option. The dialog closes and the system reads the document in the background
+  (`extract_async`) — a document can take a while, and this frees you to keep working
+  in the desk meanwhile. When it finishes, the dialog reopens on its own with a
+  preview — the proposed record(s), the model's reason, and the OCR confidence. How
+  many records the document holds is the model's own call, not a checkbox you tick up
+  front:
   - **Nothing found** — the document held no records the system could map to
     `doctype`. The system creates nothing.
   - **One record** — click **Create Document** to open a new, unsaved form with its
@@ -374,6 +421,12 @@ reload button. It opens a dialog: type what should change, and the system propos
 diff for the open document (`transform_api`). Click **Apply** to fill the proposed
 values into the form — the form stays dirty and unsaved, exactly like the list
 view's extract preview; save it yourself.
+
+A writable Text, Long Text, or Small Text field also carries its own smaller button,
+next to the field's label. It opens the same kind of dialog, scoped to that one
+field: describe what it should say, and only that field's proposed value comes back,
+whatever else the model may have proposed alongside it. Not offered on a Text Editor
+field.
 
 ### When a prompt is blocked, or a request fails
 
@@ -419,9 +472,14 @@ setting for that call only. A `cache_ttl` of 0 turns caching off. The cache cove
 `ask`/`ask_json` (and everything built on them) only — `ocr`, `advanced_ocr`, and
 `transcribe` never read it.
 
-A call that gives `files` is never cached, whatever `cache_ttl` says. The cache key is
-made from the prompt, and it cannot see the content of a file. A file behind a File URL
-can also change while the URL stays the same.
+The cache key covers the requested interface, the model, the system prompt, the prompt,
+the context, the response format, and the history — not the calling user, so a reply
+cached for one user is served to another who makes the identical request. See
+[security.md — The answer cache](security.md#the-answer-cache) for why that is safe.
+
+A call that gives `files` is never cached, whatever `cache_ttl` says. The cache key
+cannot see the content of a file, and a file behind a File URL can also change while
+the URL stays the same.
 
 ## Testing an app that uses crema
 

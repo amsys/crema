@@ -19,6 +19,8 @@ from frappe.model.document import Document
 CHAIN_FIELDS = (
     "interface",
     "model",
+    "served_model",
+    "app_version",
     "provider",
     "user",
     "status",
@@ -56,13 +58,17 @@ def _canon(value) -> str:
     return str(value)
 
 
-def chain_hash(row, previous: str | None) -> str:
+def chain_hash(row, previous: str | None, fields: tuple[str, ...] = CHAIN_FIELDS) -> str:
     """SHA-256 of `previous` (the prior row's chain_sha, or "" for the first row in the
-    chain) plus this row's own CHAIN_FIELDS values. `row` is anything CHAIN_FIELDS can
-    be read off with .get() -- a Document at insert time, or a plain dict when
-    verify_chain re-reads a row from the database; _canon keeps those two views of one
-    value hashing identically."""
-    payload = "|".join(_canon(row.get(f)) for f in CHAIN_FIELDS)
+    chain) plus this row's own `fields` values (CHAIN_FIELDS by default). `row` is
+    anything `fields` can be read off with .get() -- a Document at insert time, or a
+    plain dict when verify_chain re-reads a row from the database; _canon keeps those
+    two views of one value hashing identically.
+
+    `fields` is only ever overridden by a migration patch re-verifying old rows under a
+    field tuple CHAIN_FIELDS has since grown past -- see
+    crema.patches.rechain_crema_log_for_version_fields."""
+    payload = "|".join(_canon(row.get(f)) for f in fields)
     return hashlib.sha256(f"{previous or ''}|{payload}".encode()).hexdigest()
 
 

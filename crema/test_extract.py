@@ -13,8 +13,8 @@ import uuid
 from unittest.mock import patch
 
 import frappe
-from crema.api import extract, extract_api
-from crema.exceptions import CremaBlockedError
+from crema.api import _EXTRACT_ASYNC_TIMEOUT, extract, extract_api, extract_async, run_extract
+from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
 from crema.test_fixtures import (
     TEST_PLAIN_USER,
     CremaFixtureTestCase,
@@ -284,3 +284,151 @@ class IntegrationTestCremaExtractApi(CremaFixtureTestCase):
         self.assertIn("records", result)
         self.assertIn("reason", result)
         self.assertIn("confidence", result)
+
+
+class IntegrationTestCremaExtractAsync(CremaFixtureTestCase):
+    """crema.api.extract_async — the whitelisted endpoint that queues run_extract
+    instead of calling extract() inline. Same gates as extract_api; the difference
+    under test is that they run in the web request and the actual extract() call
+    never happens here — it happens in run_extract, tested separately below."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures(users=(TEST_PLAIN_USER,))
+
+    def tearDown(self) -> None:
+        frappe.set_user("Administrator")
+        super().tearDown()
+
+    def test_role_guard_rejects_plain_user(self):
+        frappe.set_user(TEST_PLAIN_USER)
+        with patch("frappe.enqueue") as enqueue:
+            with self.assertRaises(frappe.PermissionError):
+                extract_async("Contact", "/files/whatever.pdf")
+        enqueue.assert_not_called()
+
+    def test_rate_limit_decorator_is_applied(self):
+        import inspect
+
+        rate_limited = extract_async.__wrapped__
+        nonlocals = inspect.getclosurevars(rate_limited).nonlocals
+        self.assertEqual(nonlocals.get("limit"), 60)
+        self.assertEqual(nonlocals.get("seconds"), 3600)
+
+    def test_raw_bytes_are_refused(self):
+        with patch("frappe.enqueue") as enqueue:
+            with self.assertRaises(frappe.ValidationError):
+                extract_async("Contact", _text_pdf_bytes())
+        enqueue.assert_not_called()
+
+    def test_queues_run_extract_on_the_long_queue(self):
+        with patch("frappe.enqueue") as enqueue:
+            request_id = extract_async("Contact", "/files/whatever.pdf", "read it", "req-123")
+
+        self.assertEqual(request_id, "req-123")
+        enqueue.assert_called_once_with(
+            "crema.api.run_extract",
+            doctype="Contact",
+            file_url="/files/whatever.pdf",
+            instruction="read it",
+            request_id="req-123",
+            queue="long",
+            timeout=_EXTRACT_ASYNC_TIMEOUT,
+            job_id="crema-extract-req-123",
+            deduplicate=True,
+        )
+
+    def test_a_request_id_is_generated_when_the_caller_omits_one(self):
+        with patch("frappe.enqueue") as enqueue:
+            request_id = extract_async("Contact", "/files/whatever.pdf")
+
+        self.assertTrue(request_id)
+        self.assertEqual(enqueue.call_args.kwargs["request_id"], request_id)
+
+
+class IntegrationTestCremaRunExtract(CremaFixtureTestCase):
+    """crema.api.run_extract — the queued job. extract() itself is mocked here (it has
+    its own coverage above); what's under test is that every outcome publishes to the
+    ENQUEUING user's own room, never a bare room-less event."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.ensure_fixtures(users=(TEST_PLAIN_USER,))
+
+    def tearDown(self) -> None:
+        frappe.set_user("Administrator")
+        super().tearDown()
+
+    def test_publishes_the_result_to_the_enqueuing_user_on_success(self):
+        frappe.set_user(TEST_PLAIN_USER)
+        with (
+            patch("crema.api.extract", return_value={"records": [], "reason": "", "confidence": 0.9}),
+            patch("frappe.publish_realtime") as publish,
+        ):
+            run_extract("Contact", "/files/whatever.pdf", None, "req-1")
+
+        publish.assert_called_once_with(
+            "crema_extract",
+            {
+                "request_id": "req-1",
+                "ok": True,
+                "result": {"records": [], "reason": "", "confidence": 0.9},
+            },
+            user=TEST_PLAIN_USER,
+        )
+
+    def test_publishes_the_blocked_reason_to_the_enqueuing_user(self):
+        frappe.set_user(TEST_PLAIN_USER)
+        with (
+            patch("crema.api.extract", side_effect=CremaBlockedError("reply check: nonce missing")),
+            patch("frappe.publish_realtime") as publish,
+        ):
+            run_extract("Contact", "/files/whatever.pdf", None, "req-2")
+
+        publish.assert_called_once_with(
+            "crema_extract",
+            {"request_id": "req-2", "ok": False, "blocked": True, "reason": "reply check: nonce missing"},
+            user=TEST_PLAIN_USER,
+        )
+
+    def test_publishes_the_config_error_reason_unblocked(self):
+        frappe.set_user(TEST_PLAIN_USER)
+        with (
+            patch("crema.api.extract", side_effect=CremaConfigError("no enabled provider")),
+            patch("frappe.publish_realtime") as publish,
+        ):
+            run_extract("Contact", "/files/whatever.pdf", None, "req-3")
+
+        published = publish.call_args.args[1]
+        self.assertFalse(published["blocked"])
+        self.assertEqual(published["reason"], "no enabled provider")
+
+    def test_publishes_the_budget_error_reason(self):
+        frappe.set_user(TEST_PLAIN_USER)
+        with (
+            patch("crema.api.extract", side_effect=CremaBudgetError("monthly budget spent")),
+            patch("frappe.publish_realtime") as publish,
+        ):
+            run_extract("Contact", "/files/whatever.pdf", None, "req-4")
+
+        self.assertEqual(publish.call_args.kwargs["user"], TEST_PLAIN_USER)
+
+    def test_an_unexpected_exception_publishes_a_generic_failure_then_reraises(self):
+        frappe.set_user(TEST_PLAIN_USER)
+        with (
+            patch("crema.api.extract", side_effect=RuntimeError("provider SDK exploded")),
+            patch("frappe.publish_realtime") as publish,
+            patch("frappe.log_error") as log_error,
+        ):
+            with self.assertRaises(RuntimeError):
+                run_extract("Contact", "/files/whatever.pdf", None, "req-5")
+
+        published = publish.call_args.args[1]
+        self.assertEqual(published["request_id"], "req-5")
+        self.assertFalse(published["blocked"])
+        # Not the raw exception text — "provider SDK exploded" must never reach the wire.
+        self.assertNotIn("provider SDK exploded", published["reason"])
+        self.assertEqual(publish.call_args.kwargs["user"], TEST_PLAIN_USER)
+        log_error.assert_called_once()

@@ -311,6 +311,21 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertEqual(second, "canned response")
         self.assertEqual(mock_complete.call_count, 1)
 
+    def test_a_cached_reply_is_shared_between_two_users(self):
+        """No part of a request is assembled under the calling user's permissions —
+        see docs/security.md — The answer cache. A second user asking the identical
+        prompt must hit the same cache entry, not trigger a second provider call."""
+        second_user = _ensure_user(f"crema-cache-peer-{uuid.uuid4().hex}@example.com")
+        self.addCleanup(frappe.set_user, "Administrator")
+        prompt = f"unique shared-cache prompt {uuid.uuid4().hex}"
+        with patch("crema.client._complete", return_value="canned shared response") as mock_complete:
+            first = ask("classification", prompt)
+            frappe.set_user(second_user)
+            second = ask("classification", prompt)
+
+        self.assertEqual(first, second)
+        self.assertEqual(mock_complete.call_count, 1)
+
     def test_cache_hit_logs_cached_status_not_success(self):
         prompt = f"unique cached-status prompt {uuid.uuid4().hex}"
         with patch("crema.client._complete", return_value="canned response"):
@@ -534,11 +549,27 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         log = frappe.get_last_doc("Crema Log", filters={"interface": "summarization", "status": "Success"})
         self.assertAlmostEqual(log.cost_usd, 0.0056, places=6)
 
+    def test_successful_call_logs_the_served_model(self):
+        prompt = f"unique served-model prompt {uuid.uuid4().hex}"
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="canned"))]
+        response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+        response._hidden_params = {"response_cost": 0.0}
+        response.model = "gpt-4o-2024-08-06"
+
+        with patch("litellm.completion", return_value=response):
+            ask("summarization", prompt)
+
+        log = frappe.get_last_doc("Crema Log", filters={"interface": "summarization", "status": "Success"})
+        self.assertEqual(log.served_model, "gpt-4o-2024-08-06")
+
     def test_response_without_usage_attribute_logs_zeros_not_a_crash(self):
         """test_complete_builds_expected_litellm_kwargs (below) already proves a bare
         MagicMock response (no real .usage) doesn't crash _complete; this proves the
         resulting log row degrades to zeros rather than an unhandled TypeError from
-        int()'ing a MagicMock."""
+        int()'ing a MagicMock. Also the served_model regression: a bare MagicMock's
+        .model auto-vivifies as another MagicMock, not a string — client._record_usage's
+        isinstance guard must reject it rather than str()'ing it onto the row."""
         prompt = f"unique bare-mock prompt {uuid.uuid4().hex}"
         with patch("litellm.completion") as mock_completion:
             mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content="hi"))])
@@ -548,6 +579,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertEqual(log.prompt_tokens, 0)
         self.assertEqual(log.completion_tokens, 0)
         self.assertEqual(log.cost_usd, 0)
+        self.assertFalse(log.served_model)
         self.assertEqual(log.llm_calls, 1)
 
     def test_blocked_call_logs_zero_usage(self):
@@ -1209,6 +1241,145 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             frappe.set_user("Administrator")
 
 
+class IntegrationTestCremaProviderSweep(CremaFixtureTestCase):
+    """client.check_providers — the scheduled half of automatic fallback: the
+    unreachable-provider-switches-off / recovered-provider-switches-back-on state
+    machine, and the "only crema's own switch-off comes back" rule. Subclasses
+    CremaFixtureTestCase because it calls _ensure_provider — see the fixture-leak
+    trap in crema-conventions."""
+
+    _UNREACHABLE = ([], "connection refused", False)
+    _REACHABLE = (["m1"], None, True)
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        _ensure_provider()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit — fixture must outlive this transaction
+
+    def _provider(self, *, enabled: bool, auto_disabled: bool = False) -> str:
+        doc = frappe.get_doc(
+            {
+                "doctype": "Crema Provider",
+                "provider_name": f"_test_sweep_{uuid.uuid4().hex[:8]}",
+                "base_url": "http://localhost:11434/v1",
+                "enabled": 1 if enabled else 0,
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        if auto_disabled:
+            frappe.db.set_value("Crema Provider", doc.name, "auto_disabled", 1, update_modified=False)
+        return doc.name
+
+    def _set_auto_disable(self, on: bool) -> None:
+        settings = frappe.get_single("Crema Settings")
+        settings.auto_disable_unreachable = 1 if on else 0
+        settings.save(ignore_permissions=True)
+
+    def test_an_unreachable_enabled_provider_is_switched_off(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        with patch("crema.client._fetch_models", return_value=self._UNREACHABLE), patch("frappe.db.commit"):
+            client.check_providers()
+
+        row = frappe.db.get_value(
+            "Crema Provider", name, ["enabled", "auto_disabled", "last_check_detail"], as_dict=True
+        )
+        self.assertEqual(row.enabled, 0)
+        self.assertEqual(row.auto_disabled, 1)
+        self.assertEqual(row.last_check_detail, "connection refused")
+
+    def test_an_auto_disabled_provider_that_recovers_is_switched_back_on(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=False, auto_disabled=True)
+
+        with patch("crema.client._fetch_models", return_value=self._REACHABLE), patch("frappe.db.commit"):
+            client.check_providers()
+
+        row = frappe.db.get_value("Crema Provider", name, ["enabled", "auto_disabled"], as_dict=True)
+        self.assertEqual(row.enabled, 1)
+        self.assertEqual(row.auto_disabled, 0)
+
+    def test_a_provider_flips_off_then_back_on_across_two_sweeps(self):
+        """The end-to-end state machine: enabled -> 0 on an unreachable sweep, then
+        back to 1 on the next sweep once the provider answers again. frappe.db.commit
+        is mocked -- check_providers commits for real in production (a standalone
+        scheduler job, its own transaction), which would break this test's own
+        savepoint if it ran here, the same reason automation.run_task's tests mock it
+        too (see test_automation.py's _run helper)."""
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        with patch("crema.client._fetch_models", return_value=self._UNREACHABLE), patch("frappe.db.commit"):
+            client.check_providers()
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 0)
+
+        with patch("crema.client._fetch_models", return_value=self._REACHABLE), patch("frappe.db.commit"):
+            client.check_providers()
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 1)
+
+    def test_a_manually_disabled_provider_stays_off(self):
+        """enabled=0, auto_disabled=0 — an admin's own choice, not crema's — must
+        never be switched back on by the sweep even if the provider now answers."""
+        self._set_auto_disable(True)
+        name = self._provider(enabled=False, auto_disabled=False)
+
+        with patch("crema.client._fetch_models", return_value=self._REACHABLE), patch("frappe.db.commit"):
+            client.check_providers()
+
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 0)
+
+    def test_the_sweep_does_nothing_with_the_setting_off(self):
+        self._set_auto_disable(False)
+        name = self._provider(enabled=True)
+
+        with patch("crema.client._fetch_models") as mock_fetch, patch("frappe.db.commit"):
+            client.check_providers()
+
+        mock_fetch.assert_not_called()
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 1)
+
+    def test_the_sweep_does_nothing_under_the_kill_switch(self):
+        self._set_auto_disable(True)
+        settings = frappe.get_single("Crema Settings")
+        settings.disabled = 1
+        settings.save(ignore_permissions=True)
+        name = self._provider(enabled=True)
+
+        with patch("crema.client._fetch_models") as mock_fetch, patch("frappe.db.commit"):
+            client.check_providers()
+
+        mock_fetch.assert_not_called()
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 1)
+
+    def test_cache_clear_provider_runs_on_a_flip(self):
+        self._set_auto_disable(True)
+        self._provider(enabled=True)
+
+        with (
+            patch("crema.client._fetch_models", return_value=self._UNREACHABLE),
+            patch("crema.client.cache.clear_provider") as mock_clear,
+            patch("frappe.db.commit"),
+        ):
+            client.check_providers()
+
+        mock_clear.assert_called_once()
+
+    def test_cache_clear_provider_is_skipped_when_nothing_flips(self):
+        self._set_auto_disable(True)
+        self._provider(enabled=True)
+
+        with (
+            patch("crema.client._fetch_models", return_value=self._REACHABLE),
+            patch("crema.client.cache.clear_provider") as mock_clear,
+            patch("frappe.db.commit"),
+        ):
+            client.check_providers()
+
+        mock_clear.assert_not_called()
+
+
 class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):
     """CremaModelAssignment.validate — the isolation user must be a fenced,
     low-privilege account. Exercised on a bare (unsaved, parentless) child doc, since
@@ -1533,6 +1704,33 @@ class UnitTestCremaProxyCost(UnitTestCase):
         a bare float() coercion would silently accept (see the docstring's warning).
         This is the regression test for that trap."""
         self.assertIsNone(client._proxy_cost(MagicMock()))
+
+
+class UnitTestCremaRecordUsage(UnitTestCase):
+    """client._record_usage's served_model accumulation — a call that logs several
+    provider round trips onto one row (a trap retry, an OCR escalation) must show the
+    model that actually produced the answer returned, not the first one tried."""
+
+    def setUp(self):
+        super().setUp()
+        if hasattr(frappe.local, "crema_usage"):
+            del frappe.local.crema_usage
+
+    def test_served_model_is_recorded_from_a_real_response(self):
+        response = MagicMock(model="gpt-4o-2024-08-06")
+        client._record_usage(response)
+        self.assertEqual(frappe.local.crema_usage["served_model"], "gpt-4o-2024-08-06")
+
+    def test_a_magicmocks_auto_vivified_model_is_not_mistaken_for_a_real_one(self):
+        client._record_usage(MagicMock())
+        self.assertIsNone(frappe.local.crema_usage["served_model"])
+
+    def test_a_second_calls_served_model_overwrites_the_first(self):
+        """Last write wins on purpose — the served model that matters is the one behind
+        the answer a fallback chain or an OCR escalation actually returned."""
+        client._record_usage(MagicMock(model="gpt-4o-mini"))
+        client._record_usage(MagicMock(model="gpt-4o"))
+        self.assertEqual(frappe.local.crema_usage["served_model"], "gpt-4o")
 
 
 class IntegrationTestCremaOutputTrap(CremaFixtureTestCase):

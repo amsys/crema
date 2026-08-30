@@ -25,6 +25,7 @@
   "run_at",
   "event",
   "webhook_endpoint",
+  "webhook_secret",
   "section_source",
   "read_webhook_payload",
   "sources",
@@ -119,6 +120,13 @@
    "is_virtual": 1,
    "label": "Endpoint",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.trigger==\"Webhook\"",
+   "description": "Optional. While set, a call to the endpoint above must also send <code>timestamp</code> (Unix seconds) and <code>signature</code> — hex HMAC-SHA256 of <code>{timestamp}.{task}.{payload}</code> with this secret as the key. Leave empty to accept a call on Frappe token auth alone, as today.",
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret"
   },
   {
    "fieldname": "section_source",
@@ -330,7 +338,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-04 12:00:00.000000",
+ "modified": "2026-08-28 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Automation Task",

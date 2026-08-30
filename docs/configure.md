@@ -46,6 +46,22 @@ delete is done.
 | `api_key` | Password | Required to enable, unless the base URL is local or private. |
 | `enabled` | Check | Off by default. |
 | `timeout_seconds` | Int | Label **Wait Up To (seconds)**. 60 by default. Raise this for a local or self-hosted provider, for example Ollama on CPU. |
+| `last_checked` | Datetime (read-only) | Label **Last Checked**. When the hourly health check last ran against this service. Blank until Crema Settings' **Switch Off Services That Do Not Answer** is on. |
+| `last_check_detail` | Small Text (read-only) | Label **Last Check Result**. What the last check found: the number of models it saw, or the error it got. |
+| `auto_disabled` | Check (hidden) | True when this service was switched off by the health check, not by a person. Cleared by any save of this form — see [The scheduled health check](#the-scheduled-health-check) below. |
+
+### The scheduled health check
+
+**Switch Off Services That Do Not Answer**, on Crema Settings' Operations section
+(`auto_disable_unreachable`), is off by default. Switch it on and Crema checks every
+service once an hour, the same check the Providers panel runs live. A service that
+does not answer is switched off; a service Crema switched off that answers again is
+switched on again.
+
+A service you switch off yourself — by unticking **Enabled** and saving — stays off.
+Saving any provider clears its `auto_disabled` flag, so the health check only ever
+switches back on a service it, itself, switched off; it never overrides your own
+choice.
 
 ## Procedure B — set the defaults (the fast path)
 
@@ -164,6 +180,7 @@ Crema ships these rows, in this order:
 | Row | Default | Notes |
 |---|---|---|
 | **Text Scan** | `Block` | The local, no-cost scan for prompt injection. |
+| **Reply Filter** | `Off` | Removes remote image and link targets from the reply, so an app that renders it as markdown or HTML cannot be made to call another server. |
 | **Hide Personal Information** | `Off` | Experimental. Masks names, emails, phone numbers, and record values before the request leaves the server, and swaps them back into the reply. |
 | **Hide Health Information** | `Off` | Experimental. Masks a list of condition, medication, and procedure words. A keyword list, not a detector — read [security.md](security.md#masking-experimental) before you rely on it. |
 | **Reply Check** | `Block` | Puts a token in each request and checks that the reply returns it. |
@@ -241,6 +258,7 @@ As, the Use Cases grid's own budget field — stays a desk edit.
 | `log_retention_days` | Int | Label **Keep Logs For (days)**. 30 by default. How long a Crema Log row survives before the daily cleanup job deletes it. |
 | `blocked_doctypes` | Table | Label **Blocked Doctypes**. Empty by default. Record types the AI may never create, edit, or delete — see "Block a doctype outright" below. |
 | `disabled` | Check | Label **Crema Is Off**. Switch this on to stop every LLM call. A kill in `site_config.json` (key `crema_disabled`) has the same effect and a desk edit cannot undo it. Either one kills; clearing both restores service. |
+| `auto_disable_unreachable` | Check | Label **Switch Off Services That Do Not Answer**. Off by default. See [The scheduled health check](#the-scheduled-health-check) above. |
 
 ## Block a doctype outright
 
@@ -376,6 +394,11 @@ same convention as `crema_interfaces`). A module is any object with:
   to block, or record a note per `ctx.action`,
 - an optional `after(ctx)` — read and, if needed, replace `ctx.response`.
 
+`after()` hooks run in REVERSE row order — the row seeded last runs its `after()`
+first. An `after()`-only check (the built-in Reply Filter is one) should sit near the
+TOP of the Guardrails list, so its `after()` runs LAST and sees the final reply,
+already restored and nonce-stripped, instead of an intermediate form.
+
 Set `pre_cache = True` on the module to run it before the answer cache and the
 budget check instead, in the position the Text Scan holds, over `ctx.text` (the
 joined request text) rather than `ctx.messages`. A pre-cache check runs on every
@@ -432,5 +455,33 @@ values back in an `after()`.
 After `bench migrate` the new key appears in the Guardrail picker; the admin adds a
 row and picks it, in whatever position they want. An app can never replace one of
 crema's own checks, and the first installed app wins a key collision.
+
+## Add your own scan patterns
+
+An installed app can add its own injection patterns to the Text Scan — no new row,
+no new module, no crema edit. Add a `crema_scan_patterns` dict to that app's
+`hooks.py`, keyed by the reason the scan reports on a match:
+
+```python
+crema_scan_patterns = {
+    "reveal order total": r"reveal\s+.{0,15}?order\s+total",
+}
+```
+
+Read app-by-app, same as `crema_guardrails` and `crema_interfaces`: first installed
+app wins a duplicate reason, and a pattern that fails to compile is dropped — only
+that one — with a warning, so a typo in one app's hook cannot break every call's
+scan.
+
+The pattern is compiled with `re.I | re.S` for you, and it matches the SAME
+canonicalized text the built-in patterns do — `crema.security._canon`'s
+fullwidth/homoglyph folding runs first, so write the pattern in plain lowercase
+ASCII, the same rule [Add a new scan pattern](security.md#add-a-new-scan-pattern)
+states for a built-in one. That canonicalization is exactly what a `pre_cache`
+guardrail module (above) does not get for free — it would have to reimplement
+`_canon` itself to see the same folded text.
+
+A new pattern still needs the same discipline every built-in one does: try it
+against ordinary business text first, and make sure ordinary text stays clean.
 
 Next step: [use.md](use.md).

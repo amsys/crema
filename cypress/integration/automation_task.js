@@ -217,6 +217,47 @@ context("Crema Automation Task form", () => {
 		cy.get('[data-fieldname="source_filters"] table').should("contain.text", "Open");
 	});
 
+	// Covers crema.bundle.js's per-field draft button (Path D) — notify_to (Small Text)
+	// rather than instruction (also on this form) so the dialog's own "instruction"
+	// prompt field never shares a data-fieldname with the field under test.
+	it("drafts one field from a per-field button, without touching the rest of the form", () => {
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+
+		// The stub also proposes schedule_preset — client-side narrowing to the one field
+		// this button is scoped to must drop it, same as the server's own _filter_diff
+		// would if this reply had come back unfiltered.
+		cy.intercept("POST", "/api/method/crema.api.transform_api", {
+			statusCode: 200,
+			body: {
+				message: {
+					set: { notify_to: "ops@example.com", schedule_preset: "Weekly" },
+					child_set: {},
+					reason: "drafted",
+				},
+			},
+		}).as("draft");
+
+		cy.get(".frappe-control[data-fieldname=notify_to] .btn-crema-draft").click();
+		cy.get(".modal.show").within(() => {
+			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
+				"the person who should see failures"
+			);
+			cy.get(".btn-modal-primary").click();
+		});
+		cy.wait("@draft");
+		cy.get(".modal.show").within(() => cy.get(".btn-modal-primary").contains("Apply").click());
+
+		cy.get(".frappe-control[data-fieldname=notify_to] textarea").should(
+			"have.value",
+			"ops@example.com"
+		);
+		cy.get(".frappe-control[data-fieldname=schedule_preset] select").should(
+			"not.have.value",
+			"Weekly"
+		);
+	});
+
 	after(() => {
 		cy.remove_doc("Crema Automation Task", TASK);
 		cy.remove_doc("Crema Automation Task", FILTERED_TASK);

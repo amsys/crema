@@ -18,6 +18,8 @@
   "section_diag",
   "interface",
   "model",
+  "served_model",
+  "app_version",
   "provider",
   "prompt_sha",
   "chain_seq",
@@ -112,6 +114,20 @@
    "read_only": 1
   },
   {
+   "description": "The exact model version the AI service reported it ran. Blank on a row written before this field existed.",
+   "fieldname": "served_model",
+   "fieldtype": "Data",
+   "label": "Model Served",
+   "read_only": 1
+  },
+  {
+   "description": "The version of Crema that made this request. Blank on a row written before this field existed.",
+   "fieldname": "app_version",
+   "fieldtype": "Data",
+   "label": "Crema Version",
+   "read_only": 1
+  },
+  {
    "description": "Which AI service answered. Kept as plain text, so deleting a service never removes its history.",
    "fieldname": "provider",
    "fieldtype": "Data",
@@ -170,7 +186,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-07 00:00:00.000000",
+ "modified": "2026-08-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Log",

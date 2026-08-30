@@ -33,7 +33,7 @@ function warn_if_referenced(frm) {
 			}
 			frm.dashboard.add_comment(
 				__("Crema Settings names this as {0}. Deleting it will clear that.", [
-					parts.join(__(" and ")),
+					parts.join(` ${__("and")} `),
 				]),
 				"red",
 				true

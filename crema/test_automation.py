@@ -2226,6 +2226,21 @@ class IntegrationTestCremaAutomationWebhook(CremaFixtureTestCase):
         with self.assertRaises(frappe.PermissionError):
             api.trigger_automation(task.name, payload="hi", timestamp=ts, signature=sig)
 
+    def test_a_raced_duplicate_signature_is_refused_by_the_atomic_nonce_set(self):
+        """Two concurrent calls with one signature: the loser of the single atomic
+        SET NX must be refused. A returned False alone rejects the call — there is
+        no separate seen-check whose window a racer could slip through."""
+        from crema import api
+
+        task = _make_task(trigger="Webhook", webhook_secret="s3cr3t")
+        ts = str(int(time.time()))
+        sig = _sign("s3cr3t", task.name, ts, "hi")
+        with patch("frappe.cache.set", return_value=False) as cache_set:
+            with self.assertRaises(frappe.PermissionError):
+                api.trigger_automation(task.name, payload="hi", timestamp=ts, signature=sig)
+
+        self.assertTrue(cache_set.call_args.kwargs.get("nx"), "the nonce set must be SET NX")
+
     # --- the payload through a whole run ----------------------------------
 
     def test_a_payload_reaches_the_extractor_through_run_task(self):
@@ -2734,6 +2749,45 @@ class IntegrationTestCremaAutomationProposals(CremaFixtureTestCase):
         self.assertEqual(row.status, "Pending")
         self.assertIsNone(row.outcome)
         self.assertIsNone(row.created_json)
+
+    @staticmethod
+    def _proposal_row_locks(spy) -> list[str]:
+        """The `select ... for update` statements against `tabCrema Proposal` the spy saw
+        — the row lock that stops two overlapping approvals (or undos) of one proposal
+        from both passing the status guard and both writing."""
+        seen = [str(call.args[0]).lower() for call in spy.call_args_list if call.args]
+        # Match _lock_proposal's own query text precisely — not just "tabcrema
+        # proposal" + "for update", which also matches frappe's own unrelated
+        # `select * from ... for update` (Document.save()'s _doc_before_save read,
+        # document.py:1424, fired by every db_set() call these functions already
+        # make at the end) and would silently double-count a real lock as two.
+        needle = "select status, created_json from `tabcrema proposal`"
+        return [s for s in seen if needle in s and "for update" in s]
+
+    def test_approving_a_proposal_reads_its_status_under_a_row_lock(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+
+        with patch.object(frappe.db, "sql", wraps=frappe.db.sql) as spy:
+            automation.apply_proposal(proposal)
+
+        self.assertEqual(1, len(self._proposal_row_locks(spy)))
+
+    def test_undoing_a_proposal_reads_its_status_under_a_row_lock(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+        automation.apply_proposal(proposal)
+
+        with patch.object(frappe.db, "sql", wraps=frappe.db.sql) as spy:
+            automation.undo_proposal(proposal)
+
+        self.assertEqual(1, len(self._proposal_row_locks(spy)))
 
     def test_undoing_a_pending_proposal_is_refused(self):
         marker = uuid.uuid4().hex[:10]

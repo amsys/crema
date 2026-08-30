@@ -364,6 +364,13 @@ context("Crema desk UI", () => {
 	});
 
 	it("widens to a word from the term when the whole term matches nowhere", () => {
+		// The exact probe-count assertion below needs a clean filter area: a widened
+		// filter left by the test above makes crema_refresh_live's clear+set arm a
+		// spurious debounced refresh, and the widen can then run twice concurrently —
+		// one extra whole-term probe. Cleared here, at the top, well outside
+		// no_change()'s 3-second window around this test's own refresh (see the
+		// beforeEach note on why a clear must never sit close to the action).
+		cy.clear_filters();
 		// "Acme Corp One" (the search term) is nowhere in "Acme Corporation One" (the
 		// stored value) as one substring — the whole-term probe below must come back
 		// empty before a second, per-word probe finds "Acme".

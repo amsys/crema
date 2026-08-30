@@ -324,7 +324,10 @@ context("Crema desk UI", () => {
 		// second LLM call.
 		crema_insert_contact({ first_name: "crema fallback probe" });
 		// frappe.db.get_list sends type: "GET" (frappe/public/js/frappe/db.js), not POST.
-		cy.intercept("GET", "/api/method/frappe.desk.reportview.get_list*").as("probe");
+		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
+		// desk code that sends it) — a bare get_list* intercept also counts unrelated
+		// desk traffic on a slow runner and breaks the exact probe-count assertions.
+		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%probe%"] },
@@ -343,7 +346,10 @@ context("Crema desk UI", () => {
 		// The term is the whole first_name, not a substring of it — the widen probe's
 		// own results already prove an exact hit, at no extra query.
 		crema_insert_contact({ first_name: "crema exact probe" });
-		cy.intercept("GET", "/api/method/frappe.desk.reportview.get_list*").as("probe");
+		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
+		// desk code that sends it) — a bare get_list* intercept also counts unrelated
+		// desk traffic on a slow runner and breaks the exact probe-count assertions.
+		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%crema exact probe%"] },
@@ -364,7 +370,10 @@ context("Crema desk UI", () => {
 		// stored value) as one substring — the whole-term probe below must come back
 		// empty before a second, per-word probe finds "Acme".
 		crema_insert_contact({ first_name: "Acme Corporation One" });
-		cy.intercept("GET", "/api/method/frappe.desk.reportview.get_list*").as("probe");
+		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
+		// desk code that sends it) — a bare get_list* intercept also counts unrelated
+		// desk traffic on a slow runner and breaks the exact probe-count assertions.
+		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%Acme Corp One%"] },

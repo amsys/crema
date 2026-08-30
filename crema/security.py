@@ -7,6 +7,7 @@ in crema/guardrails.py, whose "scan" module calls this.
 
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 
@@ -174,7 +175,24 @@ def _canon(text: str) -> str:
     return anyascii(unicodedata.normalize("NFKC", fix_text(kept))).lower()
 
 
-def scan(prompt: str, context: str | None = None) -> str | None:
+@functools.lru_cache(maxsize=8)
+def _patterns(extra: tuple[tuple[str, str], ...] = ()) -> list[tuple[re.Pattern[str], str]]:
+    """_INJECTION_PATTERNS, then `extra` — an installed app's own (regex, reason)
+    pairs, compiled here with the same re.I | re.S every built-in pattern uses.
+    Appended LAST, so the built-ins' first-match precedence never moves: an app
+    cannot make its own reason win over an existing one for the same text. Cached
+    on `extra` like mask.phi_patterns — an unchanged pattern set costs a dict
+    lookup, not a recompile, on every call.
+
+    Validity is the caller's contract: crema.guardrails.scan_patterns compiles each
+    app-supplied pattern itself and drops one that fails to compile, logging a
+    warning, before it ever reaches here — this stays a pure function that raises
+    on a bad regex rather than silently swallowing one."""
+    compiled = [(re.compile(pattern, re.I | re.S), reason) for pattern, reason in extra]
+    return _INJECTION_PATTERNS + compiled
+
+
+def scan(prompt: str, context: str | None = None, extra: tuple[tuple[str, str], ...] = ()) -> str | None:
     """Layer 1 prompt scan. Returns None if clean, or a block reason string.
 
     `context` and `prompt` are scanned as ONE joined string, never separately: the
@@ -193,7 +211,9 @@ def scan(prompt: str, context: str | None = None) -> str | None:
     joiner, a mojibake'd phrase, or a Cyrillic letter standing in for a Latin one all
     trip the ordinary ASCII patterns. The order matters: canonicalizing first would strip
     away the very codepoints _is_blocked_char exists to catch. Patterns added to
-    _INJECTION_PATTERNS match the canonical text, so write them in lowercase ASCII.
+    _INJECTION_PATTERNS, or passed in `extra` (an installed app's own patterns — see
+    crema.guardrails.scan_patterns), match the canonical text, so write them in
+    lowercase ASCII either way — `extra` is compiled with the same re.I | re.S flags.
 
     Known remaining gap: anyascii transliterates phonetically, it is not a TR39
     confusables skeleton. It folds the look-alikes whose transliteration happens to be
@@ -204,8 +224,8 @@ def scan(prompt: str, context: str | None = None) -> str | None:
     table, deliberately not added here.
 
     Pure function: no frappe imports, no I/O — the three third-party imports are static
-    tables. Failure behavior = block, so any new check added here should default to
-    returning a reason on ambiguity.
+    tables, and `extra` is a plain tuple the caller assembled. Failure behavior = block,
+    so any new check added here should default to returning a reason on ambiguity.
     """
     raw = "\n".join(part for part in (context, prompt) if part)
     if not raw:
@@ -218,7 +238,7 @@ def scan(prompt: str, context: str | None = None) -> str | None:
 
     text = _canon(raw)
 
-    for pattern, reason in _INJECTION_PATTERNS:
+    for pattern, reason in _patterns(extra):
         if pattern.search(text):
             return reason
 

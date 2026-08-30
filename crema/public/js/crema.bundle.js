@@ -426,16 +426,53 @@ function crema_apply_diff(doctype, name, diff, frm) {
 
 // ---- Path A: file -> new document(s) ------------------------------------------------
 
+// extract() can hold a web worker for minutes on a scanned file (OCR, its advanced_ocr
+// escalation, then the extraction call itself) — long enough that freezing the desk for
+// it starves everyone else on a small bench, not just the user waiting. So this path
+// goes through crema.api.extract_async, which only queues the job and returns a
+// request_id immediately; the answer arrives later as a crema_extract realtime event.
+// One listener for the whole desk session reconnects that event back to the dialog and
+// doctype it was reading into, via this map — request_id -> {doctype, dialog}. The
+// dialog object survives dialog.hide(): frappe.ui.Dialog only toggles the Bootstrap
+// modal's visibility, so re-populating its preview field and calling .show() again
+// later reopens the same dialog with the result.
+const CREMA_PENDING_EXTRACTS = new Map();
+
+// Lazy, not a bare top-level frappe.realtime.on() call: RealTimeClient.on() (frappe
+// core's socketio_client.js) is a silent no-op until frappe.realtime.init() has run,
+// and that happens in Application.startup(), on $(document).ready — AFTER every
+// app_include_js bundle's own top-level code, this file included, has already been
+// evaluated as a <script> tag. Registering here instead, on the first extract, means
+// boot has always long finished by the time this runs.
+let crema_extract_listener_registered = false;
+
+function crema_ensure_extract_listener() {
+	if (crema_extract_listener_registered) return;
+	crema_extract_listener_registered = true;
+	frappe.realtime.on("crema_extract", (data) => {
+		const pending = CREMA_PENDING_EXTRACTS.get(data.request_id);
+		if (!pending) return; // a stale/foreign event, or this tab wasn't the one that started it
+		CREMA_PENDING_EXTRACTS.delete(data.request_id);
+		if (!data.ok) {
+			crema_show_error({ message: data });
+			return;
+		}
+		pending.dialog.show();
+		crema_show_extract_preview(pending.doctype, data.result, pending.dialog);
+	});
+}
+
 function crema_extract_into_new_doc(doctype, file_url, instruction, dialog) {
+	crema_ensure_extract_listener();
 	frappe.call({
-		method: "crema.api.extract_api",
+		method: "crema.api.extract_async",
 		args: { doctype, file_url, instruction },
-		freeze: true,
-		freeze_message: __("Reading document…"),
 		callback(r) {
-			const data = r.message;
-			if (!data) return;
-			crema_show_extract_preview(doctype, data, dialog);
+			const request_id = r.message;
+			if (!request_id) return;
+			CREMA_PENDING_EXTRACTS.set(request_id, { doctype, dialog });
+			dialog.hide();
+			frappe.show_alert(__("Reading document…"));
 		},
 		error: crema_show_error,
 	});
@@ -1592,6 +1629,78 @@ function crema_open_transform_dialog(frm) {
 	dialog.show();
 }
 
+// ---- Path D: instruction -> draft for one field ------------------------------------
+
+// A narrower sibling of Path C: same instruction -> diff round trip, but the model is
+// asked about one field and the client keeps only that one key out of whatever it
+// returns — data.set may carry other fields the model proposed anyway (nothing server-
+// side stops it), so `fieldname in data.set` and reading exactly that key, nothing else
+// out of data.set/data.child_set, is what keeps this the one-field button it claims to
+// be. See crema_field_draft_control below for where this is opened from.
+function crema_open_field_draft_dialog(frm, fieldname, label) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Draft {0}", [__(label)]),
+		fields: [
+			{
+				fieldtype: "Small Text",
+				fieldname: "instruction",
+				label: __("What should it say?"),
+			},
+			{ fieldtype: "HTML", fieldname: "preview", hidden: 1 },
+		],
+		primary_action_label: __("Go"),
+		primary_action(values) {
+			if (!values.instruction) {
+				frappe.msgprint(__("Type what it should say, then press Go."));
+				return;
+			}
+			frappe.call({
+				method: "crema.api.transform_api",
+				args: {
+					doctype: frm.doctype,
+					name: frm.docname,
+					instruction: `Draft only the "${fieldname}" field. ${values.instruction}`,
+				},
+				freeze: true,
+				freeze_message: __("Thinking…"),
+				callback(r) {
+					const data = r.message;
+					if (!data || !(fieldname in (data.set || {}))) {
+						frappe.msgprint({
+							message: __("Crema had nothing to propose for this field."),
+							indicator: "orange",
+						});
+						return;
+					}
+					const value = data.set[fieldname];
+					dialog.fields_dict.preview.df.hidden = 0;
+					dialog.set_df_property(
+						"preview",
+						"options",
+						`<div class="text-muted small">${frappe.utils.escape_html(
+							data.reason || ""
+						)}</div>${crema_diff_table({ set: { [fieldname]: value } })}`
+					);
+					dialog.refresh();
+					dialog.set_primary_action(__("Apply"), () => {
+						crema_apply_diff(
+							frm.doctype,
+							frm.docname,
+							{ set: { [fieldname]: value } },
+							frm
+						);
+						dialog.hide();
+					});
+				},
+				error: crema_show_error,
+			});
+		},
+	});
+	crema_bind_go_shortcut(dialog);
+	crema_strip_dialog_borders(dialog);
+	dialog.show();
+}
+
 // ---- Entry points -----------------------------------------------------------------------
 
 // frappe.router's "change" event fires too early to find the list view: router.route()
@@ -1649,6 +1758,46 @@ function crema_open_transform_dialog(frm) {
 		this.page
 			.add_action_icon("bot", () => crema_open_transform_dialog(frm), "", __("Ask Crema"))
 			.attr("data-crema-form", "1");
+	};
+})();
+
+// Field views: a draft button next to the label of any writable Text/Long Text/Small
+// Text field on a saved document — Path D. Hooked on refresh(), not make_input(): a
+// field's writable/hidden status and the document's own local/write status can both
+// change after the control is first built (a new document becomes saved; depends_on
+// flips a field read-only), and refresh() is what re-evaluates them on every render —
+// make_input() only ever runs once. This is the same hook core's own
+// show_translatable_button uses, right above it in base_control.js, for the same
+// reason, with the same "already attached" guard. ControlLongText is literally
+// ControlText (form/controls/text.js) and ControlSmallText extends it without
+// overriding refresh, so one wrap covers all three; Text Editor has its own toolbar
+// and is out of scope.
+(() => {
+	const refresh = frappe.ui.form.ControlText.prototype.refresh;
+	frappe.ui.form.ControlText.prototype.refresh = function () {
+		refresh.call(this);
+		const frm = this.frm;
+		if (
+			!frm ||
+			!crema_allowed() ||
+			frm.doc.__islocal ||
+			!frm.perm[0]?.write ||
+			this.df.parent !== frm.doctype || // excludes a child-table grid cell
+			this.disp_status !== "Write" ||
+			this.$wrapper.find(".btn-crema-draft").length
+		) {
+			return;
+		}
+		const fieldname = this.df.fieldname;
+		$(
+			`<a class="btn-crema-draft no-decoration text-muted" title="${__(
+				"Draft with Crema"
+			)}">${frappe.utils.icon("bot", "sm")}</a>`
+		)
+			.appendTo(this.$wrapper.find(".clearfix"))
+			.on("click", () =>
+				crema_open_field_draft_dialog(frm, fieldname, this.df.label || fieldname)
+			);
 	};
 })();
 

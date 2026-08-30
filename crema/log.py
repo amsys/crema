@@ -12,7 +12,7 @@ import json
 from typing import Any
 
 import frappe
-from crema import interfaces
+from crema import __version__, interfaces
 from crema.exceptions import CremaBudgetError
 
 # Per side of one round trip. An OCR payload or a long extraction can be far larger than
@@ -45,9 +45,21 @@ def _drain_usage() -> dict[str, Any]:
     (Blocked, a cache hit) drains an accumulator nothing added to, i.e. all zeros.
     """
     acc = getattr(frappe.local, "crema_usage", None)
-    frappe.local.crema_usage = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+    frappe.local.crema_usage = {
+        "llm_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cost_usd": 0.0,
+        "served_model": None,
+    }
     if not acc:
-        return {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+        return {
+            "llm_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cost_usd": 0.0,
+            "served_model": None,
+        }
     return acc
 
 
@@ -149,6 +161,8 @@ def insert(
                 "interface": interface,
                 "interface_label": interfaces.label_for(interface) if interface else None,
                 "model": model,
+                "served_model": usage.get("served_model"),
+                "app_version": __version__,
                 "provider": provider,
                 "user": frappe.session.user,
                 "status": status,

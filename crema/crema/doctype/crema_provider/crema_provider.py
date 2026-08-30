@@ -80,6 +80,11 @@ class CremaProvider(Document):
                         "localhost or a private network address (e.g. a local Ollama instance)."
                     )
                 )
+        # Any human save re-asserts intent, whichever way `enabled` ends up: an admin
+        # switching a provider off on purpose must have it stay off, and the hourly
+        # sweep (client.check_providers) only ever turns back on a provider it, itself,
+        # switched off through frappe.db.set_value -- which does not run this method.
+        self.auto_disabled = 0
 
     def on_update(self) -> None:
         cache.clear_provider()

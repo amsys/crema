@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import frappe
 from crema import interfaces
-from crema.api import ask_api
+from crema.api import _prompt_hash, ask_api
 from crema.exceptions import CremaBudgetError, CremaConfigError
 from crema.test_fixtures import (
     TEST_PLAIN_USER,
@@ -24,6 +24,7 @@ from crema.test_fixtures import (
     _ensure_user,
     _text_pdf_bytes,
 )
+from frappe.tests import UnitTestCase
 
 
 class IntegrationTestCremaAskApi(CremaFixtureTestCase):
@@ -480,3 +481,53 @@ class IntegrationTestCremaPackageExports(CremaFixtureTestCase):
 
         self.assertEqual(result, "pong")
         mock_complete.assert_called_once()
+
+
+_PROMPT_HASH_BASE_CFG = {
+    "requested": "simple",
+    "interface": "simple",
+    "isolation_user": "crema-isolation@example.com",
+    "model": "gpt-4o-mini",
+    "system_prompt": "a shared system prompt",
+}
+
+
+class UnitTestCremaPromptHash(UnitTestCase):
+    """api._prompt_hash — the value that is both the response-cache key and the
+    audit log's prompt_sha. Pins every element that must keep two requests in
+    separate cache entries. Pure function, no database."""
+
+    _BASE = _PROMPT_HASH_BASE_CFG
+
+    def test_requested_interface_separates_two_fallback_resolved_calls(self):
+        """Two use cases that fall back to the same provider and share a system
+        prompt must not collide — guardrails._plan filters by cfg["requested"], so a
+        reply produced under one interface's guardrail posture must never be served
+        to another's."""
+        strict = {**self._BASE, "requested": "extraction"}
+        lax = {**self._BASE, "requested": "simple"}
+
+        self.assertNotEqual(
+            _prompt_hash(strict, "prompt", None, None),
+            _prompt_hash(lax, "prompt", None, None),
+        )
+
+    def test_isolation_user_separates_two_sandboxes(self):
+        """A reply computed under one isolation user's readable inputs must not
+        survive being served under a different one after a config change."""
+        first = {**self._BASE, "isolation_user": "sandbox-one@example.com"}
+        second = {**self._BASE, "isolation_user": "sandbox-two@example.com"}
+
+        self.assertNotEqual(
+            _prompt_hash(first, "prompt", None, None),
+            _prompt_hash(second, "prompt", None, None),
+        )
+
+    def test_prompt_and_context_boundary_stays_unambiguous(self):
+        """A "|" join let prompt="a|b" collide with prompt="a", context="b" — two
+        different resolved prompts (_user_content wraps context in <context> tags)
+        that must not share a cache entry."""
+        joined_in_prompt = _prompt_hash(self._BASE, "a|b", None, None)
+        split_across_fields = _prompt_hash(self._BASE, "a", "b", None)
+
+        self.assertNotEqual(joined_in_prompt, split_across_fields)

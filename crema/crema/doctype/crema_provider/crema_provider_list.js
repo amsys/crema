@@ -14,37 +14,46 @@
 // column is already the name, and title_field + hide_name_column below keep it to one.
 //
 // listview_settings formatters are synchronous, so the value has to be in hand before a
-// row renders: the first render prefetches it and asks for one more refresh. The
-// `prefetched` flag is what stops that second refresh from looping.
+// row renders: before_render prefetches it and asks for one more refresh once the
+// batch resolves. A row already in connection_cache (probed) or pending (in flight) is
+// skipped, which is what stops that refresh from looping — and, unlike a single
+// page-wide "done" flag, still probes a provider added after the first render, on
+// whatever render comes next (New from Template's own listview.refresh() included).
 const connection_cache = {};
-let prefetched = false;
+const pending = new Set();
 let list = null;
 
 function prefetch(listview) {
 	// before_render is invoked as this.settings.before_render(), so `this` inside it is
 	// the settings object, not the list — hence the listview captured in onload.
-	if (prefetched || !listview) return;
-	prefetched = true;
+	if (!listview) return;
 
-	// One uncached check_provider call per enabled provider, in parallel — an hour-stale
-	// "Connected" pill (list_models' own cache TTL) is worse than one extra request per
-	// page load, hence the separate uncached endpoint (crema.api.check_provider).
+	// One uncached check_provider call per enabled provider not yet probed or in
+	// flight, in parallel — an hour-stale "Connected" pill (list_models' own cache
+	// TTL) is worse than one extra request per new row, hence the separate uncached
+	// endpoint (crema.api.check_provider).
 	const probes = (listview.data || [])
-		.filter((d) => d.enabled)
-		.map((d) =>
-			frappe
+		.filter((d) => d.enabled && !(d.name in connection_cache) && !pending.has(d.name))
+		.map((d) => {
+			pending.add(d.name);
+			// frappe.call returns a jQuery-style promise (no native .finally), so
+			// pending.delete has to run in both settle paths rather than chaining one.
+			return frappe
 				.call({ method: "crema.api.check_provider", args: { provider: d.name } })
 				.then((r) => {
 					connection_cache[d.name] = r.message || {
 						ok: false,
 						detail: __("No response"),
 					};
+					pending.delete(d.name);
 				})
 				.catch(() => {
 					connection_cache[d.name] = { ok: false, detail: __("Error") };
-				})
-		);
+					pending.delete(d.name);
+				});
+		});
 
+	if (!probes.length) return;
 	// allSettled, not all: a blank Connection column is better than a list that never
 	// shows the connection results because one call failed.
 	Promise.allSettled(probes).then(() => listview.refresh());
@@ -52,7 +61,7 @@ function prefetch(listview) {
 
 frappe.listview_settings["Crema Provider"] = {
 	hide_name_column: true,
-	add_fields: ["enabled"],
+	add_fields: ["enabled", "auto_disabled", "last_checked", "last_check_detail"],
 
 	onload(listview) {
 		list = listview;
@@ -66,15 +75,26 @@ frappe.listview_settings["Crema Provider"] = {
 	},
 
 	get_indicator(doc) {
-		return doc.enabled
-			? [__("Enabled"), "green", "enabled,=,1"]
-			: [__("Disabled"), "gray", "enabled,=,0"];
+		if (doc.enabled) return [__("Enabled"), "green", "enabled,=,1"];
+		if (doc.auto_disabled) return [__("Auto-disabled"), "orange", "auto_disabled,=,1"];
+		return [__("Disabled"), "gray", "enabled,=,0"];
 	},
 
 	formatters: {
 		enabled(value, df, doc) {
-			if (!doc.enabled)
+			if (!doc.enabled) {
+				if (doc.auto_disabled) {
+					// badge.html HTML-escapes the label itself.
+					return frappe.ui.badge.html({
+						label: doc.last_check_detail
+							? `${__("Auto-disabled")}: ${doc.last_check_detail}`
+							: __("Auto-disabled"),
+						theme: "orange",
+						title: doc.last_checked,
+					});
+				}
 				return frappe.ui.badge.html({ label: __("Disabled"), theme: "gray" });
+			}
 			const status = connection_cache[doc.name];
 			if (!status) return `<span class="text-muted">${__("Checking…")}</span>`;
 			// badge.html HTML-escapes the label itself.

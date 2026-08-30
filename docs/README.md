@@ -10,6 +10,7 @@ doctype fields are stable. A change that breaks them will come with a migration 
 | [install.md](install.md) | admin | How do I install the app on a site, and who can use it? |
 | [configure.md](configure.md) | admin | How do I add a provider and an interface? |
 | [use.md](use.md) | developer, user | How do I call Crema from Python or HTTP, and how does the desk UI work? |
+| [changes.md](changes.md) | developer (consuming app) | What changed underneath my app since I last synced with Crema? |
 | [automation.md](automation.md) | admin | How do I schedule a fetch-and-extract task? |
 | [security.md](security.md) | admin, developer | What does Crema protect, and how? |
 

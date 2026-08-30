@@ -519,3 +519,13 @@ from unittest.mock import patch
 with patch("crema.client._complete", return_value="mocked reply"):
     crema.ask("simple", "hello")
 ```
+
+`client._complete` is the patch point for `ask`/`ask_json` and everything built on them
+(`ocr`, `extract`, `transform`). `transcribe` calls a different function,
+`client._transcribe(cfg, content, filename, mime, language=None)` — patch that one for a
+test that calls `transcribe`.
+
+The text scan (crema's guardrail against prompt injection) runs above this patch point,
+against the site's real Crema Guardrails rows — patching `_complete`/`_transcribe` does
+not stand in for it. A test prompt written to look like an injection is blocked for real,
+the same way it would be in production.

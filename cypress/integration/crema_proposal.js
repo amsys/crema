@@ -45,11 +45,14 @@ const PROPOSALS = [
 let names = [];
 
 // Whether this file seeded Crema Settings' defaults, i.e. whether after() has anything to
-// undo there.
+// undo there — plus the values the site held before, so after() restores them instead of
+// blanking: a bench can carry a Default Isolation User with no Default Provider, and
+// that user is not this file's to clear.
 let seeded_defaults = false;
+let prior_defaults = { default_model: "", default_isolation_user: "" };
 
-// add_custom_button renders into .custom-actions inside the page header, so every lookup
-// of an Approve/Discard/Undo button is scoped there. An unscoped cy.contains("button",
+// add_custom_button renders into the page header (.page-actions), so every lookup of an
+// Approve/Discard/Undo button is scoped there. An unscoped cy.contains("button",
 // "Discard") also matches the form timeline's own comment-box Discard button, which
 // frappe keeps in the DOM display:none — that one is first in document order, so it wins
 // the match and every assertion then reads the wrong button.
@@ -169,6 +172,10 @@ context("Crema Proposal review", () => {
 		}).then((settings) => {
 			if (settings.default_provider) return;
 			seeded_defaults = true;
+			prior_defaults = {
+				default_model: settings.default_model || "",
+				default_isolation_user: settings.default_isolation_user || "",
+			};
 			cy.insert_doc(
 				"Crema Provider",
 				{
@@ -240,13 +247,17 @@ context("Crema Proposal review", () => {
 		cy.remove_doc("Crema Automation Task", TASK, true);
 		if (seeded_defaults) {
 			// CremaProvider.on_trash (_release_from_settings) clears Default Provider and
-			// Default Model itself — the isolation user is this file's to clear, and it
-			// has to go before the User it names can be deleted.
+			// Default Model itself — the model and isolation user are restored to what
+			// the site held before this file seeded, and the restore has to land before
+			// the User the seed named can be deleted.
 			cy.remove_doc("Crema Provider", PROVIDER, true);
 			cy.call("frappe.client.set_value", {
 				doctype: "Crema Settings",
 				name: "Crema Settings",
-				fieldname: { default_isolation_user: "" },
+				fieldname: {
+					default_model: prior_defaults.default_model,
+					default_isolation_user: prior_defaults.default_isolation_user,
+				},
 			});
 		}
 		cy.remove_doc("User", RUNNER, true);

@@ -31,8 +31,12 @@ frappe.ui.form.on("Crema Settings", {
 	},
 	default_provider(frm) {
 		// set_value("default_model", "") fires the default_model trigger below, which
-		// reloads the model list for the new provider — no separate call needed here.
-		frm.set_value("default_model", "");
+		// reloads the model list for the new provider. But set_value skips its trigger
+		// when the value is already blank — on a site with no Default Model (every
+		// fresh site), picking a provider then never fetched the list at all. Reload
+		// directly in that case.
+		if (frm.doc.default_model) frm.set_value("default_model", "");
+		else load_default_models(frm);
 	},
 	default_model(frm) {
 		load_default_models(frm);

@@ -23,7 +23,7 @@
   {
    "columns": 2,
    "default": "Off",
-   "description": "What happens when this check finds a problem. Off — do not run the check. Log Only — note it and continue. Retry Once — try the request once more, then stop (only the Reply Check retries; the others treat this as Block). Block — stop the request.",
+   "description": "What happens when this check finds a problem. Off — do not run the check. Log Only — note it and continue. Retry Once — try the request once more, then stop (only the Reply Check retries; the others treat this as Block). Block — stop the request. For a Hide check (Personal or Health Information), this does not control masking — masking runs whenever this is not Off. It only sets what happens when something cannot be masked, for example an image.",
    "fieldname": "action",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -40,7 +40,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-08 04:00:00.000000",
+ "modified": "2026-08-30 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Guardrail",

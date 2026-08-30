@@ -371,8 +371,10 @@ context("Crema desk UI", () => {
 			reason: "contacts about Acme Corp One",
 		});
 		crema_prompt("contacts about Acme Corp One");
-		cy.wait("@probe");
-		cy.wait("@probe");
+		// 20s, not cy.wait's 5s default: the probe fires only after the route, the
+		// list refresh, and after_ajax settle — a slow CI runner needs the room.
+		cy.wait("@probe", { requestTimeout: 20000 });
+		cy.wait("@probe", { requestTimeout: 20000 });
 
 		cy.get("@probe.all").should("have.length", 2);
 		cy.location("search").should("contain", encodeURIComponent('["like","%Acme%"]'));
@@ -929,15 +931,26 @@ context("Crema Settings", () => {
 
 		// cy.window().then() runs once, immediately, with none of cy.get's built-in
 		// retrying — wait for a field to actually render before touching cur_frm, or a
-		// beforeEach that's still mid-navigation leaves it null.
+		// beforeEach that's still mid-navigation leaves it null. The rendered control
+		// alone does not prove the doctype controller is wired: its JS arrives with the
+		// form's own requests, and a set_value fired before they settle changes the doc
+		// without running the default_provider handler (seen on the CI runner). Let
+		// frappe's after_ajax settle them first.
 		cy.get('.frappe-control[data-fieldname="default_provider"]');
+		cy.window().then(
+			(win) => new Cypress.Promise((resolve) => win.frappe.after_ajax(resolve))
+		);
 
 		// set_value, not typing into the Link field: this only exercises the client-side
 		// warning, and the field's server-side existence is validated at save, not here.
+		// Blank first: set_value skips the change handler when the value is unchanged,
+		// and this test cannot know what the site already holds — on the CI site the
+		// handler never fired and @get_models never occurred.
+		cy.window().then((win) => win.cur_frm.set_value("default_provider", ""));
 		cy.window().then((win) => win.cur_frm.set_value("default_provider", "Test Provider"));
-		cy.wait("@get_models");
+		cy.wait("@get_models", { requestTimeout: 20000 });
 		cy.window().then((win) => win.cur_frm.set_value("default_model", "made-up-model"));
-		cy.wait("@get_models");
+		cy.wait("@get_models", { requestTimeout: 20000 });
 
 		cy.get(".frappe-control[data-fieldname=default_model] .help-box").should(
 			"contain",

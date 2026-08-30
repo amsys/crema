@@ -519,7 +519,12 @@ def transcribe(file: str | bytes, *, language: str | None = None) -> dict[str, A
         result = client._transcribe(
             cfg, content, filename, mime or "application/octet-stream", language=language
         )
-    except CremaBudgetError as exc:
+    except (CremaBudgetError, CremaBlockedError) as exc:
+        # CremaBlockedError here is client._transcribe's own guardrails.blocks_unmaskable
+        # gate — a masking row set to Block for this interface (audio content can't be
+        # masked). Logged as Blocked, not Error, same reasoning as _Ask.__call__'s and
+        # _ocr.ocr()'s equivalent handlers: the Blocked/Error split is what makes a
+        # guardrail's false-positive rate measurable.
         _log(
             cfg,
             "Blocked",

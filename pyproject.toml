@@ -28,6 +28,11 @@ dependencies = [
 requires = ["flit_core >=3.12.0,<4"]
 build-backend = "flit_core.buildapi"
 
+# bench and the Frappe marketplace read this range to check the app against the
+# frappe version in the bench. The -dev low bound also matches a pre-release bench.
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0-dev,<17.0.0"
+
 # These dependencies are only installed when developer mode is enabled
 [tool.bench.dev-dependencies]
 # package_name = "~=1.1.0"

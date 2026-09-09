@@ -2,7 +2,7 @@
 # not read PEP 621 outside Poetry, can see the dependency set. Keep the two in
 # sync; .pre-commit-config.yaml enforces it. Nothing installs from this file:
 # bench installs the app from pyproject.toml and never reads requirements.txt.
-litellm>=1.83,<2
+litellm>=1.100.0,<2
 pymupdf
 ftfy
 anyascii

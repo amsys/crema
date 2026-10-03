@@ -458,9 +458,9 @@ def extract(doctype: str, file: str | bytes, instruction: str | None = None) -> 
     interface maps that text onto the doctype's fields. The confidence is the OCR pass's,
     so a caller can gate on it before trusting any record.
 
-    Two isolation users are involved, deliberately: the file is read as the `ocr`
-    interface's (inside ocr()), the doctype is fenced by the `extraction` interface's —
-    each interface's own fence, as everywhere else in crema.
+    The file is read as the calling user (_ocr._load_bytes checks that user's read
+    permission on the File); the doctype is fenced by the `extraction` interface's
+    isolation user.
     """
     cfg = client._resolve("extraction")
 
@@ -627,7 +627,7 @@ def configure(
     entirely (a brand-new PREDEFINED or app-registered name never saved before) is
     created first, via the same reconcile every Crema Settings save already runs.
     Every kwarg left at its default (None) is left untouched on the row — this is not a
-    replace, only the named fields are written. Idempotent: calling it again with the
+    replace, only the named fields are written. Safe to re-run: calling it again with the
     same arguments changes nothing.
 
     Only these three fields: everything else on a Crema Model Assignment row (the
@@ -671,12 +671,13 @@ def is_configured(interface: str = "simple") -> bool:
 
 
 def _check_user_rate_limit() -> None:
-    """The per-session-user half of ask_api's and extract_api's rate limiting.
+    """The per-session-user half of the HTTP endpoints' rate limiting (ask_api,
+    extract_api, extract_async, transform_api, ocr_api).
 
     The @rate_limit decorator is IP-based: its `key` parameter reads
     `frappe.form_dict`, which is client-supplied, so it cannot express "per session
     user". This adds that, as a redis counter on a fixed hourly window, shared across
-    both HTTP endpoints — one hourly budget per user for all crema HTTP calls. Like the
+    those endpoints — one hourly budget per user for all crema HTTP calls. Like the
     decorator, it only applies to real HTTP requests — in-process callers (bench
     console, background jobs) are trusted code, not the surface this guards.
     """
@@ -881,8 +882,8 @@ def transform_api(doctype: str, name: str, instruction: str) -> dict:
     """HTTP entry point for `transform()` — `POST /api/method/crema.api.transform_api`.
 
     Same gates as ask_api/extract_api: either role, both rate limits (per client IP and
-    per session user — the hourly per-user budget is now shared across all three HTTP
-    endpoints), CremaBlockedError -> structured 417 body.
+    per session user — one hourly per-user budget across every crema HTTP endpoint),
+    CremaBlockedError -> structured 417 body.
     """
     frappe.only_for(("System Manager", "Crema User"))
     _check_user_rate_limit()
@@ -901,7 +902,7 @@ def ocr_api(file_url: str) -> dict:
     Same gates as extract_api: either role, both rate limits (per client IP and per
     session user), CremaBlockedError/CremaConfigError/CremaBudgetError -> structured
     417 body. No `instruction` parameter — that stays a Python-caller affordance,
-    since this path deliberately skips layer 1 and layer 2 (see _ocr.py).
+    since this path deliberately skips the Text Scan (see _ocr.py).
 
     A File URL only — raw bytes are a Python-caller affordance, not an HTTP one.
     """

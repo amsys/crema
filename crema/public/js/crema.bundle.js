@@ -103,7 +103,7 @@ function crema_writable_table(doctype, fieldname, perm) {
 // runs through that server-side filter. Drops "name": it is a standard docfield, never
 // listed in meta.fields, so it is never "writable" here — which is what stops a
 // model-authored set.name from reaching a bulk update's doc.update(data) and silently
-// retargeting the save onto a different, unrelated record (the same footgun
+// retargeting the save onto a different, unrelated record (the same trap
 // automation._upsert guards against). Must run after frappe.model.with_doctype has
 // loaded the parent and every child doctype's meta.
 function crema_filter_diff(doctype, raw) {

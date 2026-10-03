@@ -2,7 +2,7 @@
 
 Mock boundary: `patch("crema.api.ask_json")` for every LLM call (planner and extractor
 both go through it) and `patch("requests.get")` for the fetch. Everything else — plan
-validation, the sandbox, the upsert, permission enforcement — runs for real.
+validation, the sandbox, the insert or update, permission enforcement — runs for real.
 
 That boundary sits one layer ABOVE the repo-wide `patch("crema.client._complete")`
 convention (CLAUDE.md) — deliberately: these tests target the pipeline around the LLM
@@ -336,7 +336,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
             automation._fetch("https://example.invalid/page")
         mock_get.assert_called_once()
 
-    # --- first run: plan + upsert ----------------------------------------
+    # --- first run: plan + write ------------------------------------------
 
     def test_first_run_plans_and_upserts(self):
         marker = uuid.uuid4().hex[:10]
@@ -361,7 +361,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
         self.assertIn(marker, todo.description)
         self.assertEqual(todo.owner, TEST_ISOLATION_USER)
 
-    # --- second run: stored plan reused, upsert idempotent ----------------
+    # --- second run: stored plan reused, write safe to re-run -------------
 
     def test_second_run_reuses_plan_and_does_not_duplicate(self):
         marker = uuid.uuid4().hex[:10]
@@ -446,7 +446,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
     def test_upsert_without_permission_fails_the_task(self):
         """The isolation user has no Role permissions -> doc.save() raises PermissionError,
-        proving no ignore_permissions leaked into the upsert path."""
+        proving no ignore_permissions leaked into the write path."""
         plan = {
             "version": 1,
             "extract": {"prompt": EXTRACT_PROMPT},
@@ -510,7 +510,7 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
         # A tag becomes a space, not nothing: the <br> must not weld "Customer:" to "row".
         self.assertIn("Could not find Customer : row 1 & row 2", task.last_error)
 
-    # --- upsert lookups are permission-fenced --------------------------------
+    # --- write lookups are permission-fenced ---------------------------------
 
     def test_upsert_does_not_match_records_the_isolation_user_cannot_see(self):
         """The find-or-create lookup runs as the isolation user (get_list, not get_all),

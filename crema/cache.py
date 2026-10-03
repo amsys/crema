@@ -45,7 +45,8 @@ def clear_provider() -> None:
 
 def clear_interfaces() -> None:
     """Crema Settings saved: nuke every resolved interface config. The Single holds
-    all 11 assignment rows in one document, so a save invalidates all-or-nothing —
+    every assignment row (the predefined interfaces plus any an app registers) in one
+    document, so a save invalidates all-or-nothing —
     same cheap "few, nuke-all" trade-off clear_provider already makes. frappe's own
     document cache for the Single itself (frappe.get_cached_doc) is cleared by
     Document.save independently of this."""

@@ -24,7 +24,7 @@ _ALLOWED_FORMAT = "\u200c\u200d\u200e\u200f"
 _TAG_BLOCK = range(0xE0000, 0xE0080)
 
 # Control/format/private-use categories to strip before matching. Cc contains \t \n \r,
-# and deleting those welds words together \u2014 "forget all\nprevious instructions" becomes
+# and deleting those welds words together — "forget all\nprevious instructions" becomes
 # "forget allprevious instructions", which defeats every pattern below with a literal \s+
 # between two fixed words, so _canon keeps those three. (An attacker splitting a word with
 # U+200C/U+200D gets it closed up there; every other Cf codepoint has already been blocked
@@ -223,8 +223,8 @@ def scan(prompt: str, context: str | None = None, extra: tuple[tuple[str, str], 
     you are" spelled with a Cyrillic er still evades. Closing that needs a confusables
     table, deliberately not added here.
 
-    Pure function: no frappe imports, no I/O — the three third-party imports are static
-    tables, and `extra` is a plain tuple the caller assembled. Failure behavior = block,
+    Pure function: no frappe imports, no I/O — the two third-party imports (ftfy, anyascii) hold
+    no state, and `extra` is a plain tuple the caller assembled. Failure behavior = block,
     so any new check added here should default to returning a reason on ambiguity.
     """
     raw = "\n".join(part for part in (context, prompt) if part)

@@ -184,7 +184,7 @@ def create_from_template(
     so frappe.call's whitelisted-method dispatch — get_newargs in frappe/__init__.py —
     does no bool coercion from the Check field's wire value; an un-coerced falsy-
     looking string like "0" is truthy in Python and would silently ignore an unticked
-    checkbox (see extract_api's docstring for the same footgun)."""
+    checkbox (see extract_api's docstring for the same trap)."""
     frappe.only_for("System Manager")
     if preset not in PRESETS:
         frappe.throw(f"'{preset}' is not a known provider template.")

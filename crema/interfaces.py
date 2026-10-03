@@ -40,8 +40,8 @@ PREDEFINED = [
 ]
 
 # Walked by client._resolve() until a configured interface with an enabled provider is
-# found. "advanced_ocr" and "transcribe" deliberately have no fallback (see _resolve)
-# — a transcription call cannot fall back to a chat model.
+# found. "ocr", "advanced_ocr" and "transcribe" deliberately have no fallback (see
+# _resolve) — a document or audio call cannot fall back to a chat model.
 FALLBACKS = {
     "translation": "simple",
     "classification": "simple",

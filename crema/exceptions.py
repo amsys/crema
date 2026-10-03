@@ -20,4 +20,5 @@ class CremaConfigError(frappe.ValidationError):
 
 
 class CremaBudgetError(frappe.ValidationError):
-    """Raised when an interface's monthly_budget_usd has already been spent."""
+    """Raised when an interface's monthly budget, or the calling user's monthly
+    budget, has already been spent."""

@@ -197,14 +197,8 @@ def _record_usage(response: Any) -> None:
     """Accumulate this call's usage onto frappe.local, request-local like
     _api_key's frappe.local.crema_keys memo. crema.log.insert drains and clears this
     on every logged row, so it never leaks between calls or across requests."""
-    if not hasattr(frappe.local, "crema_usage"):
-        frappe.local.crema_usage = {
-            "llm_calls": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "cost_usd": 0.0,
-            "served_model": None,
-        }
+    if not getattr(frappe.local, "crema_usage", None):
+        frappe.local.crema_usage = _log.empty_usage()
 
     usage = getattr(response, "usage", None)
     hidden = getattr(response, "_hidden_params", None) or {}
@@ -232,7 +226,7 @@ def _record_transcript(msgs: list[dict], content: str) -> None:
     crema.log.insert can attach it to the Crema Log row as a comment.
 
     Request-local and drained on every logged row, exactly like _record_usage's
-    crema_usage and _record_trap_miss's crema_trap. A list, not a scalar: one logged row
+    crema_usage and guardrails._record_trap_miss's crema_trap. A list, not a scalar: one logged row
     can bill several round trips (an escalated OCR call, a trap retry), and all of them
     belong on it.
 

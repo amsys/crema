@@ -45,27 +45,19 @@ def _drain_usage() -> dict[str, Any]:
     (Blocked, a cache hit) drains an accumulator nothing added to, i.e. all zeros.
     """
     acc = getattr(frappe.local, "crema_usage", None)
-    frappe.local.crema_usage = {
-        "llm_calls": 0,
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "cost_usd": 0.0,
-        "served_model": None,
-    }
-    if not acc:
-        return {
-            "llm_calls": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "cost_usd": 0.0,
-            "served_model": None,
-        }
-    return acc
+    frappe.local.crema_usage = empty_usage()
+    return acc or empty_usage()
+
+
+def empty_usage() -> dict[str, Any]:
+    """The usage accumulator before any provider call: what _drain_usage resets to and
+    what client._record_usage starts from."""
+    return {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "served_model": None}
 
 
 def _drain_trap() -> str | None:
     """Pop and reset the request-local layer-3 (output trap) miss reason
-    client._record_trap_miss sets on a non-blocking ("Log Only") miss. Same
+    guardrails._record_trap_miss sets on a non-blocking ("Log Only") miss. Same
     drain-on-every-call pattern as _drain_usage, so a stray reason from one call never
     leaks onto the next call's log row."""
     reason = getattr(frappe.local, "crema_trap", None)

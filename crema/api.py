@@ -133,6 +133,14 @@ def _build_messages(
     ]
 
 
+def _check_history(history: list[dict] | None) -> None:
+    """A caller's `history` carries user and assistant turns only: the interface's own
+    system prompt must stay the only system message."""
+    for turn in history or []:
+        if turn.get("role") not in ("user", "assistant"):
+            frappe.throw(_("A history turn must have the role 'user' or 'assistant'."))
+
+
 def _scan_context(context: str | None, history: list[dict] | None) -> str | None:
     """Widen the text layer 1 scans to include a caller-supplied history — scan()
     joins whatever it's given (see its own docstring on why), so an injection split
@@ -157,6 +165,10 @@ def _gate_or_block(
     except CremaBlockedError as exc:
         _log(cfg, "Blocked", str(exc), prompt_sha=prompt_sha)
         raise
+    except Exception as exc:
+        # A crash inside the scan still stops the call (fails closed); log it too.
+        _log(cfg, "Error", _log_mod.redact(f"{type(exc).__name__}: {exc}")[:2000], prompt_sha=prompt_sha)
+        raise
 
 
 def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
@@ -179,11 +191,7 @@ def _resolve_files(files: list[str | tuple[bytes, str]]) -> list[dict]:
             parts.extend(_ocr_impl.prep_parts(content, mime))
             continue
 
-        try:
-            content, mime = _ocr_impl._load_bytes(f)
-        except Exception:
-            continue
-
+        content, mime = _ocr_impl._load_bytes(f)
         parts.extend(_ocr_impl.prep_parts(content, mime))
     return parts
 
@@ -282,6 +290,7 @@ class _Ask:
         if cache_ttl is not None:
             cfg = {**cfg, "cache_ttl": cache_ttl}
 
+        _check_history(history)
         prompt_sha = _prompt_hash(cfg, prompt, context, response_format, history)
 
         _gate_or_block(cfg, prompt, context, history, prompt_sha)
@@ -424,12 +433,17 @@ def transform(doctype: str, name: str, instruction: str, interface: str = "trans
         # Harvested inside isolation, like the read above: a term the isolation user
         # can't see must not enter masking's term list either — see
         # crema.terms.harvest's own docstring. Skipped entirely when no Hide
-        # Personal Information row applies to this interface (guardrails.run drains
-        # the accumulator unconditionally either way, so nothing can leak).
+        # Personal Information row applies to this interface.
         if guardrails.active("pi", interface) != "Off":
             frappe.local.crema_terms = _terms.harvest(doctype, name)
 
-    raw = ask_json(interface, instruction, context=frappe.as_json(payload))
+    try:
+        raw = ask_json(interface, instruction, context=frappe.as_json(payload))
+    finally:
+        # guardrails.run drains the list, but a scan block, a cache hit or a budget
+        # stop returns before run(); clear it so a later call in this request does
+        # not mask with this record's terms.
+        frappe.local.crema_terms = None
     return {**_filter_diff(doctype, raw), "reason": raw.get("reason", "")}
 
 
@@ -800,7 +814,7 @@ def extract_async(
         frappe.throw(_("file_url must be a File URL string"))
 
     request_id = request_id or frappe.generate_hash(length=8)
-    frappe.enqueue(
+    job = frappe.enqueue(
         "crema.api.run_extract",
         doctype=doctype,
         file_url=file_url,
@@ -811,6 +825,10 @@ def extract_async(
         job_id=f"crema-extract-{request_id}",
         deduplicate=True,
     )
+    if job is None:
+        # frappe skipped the job: one with this request_id is still queued or running,
+        # so no crema_extract event would answer this call.
+        frappe.throw(_("A read with this request_id is already running. Use a new request_id."))
     return request_id
 
 
@@ -1102,6 +1120,23 @@ def _proposal_names(names: str | list[str]) -> list[str]:
     return frappe.parse_json(names) if isinstance(names, str) else names
 
 
+def _each_proposal(names: str | list[str], action) -> list[dict]:
+    """Run `action` on each proposal in its own savepoint: a row that fails after part
+    of its write is rolled back alone, and the other rows go through. Returns the
+    failures as `[{"name", "error"}, ...]`."""
+    failures = []
+    for name in _proposal_names(names):
+        frappe.db.savepoint("crema_proposal")
+        try:
+            action(name)
+        except Exception as exc:
+            frappe.db.rollback(save_point="crema_proposal")
+            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
+        else:
+            frappe.db.release_savepoint("crema_proposal")
+    return failures
+
+
 @frappe.whitelist(methods=["POST"])
 def approve_proposals(names: str | list[str]) -> list[dict]:
     """Approve one or more `Crema Proposal` rows — the form's Approve button and the
@@ -1111,13 +1146,7 @@ def approve_proposals(names: str | list[str]) -> list[dict]:
     frappe.only_for("System Manager")
     from crema import automation
 
-    failures = []
-    for name in _proposal_names(names):
-        try:
-            automation.apply_proposal(name)
-        except Exception as exc:
-            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
-    return failures
+    return _each_proposal(names, automation.apply_proposal)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1127,13 +1156,7 @@ def discard_proposals(names: str | list[str]) -> list[dict]:
     frappe.only_for("System Manager")
     from crema import automation
 
-    failures = []
-    for name in _proposal_names(names):
-        try:
-            automation.discard_proposal(name)
-        except Exception as exc:
-            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
-    return failures
+    return _each_proposal(names, automation.discard_proposal)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1144,13 +1167,7 @@ def undo_proposals(names: str | list[str]) -> list[dict]:
     frappe.only_for("System Manager")
     from crema import automation
 
-    failures = []
-    for name in _proposal_names(names):
-        try:
-            automation.undo_proposal(name)
-        except Exception as exc:
-            failures.append({"name": name, "error": _log_mod.redact(str(exc))})
-    return failures
+    return _each_proposal(names, automation.undo_proposal)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1162,5 +1179,7 @@ def undo_last_run(task: str) -> dict:
 
     try:
         return automation.undo_last_run(task)
+    except frappe.PermissionError:
+        raise
     except Exception as exc:
         frappe.throw(_log_mod.redact(str(exc)))

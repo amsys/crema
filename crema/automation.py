@@ -1020,7 +1020,7 @@ def _fetch(url: str) -> str:
         mime = _ocr._sniff_mime(body)
 
     if _ocr._is_pdf(body, mime):
-        text = _ocr._extract_pdf_text(body)
+        text = _ocr._extract_pdf_text(_ocr._pdf_pages(body))
         return text if len(text) >= _ocr._TEXT_PDF_MIN_CHARS else api.ocr(body)["text"]
 
     text = body.decode(response.encoding or "utf-8", errors="replace")

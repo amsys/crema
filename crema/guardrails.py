@@ -569,10 +569,17 @@ def _default_rows() -> list:
 
 
 def _rows() -> list:
+    """The configured rows. Only the "not migrated yet" case falls back to the seeded
+    defaults; any other fault propagates, so a broken read never quietly replaces a
+    Block row with a default and the call fails closed."""
     try:
         return list(frappe.get_cached_doc("Crema Guardrails").guardrails)
-    except Exception:
+    except frappe.DoesNotExistError:
         return _default_rows()
+    except Exception as exc:
+        if frappe.db.is_table_missing(exc):
+            return _default_rows()
+        raise
 
 
 def _applies(row, interface: str) -> bool:

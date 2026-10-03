@@ -19,6 +19,13 @@ The contract this page tracks:
 
 Only a removal or a rename is listed. Read newest first.
 
+## 2026-10-03 — `ask()` refuses an unreadable file and a system turn
+
+`ask(files=[...])` used to skip a File URL the isolation user could not read, and
+answer without it. It now fails with `frappe.PermissionError` (or
+`frappe.DoesNotExistError` for a missing File), and the Crema Log row says `Error`.
+`ask(history=[...])` now refuses a turn whose role is not `user` or `assistant`.
+
 ## 2026-10-03 — endpoints that change data accept POST only
 
 These endpoints now refuse a GET request: `ask_api`, `extract_api`, `extract_async`,

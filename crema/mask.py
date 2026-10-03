@@ -14,7 +14,9 @@ Four guarantees this module exists to hold, in order of what breaks if it doesn'
    never restore to somebody else's data.
 3. Tolerant of transformation — the model will summarise, translate and restructure
    around a token; restore() still finds it through case changes, dropped brackets
-   and separator drift.
+   and separator drift. A token without its brackets must keep its upper-case label
+   and its underscore (`NAME_1`), so ordinary words such as "email 2 days" never
+   restore.
 4. Loud when it fails — a token-shaped fragment that could not be resolved is
    reported (Vault.unresolved), never silently left in the returned text.
 
@@ -525,8 +527,10 @@ def legend(vault: Vault) -> str | None:
 
 # ---------------------------------------------------------------------------
 # Restore — the loose, tolerant ladder (guarantee 3), scoped to only the labels this
-# vault actually issued (guarantee 2's other half: a coincidental "CARD 5" in
-# unrelated prose can't restore to anything, because no such token exists to find).
+# vault actually issued. Inside [[...]] any case and separator restores. Without the
+# brackets only the exact upper-case label and an underscore restore: "email 2 days"
+# or "Name 3" in ordinary prose must not turn into a hidden value, even when the vault
+# did issue EMAIL_2 or NAME_3.
 # ---------------------------------------------------------------------------
 
 
@@ -556,11 +560,10 @@ def _restore_pattern(labels: Iterable[str]) -> re.Pattern[str] | None:
     # Two capture groups per branch (label, entity, variant) rather than one shared
     # set: Python's `re` won't let the same group name/number carry different meaning
     # per alternation branch, so repl() below reads group(1..3) or group(4..6),
-    # whichever branch actually matched.
+    # whichever branch actually matched. Only the bracketed branch ignores case.
     return re.compile(
-        rf"\[\[\s*({alt})[_\-\s](?>(\d+)(?:[.\-](\d+))?)\s*\]\]"
-        rf"|\b({alt})[_\-\s](?>(\d+)(?:[.\-](\d+))?)\b",
-        re.IGNORECASE,
+        rf"(?i:\[\[\s*({alt})[_\-\s](?>(\d+)(?:[.\-](\d+))?)\s*\]\])"
+        rf"|\b({alt})_(?>(\d+)(?:[.\-](\d+))?)\b"
     )
 
 

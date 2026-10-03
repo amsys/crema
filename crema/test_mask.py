@@ -127,7 +127,7 @@ RESTORE_HITS = [
     "[[NAME-1-2]]",
     "[[ NAME_1.2 ]]",
     "NAME_1.2",
-    "NAME-1-2",
+    "NAME_1-2",
     "**NAME_1.2**",
     "NAME_1.2.",  # a real sentence-ending period, not part of the token
 ]
@@ -135,6 +135,9 @@ RESTORE_MISSES = [
     "NAME_12",  # a different entity's id, not this one's variant
     "EMAIL_1.2",  # right shape, label this vault never issued
     "NAME_1.2X",  # trailing garbage glued onto the id
+    "NAME-1-2",  # no brackets: only the upper-case label with "_" restores
+    "name_1.2",  # no brackets, lower case: reads as prose
+    "Name 1.2",  # no brackets, a space: reads as prose
 ]
 
 
@@ -170,6 +173,14 @@ class UnitTestCremaMaskRestoreTolerance(UnitTestCase):
         bare = hidden.replace("[[", "").replace("]]", "")
         restored = mask.restore(bare, vault)
         self.assertEqual(restored, "Mr Ramgoolam and Jean-Claude Ramgoolam.")
+
+    def test_ordinary_words_next_to_a_number_do_not_restore(self):
+        """ "email 2 days later" must stay prose even when the vault issued EMAIL_2."""
+        vault = mask.Vault()
+        mask.hide("Write to a@acme.com or b@acme.com. Ask Peter Smith.", vault)
+        text = "Send the email 2 days later, then ask name 1 again, 3 times by email 1."
+        self.assertEqual(mask.restore(text, vault), text)
+        self.assertFalse(vault.unresolved)
 
     def test_token_never_mentioned_again_is_not_flagged_unresolved(self):
         # A model that summarises away an entity entirely is normal, not a fault (see

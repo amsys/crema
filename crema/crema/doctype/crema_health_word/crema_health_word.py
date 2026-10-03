@@ -34,7 +34,7 @@ _INSTRUCTION = (
 )
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def translate_words(language: str) -> dict:
     """Data source for the "Translate Built-in List" list action
     (crema_health_word_list.js). Never applies a word itself: an over-matching term

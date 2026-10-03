@@ -158,7 +158,7 @@ def get_settings_references(provider: str) -> dict:
     return {"is_default": is_default, "use_cases": use_cases}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def create_from_template(
     preset: str,
     provider_name: str,

@@ -8,8 +8,9 @@ a new HTTP endpoint — because an addition does not break anything that already
 The contract this page tracks:
 
 - the functions `crema/__init__.py` exports (`ask`, `ask_json`, `ocr`, `extract`,
-  `transform`, `transcribe`, `health`, `configure`, `is_configured`, `seed_provider`)
-  and their signatures and return shapes;
+  `transform`, `transcribe`, `health`, `configure`, `is_configured`), and
+  `crema.testing.seed_provider`, with their signatures and return shapes;
+- the HTTP method each whitelisted endpoint accepts;
 - the `crema_interfaces`, `crema_guardrails`, and `crema_scan_patterns` `hooks.py` keys,
   and the shape each expects;
 - the `Crema Model Assignment` fieldnames an app may seed through a `crema_interfaces`
@@ -17,6 +18,19 @@ The contract this page tracks:
 - the exception classes (`CremaBlockedError`, `CremaConfigError`, `CremaBudgetError`).
 
 Only a removal or a rename is listed. Read newest first.
+
+## 2026-10-03 — endpoints that change data accept POST only
+
+These endpoints now refuse a GET request: `ask_api`, `extract_api`, `extract_async`,
+`transform_api`, `ocr_api`, `grant_crema_role`, `run_automation_now`,
+`trigger_automation`, `dry_run_automation`, `approve_proposals`, `discard_proposals`,
+`undo_proposals`, `undo_last_run`, and the Crema Provider `create_from_template` and
+Crema Health Word `translate_words` methods. The desk always sent POST, so the desk does
+not change. An outside system that calls one of these endpoints with GET must send POST.
+
+The reason: frappe commits the writes of a request only for POST, PUT, PATCH, and DELETE.
+A GET to `ask_api` paid the provider, but frappe rolled back its Crema Log row, so the
+budget did not count that spend. A GET also skips the CSRF check.
 
 ## 2026-08-24 — the per-provider budget is gone
 

@@ -39,18 +39,20 @@ def harvest(doctype: str, name: str) -> list[TermGroup]:
     record: this document's own title, and every Link field's target title, plus any
     Phone/Email field's raw value.
 
-    Call inside sandbox.isolation(...) — this reads with frappe.get_doc/
-    frappe.db.get_value under the caller's ambient permissions, so a value the
-    isolation user cannot read never enters the term list. A term list is itself a
-    disclosure channel: it tells the caller's chosen provider "this string means
-    something", even wrapped in a token.
+    The reads (frappe.get_doc, frappe.db.get_value) check no permission, and field
+    level permissions do not apply. That is safe: a term only widens masking. It
+    replaces a value that is already in the outgoing text with a token, and a term
+    whose value is not in the text sends nothing. No term reaches the provider as
+    clear text.
 
     Not every Data field — masking the whole document leaves the model nothing to
-    work with (see crema.api._source_fields's identical reasoning for automation).
+    work with (see crema.automation._source_fields's identical reasoning for
+    automation).
     """
     try:
         doc = frappe.get_doc(doctype, name)
-    except Exception:
+    except frappe.DoesNotExistError:
+        frappe.logger("crema").warning(f"masking: no record {doctype} {name}; no record terms to hide")
         return []
 
     groups: list[TermGroup] = []

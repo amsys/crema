@@ -1465,6 +1465,32 @@ class UnitTestCremaHealthFailureKind(UnitTestCase):
                 self.assertEqual(client._failure_kind(status), kind)
 
 
+class UnitTestCremaCallRawEmptyReply(UnitTestCase):
+    """client._call_raw — a reply with no text (a refusal, a tool call) comes back as
+    "", never None, so the cache and ask_json never see None."""
+
+    def test_a_reply_without_text_returns_an_empty_string(self):
+        response = MagicMock()
+        response.choices[0].message.content = None
+        cfg = {
+            "provider": "p",
+            "model": "m",
+            "base_url": "http://localhost/v1",
+            "timeout_seconds": 5,
+            "temperature": 0,
+            "max_tokens": 10,
+            "interface": "simple",
+            "caller_user": "Administrator",
+        }
+        with (
+            patch("litellm.completion", return_value=response),
+            patch.object(client, "_api_key", return_value=None),
+            patch.object(client, "_record_usage"),
+            patch.object(client, "_record_transcript"),
+        ):
+            self.assertEqual(client._call_raw(cfg, [{"role": "user", "content": "hi"}]), "")
+
+
 class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):
     """CremaModelAssignment.validate — the isolation user must be a fenced,
     low-privilege account. Exercised on a bare (unsaved, parentless) child doc, since
@@ -1665,16 +1691,16 @@ class IntegrationTestCremaFiles(CremaFixtureTestCase):
         text_parts = [p for p in content if p.get("type") == "text"]
         self.assertTrue(any("Hello world" in p["text"] for p in text_parts if "text" in p))
 
-    def test_unreadable_file_is_silently_dropped(self):
-        """A File the isolation user cannot read is dropped, not raised — the current,
-        deliberate `except Exception: continue` behaviour in api._resolve_files."""
+    def test_unreadable_file_fails_the_call(self):
+        """A File the isolation user cannot read fails the call with a PermissionError.
+        Dropping it in silence let ask() answer as if the file were not there."""
         filename = f"_test_crema_{uuid.uuid4().hex[:8]}.txt"
         file_url = self._attach_file(b"private stuff", filename, is_private=1)
         with patch("crema.client._complete", return_value="ok") as mock_complete:
-            ask("simple", "describe this", files=[file_url])  # must not raise
+            with self.assertRaises(frappe.PermissionError):
+                ask("simple", "describe this", files=[file_url])
 
-        messages = mock_complete.call_args[0][1]
-        self.assertIsInstance(messages[-1]["content"], str)  # no parts added -> unchanged
+        mock_complete.assert_not_called()
 
     def test_unsupported_mime_yields_no_parts(self):
         filename = f"_test_crema_{uuid.uuid4().hex[:8]}.txt"

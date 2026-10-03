@@ -280,7 +280,8 @@ def _call_raw(cfg: dict[str, Any], messages: list[dict], response_format: dict |
 
     response = litellm.completion(**kwargs)
     _record_usage(response)
-    content = response.choices[0].message.content
+    # A reply with only a tool call or a refusal can carry no text at all.
+    content = response.choices[0].message.content or ""
     _record_transcript(messages, content)
     return content
 

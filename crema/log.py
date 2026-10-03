@@ -274,6 +274,9 @@ def check_budget(cfg: dict[str, Any]) -> None:
     logged against, the interface that actually serves it, consistent with how
     logging already attributes fallback-served calls.
     """
+    if not (cfg.get("monthly_budget_usd") or cfg.get("per_user_budget_usd")):
+        return  # no ceiling to enforce, so skip the month's spend query
+
     spend = month_spend()
 
     interface_budget = cfg.get("monthly_budget_usd") or 0

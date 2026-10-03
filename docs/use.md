@@ -19,16 +19,19 @@ Send `prompt` to the named `interface`. The call returns the model's text respon
   for example). For each File URL, the system checks read permission as the
   interface's isolation user, then attaches the file: an image goes as vision input,
   a scanned PDF goes as rendered page images, and a text PDF goes as its extracted
-  text. The system silently skips a File it cannot read, and any type that is not a
-  PDF or an image — the call still runs, without that file. The system uses a
-  `(bytes, mime)` pair as-is.
+  text. A File the isolation user cannot read, or a File that does not exist, fails
+  the call with `frappe.PermissionError` or `frappe.DoesNotExistError`. The system
+  skips a type that is not a PDF or an image — the call still runs, without that file.
+  The system uses a `(bytes, mime)` pair as-is.
 - `response_format` requests a structured reply, for example
   `{"type": "json_object"}`.
 - `cache_ttl` overrides the interface's cache setting for this one call.
 - `history` adds prior turns — a list of `{"role": "user"|"assistant", "content": str}`
   dicts — between the interface's system prompt and this call's prompt. Crema keeps no
   conversation state of its own; pass the same list back on the next turn to continue
-  it. The system scans the whole history together with `context` and `prompt`.
+  it. The system scans the whole history together with `context` and `prompt`. A turn
+  with any other role, `system` for example, fails the call with a validation error:
+  the interface's own system prompt is the only one.
 
 Example:
 

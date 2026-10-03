@@ -522,6 +522,10 @@ answers.
 
 ## Background execution
 
+Crema Settings' **Longest Document (pages)** limits a PDF before any page is read: each
+page of a scanned PDF is one image in a paid call. The OCR escalation to `advanced_ocr`
+keeps the guardrails of the interface the caller asked for, the same rule as a fallback.
+
 `extract` can make up to three provider calls (OCR, its `advanced_ocr` escalation,
 then the mapping call) and hold a web worker for minutes on a slow provider — long
 enough to starve a small bench for every user on it, not only the one waiting.

@@ -60,8 +60,12 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict
 ```
 
 Read `file` — a File URL or raw bytes. `file` may be an image, a scanned PDF, or a
-text PDF. The system picks the right method for each case. If the `ocr` interface
-reports low confidence, the system retries once with `advanced_ocr`. `escalated`
+text PDF. The system picks the right method for each case. A PDF longer than Crema
+Settings' **Longest Document (pages)** is refused with `CremaBlockedError`, or cut to
+its first pages, as that section sets. If the `ocr` interface reports a confidence below
+Crema Settings' **Use the Advanced Reader Below** (70 % by default), the system retries
+once with `advanced_ocr`. The retry uses the provider and model of `advanced_ocr`, but
+the guardrails of `ocr`, because it sends the same document. `escalated`
 tells you the retry ran; the call returns whichever attempt reports the higher
 confidence, so `escalated: true` can come back with the first attempt's text. The
 system skips the retry in three cases: `advanced_ocr` does not resolve to a

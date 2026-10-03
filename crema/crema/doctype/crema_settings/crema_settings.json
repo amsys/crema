@@ -17,6 +17,11 @@
   "assignments",
   "section_logging",
   "log_retention_days",
+  "section_documents",
+  "ocr_max_pages",
+  "column_break_documents",
+  "ocr_over_limit",
+  "ocr_min_confidence",
   "section_restrictions",
   "blocked_doctypes",
   "section_operations",
@@ -94,6 +99,37 @@
    "label": "Keep Logs For (days)"
   },
   {
+   "fieldname": "section_documents",
+   "fieldtype": "Section Break",
+   "label": "Documents"
+  },
+  {
+   "default": "20",
+   "description": "A PDF with more pages than this is refused or cut, as set beside. Each page of a scanned PDF is one image in a paid call.",
+   "fieldname": "ocr_max_pages",
+   "fieldtype": "Int",
+   "label": "Longest Document (pages)",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "column_break_documents",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Refuse",
+   "fieldname": "ocr_over_limit",
+   "fieldtype": "Select",
+   "label": "When a Document Is Longer",
+   "options": "Refuse\nRead the First Pages"
+  },
+  {
+   "default": "70",
+   "description": "When the first reading of a document reports a lower confidence than this, Crema reads it again with the Advanced OCR use case.",
+   "fieldname": "ocr_min_confidence",
+   "fieldtype": "Percent",
+   "label": "Use the Advanced Reader Below"
+  },
+  {
    "fieldname": "section_restrictions",
    "fieldtype": "Section Break",
    "label": "Restrictions"
@@ -126,7 +162,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-28 00:00:00.000000",
+ "modified": "2026-10-03 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Settings",

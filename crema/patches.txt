@@ -14,3 +14,4 @@ crema.patches.drop_ai_guard
 crema.patches.drop_provider_budget
 crema.patches.seed_reply_filter
 crema.patches.rechain_crema_log_for_version_fields
+crema.patches.seed_documents_defaults

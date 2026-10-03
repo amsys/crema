@@ -338,10 +338,11 @@ def _png_bytes(size: tuple[int, int] = (64, 64)) -> bytes:
     return buf.getvalue()
 
 
-def _scanned_pdf_bytes() -> bytes:
+def _scanned_pdf_bytes(pages: int = 1) -> bytes:
     doc = pymupdf.open()
-    page = doc.new_page()
-    page.draw_rect(pymupdf.Rect(50, 50, 200, 200))  # a shape, no text -> "scanned"
+    for _ in range(pages):
+        page = doc.new_page()
+        page.draw_rect(pymupdf.Rect(50, 50, 200, 200))  # a shape, no text -> "scanned"
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

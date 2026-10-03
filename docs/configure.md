@@ -253,6 +253,9 @@ As, the Use Cases grid's own budget field — stays a desk edit.
 | `default_monthly_budget_usd` | Currency | Used by any row that leaves its own monthly budget at 0. 0 here too means unlimited. |
 | `default_monthly_budget_usd_per_user` | Currency | Label **Per-User Monthly Budget (USD)**. The most one user may spend per calendar month across all interfaces. Skipped for the Administrator and for automation runs. 0 means no per-user limit. |
 | `log_retention_days` | Int | Label **Keep Logs For (days)**. 30 by default. How long a Crema Log row survives before the daily cleanup job deletes it. |
+| `ocr_max_pages` | Int | Label **Longest Document (pages)**, in the **Documents** section. 20 by default, 1 or more. A PDF with more pages is refused or cut, as set in the next field. Each page of a scanned PDF is one image in a paid call, so this limit also limits the cost. |
+| `ocr_over_limit` | Select | Label **When a Document Is Longer**. `Refuse` (default) fails the call with a `Blocked` log row before any page is read. `Read the First Pages` reads only the first pages up to the limit and writes a note on the log row. |
+| `ocr_min_confidence` | Percent | Label **Use the Advanced Reader Below**. 70 by default. When the first OCR reading reports a lower confidence, the system reads the document again with `advanced_ocr`. |
 | `blocked_doctypes` | Table | Label **Blocked Doctypes**. Empty by default. Record types the AI may never create, edit, or delete — see "Block a doctype outright" below. |
 | `disabled` | Check | Label **Crema Is Off**. Switch this on to stop every LLM call. A kill in `site_config.json` (key `crema_disabled`) has the same effect and a desk edit cannot undo it. Either one kills; clearing both restores service. |
 | `auto_disable_unreachable` | Check | Label **Switch Off Services That Do Not Answer**. Off by default. See [The scheduled health check](#the-scheduled-health-check) above. |

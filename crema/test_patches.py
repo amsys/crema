@@ -15,7 +15,11 @@ from unittest.mock import patch
 
 import frappe
 from crema import log
-from crema.patches import consolidate_guardrails, rechain_crema_log_for_version_fields
+from crema.patches import (
+    consolidate_guardrails,
+    rechain_crema_log_for_version_fields,
+    seed_documents_defaults,
+)
 from crema.test_fixtures import _GUARDRAIL_BASELINE, CremaFixtureTestCase
 from frappe.tests import IntegrationTestCase, UnitTestCase
 
@@ -213,3 +217,39 @@ class IntegrationTestCremaRechainCremaLog(CremaFixtureTestCase):
 
         after = [frappe.db.get_value("Crema Log", n, "chain_sha") for n in names]
         self.assertEqual(before, after, "a pre-existing tamper must not be silently re-hashed away")
+
+
+class IntegrationTestCremaSeedDocumentsDefaults(IntegrationTestCase):
+    """patches.seed_documents_defaults — fills only a Documents field with no stored
+    value, so a site upgraded from before the section gets working OCR defaults and an
+    admin's own value survives."""
+
+    _FIELDS = tuple(seed_documents_defaults.DEFAULTS)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._saved = {f: frappe.db.get_single_value("Crema Settings", f) for f in self._FIELDS}
+        self._remove_stored_values()
+
+    def tearDown(self) -> None:
+        for field, value in self._saved.items():
+            frappe.db.set_single_value("Crema Settings", field, value)
+        super().tearDown()
+
+    def _remove_stored_values(self) -> None:
+        frappe.db.sql(
+            "delete from `tabSingles` where doctype = 'Crema Settings' and field in %(fields)s",
+            {"fields": self._FIELDS},
+        )
+        frappe.clear_document_cache("Crema Settings", "Crema Settings")
+
+    def test_an_upgraded_site_gets_the_defaults(self):
+        seed_documents_defaults.execute()
+        self.assertEqual(frappe.db.get_single_value("Crema Settings", "ocr_max_pages"), 20)
+        self.assertEqual(frappe.db.get_single_value("Crema Settings", "ocr_over_limit"), "Refuse")
+        self.assertEqual(frappe.db.get_single_value("Crema Settings", "ocr_min_confidence"), 70)
+
+    def test_an_admin_value_is_kept(self):
+        frappe.db.set_single_value("Crema Settings", "ocr_max_pages", 5)
+        seed_documents_defaults.execute()
+        self.assertEqual(frappe.db.get_single_value("Crema Settings", "ocr_max_pages"), 5)

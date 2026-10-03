@@ -702,7 +702,7 @@ def _error_response(exc: CremaBlockedError | CremaConfigError | CremaBudgetError
     return _error_body(exc)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=3600)
 def ask_api(interface: str, prompt: str, context: str | None = None, response_json: bool = False) -> dict:
     """HTTP entry point for `ask()` — `POST /api/method/crema.api.ask_api`.
@@ -742,7 +742,7 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
     return {"result": result}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=3600)
 def extract_api(doctype: str, file_url: str, instruction: str | None = None) -> dict:
     """HTTP entry point for `extract()` — `POST /api/method/crema.api.extract_api`.
@@ -773,7 +773,7 @@ _EXTRACT_ASYNC_TIMEOUT = 900  # comfortably above the ~360s worst case: ocr, its
 # num_retries=1) at a provider's own timeout_seconds (default 60, no ceiling).
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=3600)
 def extract_async(
     doctype: str, file_url: str, instruction: str | None = None, request_id: str | None = None
@@ -857,7 +857,7 @@ def run_extract(doctype: str, file_url: str, instruction: str | None, request_id
     )
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=3600)
 def transform_api(doctype: str, name: str, instruction: str) -> dict:
     """HTTP entry point for `transform()` — `POST /api/method/crema.api.transform_api`.
@@ -875,7 +875,7 @@ def transform_api(doctype: str, name: str, instruction: str) -> dict:
         return _error_response(exc)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=3600)
 def ocr_api(file_url: str) -> dict:
     """HTTP entry point for `ocr()` — `POST /api/method/crema.api.ocr_api`.
@@ -917,7 +917,7 @@ def check_provider(provider: str) -> dict[str, Any]:
     return client.check_connection(provider)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def grant_crema_role(user: str | None = None) -> str:
     """Add the "Crema User" role to `user` (the caller by default).
 
@@ -985,7 +985,7 @@ def get_usage() -> dict[str, Any]:
     return {"interfaces": interfaces_usage}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def run_automation_now(task: str) -> str:
     """ "Run Now" on a Crema Automation Task — always enqueues (never runs inline), so the
     manual path is byte-identical to the scheduled one. Returns the job id."""
@@ -1039,7 +1039,7 @@ def _check_webhook_signature(
         frappe.throw(_("'{0}': this call was already used.").format(task), frappe.PermissionError)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=3600)
 def trigger_automation(
     task: str, payload: str | None = None, timestamp: str | None = None, signature: str | None = None
@@ -1078,7 +1078,7 @@ def trigger_automation(
     return automation.enqueue_task(task, payload=payload)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 @rate_limit(limit=20, seconds=3600)
 def dry_run_automation(task: str) -> dict:
     """ "Dry Run" on a Crema Automation Task — reads the source, plans, extracts, and
@@ -1102,7 +1102,7 @@ def _proposal_names(names: str | list[str]) -> list[str]:
     return frappe.parse_json(names) if isinstance(names, str) else names
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def approve_proposals(names: str | list[str]) -> list[dict]:
     """Approve one or more `Crema Proposal` rows — the form's Approve button and the
     list view's bulk action both call this. Each name is independent: one bad row must
@@ -1120,7 +1120,7 @@ def approve_proposals(names: str | list[str]) -> list[dict]:
     return failures
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def discard_proposals(names: str | list[str]) -> list[dict]:
     """Discard one or more `Crema Proposal` rows. See `approve_proposals` for the shape
     of what this returns."""
@@ -1136,7 +1136,7 @@ def discard_proposals(names: str | list[str]) -> list[dict]:
     return failures
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def undo_proposals(names: str | list[str]) -> list[dict]:
     """Reverse one or more Approved `Crema Proposal` rows: delete what approving them
     created and return each to Pending. See `approve_proposals` for the shape of what
@@ -1153,7 +1153,7 @@ def undo_proposals(names: str | list[str]) -> list[dict]:
     return failures
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def undo_last_run(task: str) -> dict:
     """Delete every record a Crema Automation Task's last run created, leaving every
     record it updated for manual review — see PLAN.md's "Undo a run"."""

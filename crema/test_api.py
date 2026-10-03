@@ -531,3 +531,43 @@ class UnitTestCremaPromptHash(UnitTestCase):
         split_across_fields = _prompt_hash(self._BASE, "a", "b", None)
 
         self.assertNotEqual(joined_in_prompt, split_across_fields)
+
+
+class UnitTestCremaPostOnlyEndpoints(UnitTestCase):
+    """Every whitelisted endpoint that pays a provider, writes a record, or starts a job
+    accepts POST only. frappe commits a request's writes only for an unsafe method: a GET
+    would pay the provider but roll back the Crema Log row, so the budget would never
+    see the spend. A GET also skips the CSRF check."""
+
+    def test_state_changing_endpoints_refuse_get(self):
+        from crema import api
+        from crema.crema.doctype.crema_health_word import crema_health_word
+        from crema.crema.doctype.crema_provider import crema_provider
+
+        endpoints = [
+            api.ask_api,
+            api.extract_api,
+            api.extract_async,
+            api.transform_api,
+            api.ocr_api,
+            api.grant_crema_role,
+            api.run_automation_now,
+            api.trigger_automation,
+            api.dry_run_automation,
+            api.approve_proposals,
+            api.discard_proposals,
+            api.undo_proposals,
+            api.undo_last_run,
+            crema_health_word.translate_words,
+            crema_provider.create_from_template,
+        ]
+        for fn in endpoints:
+            with self.subTest(endpoint=fn.__name__):
+                self.assertEqual(tuple(frappe.allowed_http_methods_for_whitelisted_func[fn]), ("POST",))
+
+    def test_read_only_endpoints_still_accept_get(self):
+        from crema import api
+
+        for fn in (api.get_models, api.check_provider, api.get_interfaces, api.get_guardrails, api.get_usage):
+            with self.subTest(endpoint=fn.__name__):
+                self.assertIn("GET", frappe.allowed_http_methods_for_whitelisted_func[fn])

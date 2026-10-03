@@ -987,7 +987,7 @@ context("Crema Settings", () => {
 		);
 		cy.get('.frappe-control[data-fieldname="auto_disable_unreachable"]').should(
 			"contain.text",
-			"Switch Off Services That Do Not Answer"
+			"Switch Off Services That Fail"
 		);
 		cy.get('.frappe-control[data-fieldname="default_monthly_budget_usd_per_user"]').should(
 			"contain.text",

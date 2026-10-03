@@ -908,7 +908,7 @@ def get_models(provider: str) -> list[str]:
 @frappe.whitelist()
 def check_provider(provider: str) -> dict[str, Any]:
     """Live connection status for the Connection column on the Crema Provider list.
-    {"ok": bool, "reachable": bool, "detail": str} — see client.check_connection.
+    {"ok": bool, "reachable": bool, "detail": str, "kind": str} — see client.check_connection.
     "reachable" separates an endpoint that could not be reached at all from one that
     answered but rejected or errored; health() reports all three. Deliberately not
     cached, unlike get_models/list_models: a stale "Connected" pill after a key was

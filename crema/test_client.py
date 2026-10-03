@@ -852,7 +852,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         response.raise_for_status.return_value = None
         with patch("requests.get", return_value=response):
             status = client.check_connection(TEST_PROVIDER)
-        self.assertEqual(status, {"ok": True, "reachable": True, "detail": "2 models"})
+        self.assertEqual(status, {"ok": True, "reachable": True, "detail": "2 models", "kind": "ok"})
 
     def test_check_connection_is_not_cached(self):
         """Unlike list_models, back-to-back calls must each hit the network — an
@@ -899,9 +899,8 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
     def test_check_connection_redacts_api_key_from_error_detail(self):
         """Same redact() pass log.insert already applies to error text — a provider
         error message that happens to echo the key back must not leak it into the
-        Providers panel. _fetch_models has no cfg/interface to route through
-        client._api_key (list_models/check_connection have no interface to resolve a
-        provider from), so it must feed frappe.local.crema_keys itself."""
+        Providers panel. _fetch_models reads the key through client._api_key with
+        refresh=True, so the key saved a moment ago is the one redact() strips."""
         provider = frappe.get_doc("Crema Provider", TEST_PROVIDER)
         provider.api_key = "sk-test-check-connection-key"
         provider.save(ignore_permissions=True)
@@ -1056,7 +1055,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         response.raise_for_status.return_value = None
         with patch("requests.get", return_value=response):
             status = check_provider(TEST_PROVIDER)
-        self.assertEqual(status, {"ok": True, "reachable": True, "detail": "1 models"})
+        self.assertEqual(status, {"ok": True, "reachable": True, "detail": "1 models", "kind": "ok"})
 
     # --- get_interfaces is System-Manager-only, returns {value, label} pairs for
     # interfaces.selectable() ------
@@ -1243,13 +1242,28 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
 
 class IntegrationTestCremaProviderSweep(CremaFixtureTestCase):
     """client.check_providers — the scheduled half of automatic fallback: the
-    unreachable-provider-switches-off / recovered-provider-switches-back-on state
-    machine, and the "only crema's own switch-off comes back" rule. Subclasses
+    failing-provider-switches-off / recovered-provider-switches-back-on state machine,
+    the per-kind failure limits, the last-provider guard, and the "only crema's own
+    switch-off comes back" rule. Subclasses
     CremaFixtureTestCase because it calls _ensure_provider — see the fixture-leak
     trap in crema-conventions."""
 
-    _UNREACHABLE = ([], "connection refused", False)
-    _REACHABLE = (["m1"], None, True)
+    _UNREACHABLE = ([], "connection refused", False, "unreachable")
+    _REACHABLE = (["m1"], None, True, "ok")
+    _REJECTED = ([], "HTTPError: 401", True, "auth")
+    _NO_MODELS_LIST = ([], "HTTPError: 404", True, "unsupported")
+    _RATE_LIMITED = ([], "HTTPError: 429", True, "rate_limited")
+
+    def setUp(self) -> None:
+        super().setUp()
+        notify = patch("crema.client._notify")
+        self.mock_notify = notify.start()
+        self.addCleanup(notify.stop)
+
+    def _sweep(self, result: tuple, times: int = 1) -> None:
+        with patch("crema.client._fetch_models", return_value=result), patch("frappe.db.commit"):
+            for _ in range(times):
+                client.check_providers()
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -1276,12 +1290,21 @@ class IntegrationTestCremaProviderSweep(CremaFixtureTestCase):
         settings.auto_disable_unreachable = 1 if on else 0
         settings.save(ignore_permissions=True)
 
+    def test_an_unreachable_provider_stays_on_for_two_failed_checks(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        self._sweep(self._UNREACHABLE, times=2)
+
+        row = frappe.db.get_value("Crema Provider", name, ["enabled", "check_failures"], as_dict=True)
+        self.assertEqual(row.enabled, 1)
+        self.assertEqual(row.check_failures, 2)
+
     def test_an_unreachable_enabled_provider_is_switched_off(self):
         self._set_auto_disable(True)
         name = self._provider(enabled=True)
 
-        with patch("crema.client._fetch_models", return_value=self._UNREACHABLE), patch("frappe.db.commit"):
-            client.check_providers()
+        self._sweep(self._UNREACHABLE, times=3)
 
         row = frappe.db.get_value(
             "Crema Provider", name, ["enabled", "auto_disabled", "last_check_detail"], as_dict=True
@@ -1311,8 +1334,7 @@ class IntegrationTestCremaProviderSweep(CremaFixtureTestCase):
         self._set_auto_disable(True)
         name = self._provider(enabled=True)
 
-        with patch("crema.client._fetch_models", return_value=self._UNREACHABLE), patch("frappe.db.commit"):
-            client.check_providers()
+        self._sweep(self._UNREACHABLE, times=3)
         self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 0)
 
         with patch("crema.client._fetch_models", return_value=self._REACHABLE), patch("frappe.db.commit"):
@@ -1358,7 +1380,7 @@ class IntegrationTestCremaProviderSweep(CremaFixtureTestCase):
         self._provider(enabled=True)
 
         with (
-            patch("crema.client._fetch_models", return_value=self._UNREACHABLE),
+            patch("crema.client._fetch_models", return_value=self._REJECTED),
             patch("crema.client.cache.clear_provider") as mock_clear,
             patch("frappe.db.commit"),
         ):
@@ -1378,6 +1400,69 @@ class IntegrationTestCremaProviderSweep(CremaFixtureTestCase):
             client.check_providers()
 
         mock_clear.assert_not_called()
+
+    def test_a_rejected_key_switches_the_provider_off_at_once_and_notifies(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        self._sweep(self._REJECTED)
+
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 0)
+        self.assertTrue(any(c.args[0] == name for c in self.mock_notify.call_args_list))
+
+    def test_a_service_without_a_models_list_is_never_switched_off(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        self._sweep(self._NO_MODELS_LIST, times=5)
+
+        row = frappe.db.get_value("Crema Provider", name, ["enabled", "check_failures"], as_dict=True)
+        self.assertEqual(row.enabled, 1)
+        self.assertEqual(row.check_failures, 0)
+
+    def test_a_rate_limited_service_is_never_switched_off(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        self._sweep(self._RATE_LIMITED, times=5)
+
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 1)
+
+    def test_a_passing_check_resets_the_failure_count(self):
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+
+        self._sweep(self._UNREACHABLE, times=2)
+        self._sweep(self._REACHABLE)
+        self._sweep(self._UNREACHABLE, times=2)
+
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 1)
+
+    def test_the_last_enabled_provider_is_never_switched_off(self):
+        """Switching off the only provider on gains nothing: every call would then fail
+        with "not configured" instead of the provider's own error. A System Manager is
+        told once, when the failure limit is reached."""
+        self._set_auto_disable(True)
+        name = self._provider(enabled=True)
+        others = frappe.get_all("Crema Provider", filters={"enabled": 1, "name": ["!=", name]}, pluck="name")
+        for other in others:
+            frappe.db.set_value("Crema Provider", other, "enabled", 0, update_modified=False)
+
+        self._sweep(self._REJECTED, times=3)
+
+        self.assertEqual(frappe.db.get_value("Crema Provider", name, "enabled"), 1)
+        self.assertEqual(sum(1 for c in self.mock_notify.call_args_list if c.args[0] == name), 1)
+
+
+class UnitTestCremaHealthFailureKind(UnitTestCase):
+    """client._failure_kind — the name the sweep gives an answered but failed check."""
+
+    def test_each_status_maps_to_its_kind(self):
+        cases = {401: "auth", 403: "auth", 429: "rate_limited", 500: "server_error", 503: "server_error"}
+        cases.update({404: "unsupported", 405: "unsupported", 400: "unsupported", None: "unsupported"})
+        for status, kind in cases.items():
+            with self.subTest(status=status):
+                self.assertEqual(client._failure_kind(status), kind)
 
 
 class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):

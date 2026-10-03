@@ -296,8 +296,12 @@ All System Manager only, all `POST /api/method/<name>`:
 | `crema.api.get_models` | One provider's model list. Feeds the Model autocomplete in Crema Settings. |
 | `crema.api.check_provider` | One live connection check for a provider. Feeds the Providers list's Connection badge. |
 | `crema.api.grant_crema_role` | Adds the `Crema User` role to a user. System Manager only. |
-| `crema.api.get_usage` | Month-to-date spend and budget per interface and per provider. Feeds the Usage column. |
+| `crema.api.get_usage` | Month-to-date spend and budget per interface. Feeds the Usage column. |
 | `crema.api.run_automation_now` | Enqueue one automation task run. Backs the Run Now button — see [automation.md](automation.md). |
+| `crema.api.approve_proposals` | Approve one or more Crema Proposal rows (`names`: a list or a JSON list). Each row runs alone; returns the failures as `[{"name", "error"}]`. Backs the Approve button and the list's bulk action — see [automation.md](automation.md). |
+| `crema.api.discard_proposals` | Discard one or more Crema Proposal rows. Same arguments and return as `approve_proposals`. |
+| `crema.api.undo_proposals` | Reverse one or more approved Crema Proposal rows: delete what approving them created and set them back to Pending. Same arguments and return as `approve_proposals`. |
+| `crema.api.undo_last_run` | Delete every record the last run of one automation task (`task`) created. Records it updated stay for manual review. Backs the Undo Last Run button. |
 
 ### Rate limits
 
@@ -462,15 +466,16 @@ Automation Task), and a **Monitoring** section (Crema Log, Crema Usage).
 The workspace home shows three number cards, all-time totals: **Crema Calls**, **Crema
 Cost (USD)**, and **Crema Blocked**.
 
-The **Crema Log** list shows the interface name as the row title, with the user, the
-status, and the cost beside it. Use the **Interface** and **Status** filters at the top
-of the list to narrow it. On one row, a **Diagnostics** section holds the model, the
+The **Crema Log** list shows the use case name as the row title, with the user, the
+status, and the cost beside it. Use the **Use Case** and **Status** filters at the top
+of the list to narrow it. On one row, a **Details** section holds the model, the
 provider, the prompt hash, the duration, and the per-call token counts. It opens
 automatically for a `Blocked` row, an `Error` row, or a row with more than one provider
 call.
 
-The **Crema Usage** report filters by From Date, To Date, Interface, and Status
-(`Success`/`Cached`/`Blocked`/`Error`), and groups by Interface, Model, User, or Day.
+The **Crema Usage** report filters by From Date, To Date, Use Case, AI Service, and
+Status (`Success`/`Cached`/`Blocked`/`Error`), and groups by Use Case, AI Service, Model,
+User, or Day.
 Columns: Calls, Cached, Blocked, Errors, Prompt Tokens, Completion Tokens, Cost (USD),
 and Avg Duration (ms), with a total row and a bar chart. See
 [security.md#budgets](security.md#budgets) for the matching Usage column in Crema

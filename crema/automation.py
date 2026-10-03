@@ -317,7 +317,7 @@ def run_task(
 
     # Built here, before anything can fail — every _record() call below passes it, so
     # last_written_json always describes *this* run, including a run that fails before
-    # it writes anything. See PLAN.md's "Undo a run".
+    # it writes anything. See docs/automation.md's "Undo a run".
     written = _Written(doc.name)
 
     # Stamp last_run first and commit: a task that explodes must not hot-loop on tick().
@@ -612,7 +612,7 @@ class _SourceRead(NamedTuple):
 @dataclass
 class _Written:
     """What one run's writers actually did, for `last_written_json` / `created_json` —
-    see PLAN.md's "Undo a run" item. Threaded as an accumulator, not a return value,
+    see docs/automation.md's "Undo a run" item. Threaded as an accumulator, not a return value,
     because `_plan_and_execute` may call `_execute` twice (a replan) and both attempts'
     writes belong in one list.
 
@@ -1180,7 +1180,7 @@ def _propose(doc, mapping: dict, entries: list[tuple[str, dict, float | None]]) 
 
     A duplicate fingerprint — this task, this source, this exact payload, seen before,
     approved or not — inserts nothing and is not an error: that is the crash-recovery
-    case PLAN.md item 1 asks for. Any other insert failure IS an error: unlike a skipped
+    case. Any other insert failure IS an error: unlike a skipped
     `_upsert` row, a lost proposal is lost work, so it propagates into
     `_plan_and_execute`/`_run_inside` and the run records Failed, same as an `_upsert`
     failure today.
@@ -1316,7 +1316,7 @@ def _undo_created(created: list[list[str]]) -> tuple[list[list[str]], list[str]]
 
 def undo_last_run(task: str) -> dict[str, Any]:
     """Delete every record the task's last run created; leave every record it updated
-    alone, for a person to review by hand — see PLAN.md's "Undo a run". Reached from
+    alone, for a person to review by hand — see docs/automation.md's "Undo a run". Reached from
     `api.undo_last_run`, which already holds the System Manager fence.
 
     Runs inside the task's own sandbox, as its own isolation user, the same as

@@ -621,7 +621,7 @@ def configure(
     """Set an interface's model/provider/monthly_budget_usd on its Crema Model
     Assignment row, in-process. The supported alternative to a migration hand-rolling
     `settings.save()` for its reconcile side effect, then walking `settings.assignments`
-    by fieldname (see PLAN.md item 9).
+    by fieldname.
 
     Raises CremaConfigError if `interface` isn't in interfaces.names(). A row missing
     entirely (a brand-new PREDEFINED or app-registered name never saved before) is
@@ -1174,7 +1174,7 @@ def undo_proposals(names: str | list[str]) -> list[dict]:
 @frappe.whitelist(methods=["POST"])
 def undo_last_run(task: str) -> dict:
     """Delete every record a Crema Automation Task's last run created, leaving every
-    record it updated for manual review — see PLAN.md's "Undo a run"."""
+    record it updated for manual review — see docs/automation.md's "Undo a run"."""
     frappe.only_for("System Manager")
     from crema import automation
 

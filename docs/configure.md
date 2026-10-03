@@ -184,7 +184,9 @@ it.
 1. Drag a row to change the order the checks run in.
 2. Set each row's **Action**: `Off`, `Log Only` (record on the Crema Log row,
    proceed), `Retry Once` (the Reply Check only; the other checks treat it as
-   `Block`), or `Block`.
+   `Block`), or `Block`. On a Hide row, every Action other than `Off` masks the same
+   way. The Action sets only what happens when something cannot be masked, for
+   example an image: `Log Only` records it and sends the call, `Block` stops the call.
 3. Leave **Use Cases** empty to run the row for every use case, or enter a
    comma-separated list of use-case keys to limit it.
 4. Save.

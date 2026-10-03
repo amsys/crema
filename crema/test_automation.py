@@ -2801,7 +2801,7 @@ class IntegrationTestCremaAutomationProposals(CremaFixtureTestCase):
 
 
 class IntegrationTestCremaAutomationUndo(CremaFixtureTestCase):
-    """`_Written`, `_stamp`, and `undo_last_run` — see PLAN.md's "Undo a run". The
+    """`_Written`, `_stamp`, and `undo_last_run` — see docs/automation.md's "Undo a run". The
     `Crema Proposal` side of undo lives in IntegrationTestCremaAutomationProposals
     instead, next to apply_proposal/discard_proposal."""
 

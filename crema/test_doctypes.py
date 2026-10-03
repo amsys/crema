@@ -1380,7 +1380,7 @@ class IntegrationTestCremaGuardrails(CremaFixtureTestCase):
 
 class IntegrationTestCremaConfigure(CremaFixtureTestCase):
     """crema.api.configure() — the supported code-side setter for one interface's
-    model/provider/monthly_budget_usd (PLAN.md item 9)."""
+    model/provider/monthly_budget_usd."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1434,7 +1434,8 @@ class IntegrationTestCremaConfigure(CremaFixtureTestCase):
 
 class IntegrationTestCremaTesting(CremaFixtureTestCase):
     """crema.testing.seed_provider — the supported bootstrap a consuming app's own
-    before_tests calls instead of hand-building a Crema Provider row (PLAN.md item 8).
+    before_tests calls instead of hand-building a Crema Provider row (docs/use.md,
+    "Testing an app that uses crema").
     No explicit cleanup beyond the per-test savepoint: seed_provider never commits."""
 
     def test_seed_provider_is_idempotent(self):
@@ -1538,7 +1539,7 @@ class IntegrationTestCremaLogMeta(IntegrationTestCase):
 
 class IntegrationTestCremaLogChain(CremaFixtureTestCase):
     """CremaLog.before_insert's hash chain and crema.log.verify_chain — tamper-evidence
-    for the audit log (PLAN.md, Done: tamper-evident log chain).
+    for the audit log (docs/security.md, The audit log).
 
     Subclasses CremaFixtureTestCase for its per-test savepoint alone (no
     _ensure_user/_ensure_provider/_ensure_interface call here): verify_chain walks the

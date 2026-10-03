@@ -13,11 +13,11 @@
 
 frappe.ui.form.on("Crema Provider", {
 	refresh(frm) {
-		warn_if_referenced(frm);
+		crema_warn_if_referenced(frm);
 	},
 });
 
-function warn_if_referenced(frm) {
+function crema_warn_if_referenced(frm) {
 	if (frm.is_new()) return;
 	frappe.call({
 		method: "crema.crema.doctype.crema_provider.crema_provider.get_settings_references",

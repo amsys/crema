@@ -23,7 +23,7 @@ const connection_cache = {};
 const pending = new Set();
 let list = null;
 
-function prefetch(listview) {
+function crema_prefetch(listview) {
 	// before_render is invoked as this.settings.before_render(), so `this` inside it is
 	// the settings object, not the list — hence the listview captured in onload.
 	if (!listview) return;
@@ -71,7 +71,7 @@ frappe.listview_settings["Crema Provider"] = {
 	},
 
 	before_render() {
-		prefetch(list);
+		crema_prefetch(list);
 	},
 
 	get_indicator(doc) {

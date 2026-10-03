@@ -942,7 +942,7 @@ context("Crema Settings", () => {
 		cy.contains("You do not have the Crema User role").should("not.exist");
 	});
 
-	// load_default_models fetches Default Model's data from Default Provider (an
+	// crema_load_default_models fetches Default Model's data from Default Provider (an
 	// Autocomplete with no built-in source of its own) and, per CLAUDE.md's "flag
 	// uncertainty" rule for a model that has drifted out of the provider's list, paints an
 	// inline red warning rather than failing silently.
@@ -1069,7 +1069,7 @@ context("Crema Guardrails", () => {
 	});
 
 	// The brief used to be the grid's own field description, rendered below the grid
-	// under a redundant "Guardrails" heading — render_check_list now puts it first,
+	// under a redundant "Guardrails" heading — crema_render_check_list now puts it first,
 	// inside the same HTML field, above the one-liners it introduces.
 	it("puts the brief above the one-liners and drops the Guardrails heading", () => {
 		cy.get('[data-fieldname="guardrail_help"] > div')
@@ -1095,7 +1095,7 @@ describe("Crema Provider list", () => {
 	});
 
 	// Connection is painted by a listview_settings formatter after one
-	// prefetch-then-refresh pass (crema_provider_list.js) — Address is an ordinary
+	// crema_prefetch-then-refresh pass (crema_provider_list.js) — Address is an ordinary
 	// list column, so its header must be there whether or not a provider exists.
 	it("shows the Address column", () => {
 		cy.get(".list-row-head").contains("Address").should("exist");

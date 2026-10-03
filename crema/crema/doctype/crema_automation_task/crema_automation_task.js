@@ -48,10 +48,7 @@ function crema_last_written(frm) {
 
 function crema_write_list_html(pairs) {
 	return pairs
-		.map(
-			([doctype, name]) =>
-				`<li>${frappe.utils.get_form_link(doctype, name, true, name)}</li>`
-		)
+		.map(([doctype, name]) => `<li>${frappe.utils.get_form_link(doctype, name, true)}</li>`)
 		.join("");
 }
 

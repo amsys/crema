@@ -1,8 +1,8 @@
 // Copyright (c) 2026, Crema and contributors
 // For license information, please see license.txt
 
-/* global crema_confirm_records, crema_diff_table, crema_proposal_record */
-// All three defined once in crema.bundle.js (app_include_js, so already loaded here).
+/* global crema_confirm_records, crema_diff_table, crema_proposal_record, crema_show_error */
+// All four defined once in crema.bundle.js (app_include_js, so already loaded here).
 
 // hide_name_column, same reason as Crema Log's own list view (see crema_log_list.js):
 // this doctype names rows by hash too, and a column of opaque hashes tells a reader
@@ -86,10 +86,18 @@ function crema_run_bulk_proposal_action(listview, method) {
 			if (failed.length) {
 				frappe.msgprint({
 					title: __("Some rows failed"),
-					message: failed.map((row) => `${row.name}: ${row.error}`).join("<br>"),
+					message: failed
+						.map(
+							(row) =>
+								`${frappe.utils.escape_html(row.name)}: ${frappe.utils.escape_html(
+									row.error
+								)}`
+						)
+						.join("<br>"),
 					indicator: "red",
 				});
 			}
 		},
+		error: crema_show_error,
 	});
 }

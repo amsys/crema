@@ -14,7 +14,7 @@
 // edit/delete (frappe's own bulk_update/delete_items endpoints, after a confirm dialog
 // listing every affected record) all go through ordinary desk paths, fenced as the
 // session user — the server is only ever asked to run the LLM (crema.api.ask_api /
-// extract_api / transform_api). See the "implement-in-desk-interface" plan for why: a
+// extract_async / transform_api). See the "implement-in-desk-interface" plan for why: a
 // server-side endpoint doing this would run under the interface's isolation user, not
 // the desk user who clicked. The create/edit/delete affordance checks below
 // (frappe.model.can_create, frappe.perm.has_perm) are UI honesty, not the fence — the
@@ -1072,7 +1072,7 @@ function crema_widen_if_empty(doctype, filters) {
 
 	const giveUp = () =>
 		frappe.show_alert({
-			message: __('Nothing contains "{0}" in this list.', [term]),
+			message: __('Nothing contains "{0}" in this list.', [frappe.utils.escape_html(term)]),
 			indicator: "orange",
 		});
 
@@ -1095,7 +1095,7 @@ function crema_widen_if_empty(doctype, filters) {
 						label(failed.fieldname),
 						label(field),
 						exact ? "is" : "contains",
-						term,
+						frappe.utils.escape_html(term),
 					])
 				);
 				return;
@@ -1124,7 +1124,7 @@ function crema_widen_if_empty(doctype, filters) {
 					__('No match in {0}. Showing rows where {1} contains "{2}".', [
 						label(failed.fieldname),
 						label(best.field),
-						best.word,
+						frappe.utils.escape_html(best.word),
 					])
 				);
 			});
@@ -1524,7 +1524,7 @@ function crema_open_dialog(doctype, prefill) {
 	const can_create = !crema_blocked(doctype) && frappe.model.can_create(doctype);
 
 	// Instruction first, upload second: the instruction isn't an alternative to the
-	// upload, it steers it (on_success below passes it straight into extract_api) — so
+	// upload, it steers it (on_success below passes it straight into extract_async) — so
 	// the layout says that, instead of a label reading "Or ask a question" that implies
 	// they're two unrelated choices.
 	const dialog = new frappe.ui.Dialog({

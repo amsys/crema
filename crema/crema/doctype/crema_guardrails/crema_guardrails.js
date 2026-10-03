@@ -18,7 +18,7 @@ frappe.ui.form.on("Crema Guardrails", {
 					(value) => labels[value] || value
 				);
 				grid.refresh();
-				render_check_list(frm, options);
+				crema_render_check_list(frm, options);
 			})
 			.catch(() => {}); // fall through to the raw meta options, same as the task picker
 	},
@@ -30,16 +30,7 @@ frappe.ui.form.on("Crema Guardrails", {
 // its module is listed the same way. This whole block replaces the grid's own field
 // description, which frappe would otherwise render below the grid, ragged-right, under
 // its own "Guardrails" label — none of which is ours to control there.
-const GUARDRAILS_BRIEF =
-	"Every request runs through these checks, top to bottom. Drag a row to change the " +
-	"order, add a row to run a check again, delete a row to stop running it (the same " +
-	"as Off). Checks that undo their work on the reply do it in reverse order, but only " +
-	"for the rows that ran on the way in — so put a Hide row above anything that must " +
-	"see masked text, including the AI Guard. Audio is not checked or masked before it " +
-	"is sent: for Transcribe, only a Hide guardrail set to Block has an effect (it " +
-	"refuses the call).";
-
-function render_check_list(frm, options) {
+function crema_render_check_list(frm, options) {
 	const items = options
 		.filter((o) => o.help)
 		.map(
@@ -51,7 +42,9 @@ function render_check_list(frm, options) {
 		.join("");
 	frm.get_field("guardrail_help").html(
 		`<div class="small" style="text-align: justify">
-			<p style="margin-bottom: var(--margin-sm)">${__(GUARDRAILS_BRIEF)}</p>
+			<p style="margin-bottom: var(--margin-sm)">${__(
+				"Every request runs through these checks, top to bottom. Drag a row to change the order, add a row to run a check again, delete a row to stop running it (the same as Off). Checks that undo their work on the reply do it in reverse order, but only for the rows that ran on the way in — so put a Hide row above anything that must see masked text, including the AI Guard. Audio is not checked or masked before it is sent: for Transcribe, only a Hide guardrail set to Block has an effect (it refuses the call)."
+			)}</p>
 			${items}
 		</div>`
 	);

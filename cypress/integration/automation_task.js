@@ -8,6 +8,10 @@ context("Crema Automation Task form", () => {
 	// A second task rather than a second source row on TASK: "Update the Records It Read"
 	// is refused unless the task has exactly one Document Query source.
 	const FILTERED_TASK = "_cypress_crema_filtered_task";
+	// A third task carrying a malicious record name in last_written_json, for the Undo
+	// Last Run confirm dialog test below — crema_write_list_html must escape it.
+	const XSS_TASK = "_cypress_crema_xss_task";
+	const XSS_NAME = "<img src=x onerror=window.__xss=1>";
 
 	before(() => {
 		cy.visit("/login");
@@ -52,6 +56,30 @@ context("Crema Automation Task form", () => {
 				interface: "complex",
 				instruction: "Summarise the open items.",
 				action: "No Changes",
+			},
+			true
+		);
+		cy.insert_doc(
+			"Crema Automation Task",
+			{
+				task_name: XSS_TASK,
+				enabled: 0,
+				trigger: "Schedule",
+				schedule_preset: "Daily 03:00",
+				sources: [
+					{
+						source_type: "Document Query",
+						source_doctype: "Contact",
+						source_filters: "[]",
+						source_limit: 50,
+					},
+				],
+				interface: "complex",
+				instruction: "Create a record per contact.",
+				action: "Create or Update Records",
+				// A past run's write summary — never a real record, this doctype/name pair
+				// only has to render in the confirm dialog below.
+				last_written_json: JSON.stringify({ created: [["Contact", XSS_NAME]] }),
 			},
 			true
 		);
@@ -258,8 +286,23 @@ context("Crema Automation Task form", () => {
 		);
 	});
 
+	// crema_write_list_html must escape a record name before handing it to
+	// get_form_link, or a name holding markup runs as HTML inside the confirm dialog.
+	it("shows a malicious record name as text in the Undo Last Run confirm dialog", () => {
+		cy.visit(`/app/crema-automation-task/${XSS_TASK}`);
+		cy.wait("@interfaces");
+		cy.window().then((win) => {
+			win.__xss = undefined;
+		});
+
+		cy.findByRole("button", { name: "Undo Last Run" }).click();
+		cy.get(".modal-body").should("contain.text", XSS_NAME);
+		cy.window().its("__xss").should("eq", undefined);
+	});
+
 	after(() => {
 		cy.remove_doc("Crema Automation Task", TASK);
 		cy.remove_doc("Crema Automation Task", FILTERED_TASK);
+		cy.remove_doc("Crema Automation Task", XSS_TASK);
 	});
 });

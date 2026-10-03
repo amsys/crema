@@ -11,7 +11,7 @@ from frappe.utils import validate_email_address
 
 
 def after_install() -> None:
-    """Idempotently create the 'Crema User' role, then seed interfaces (which also
+    """Create the 'Crema User' role (safe to re-run), then seed interfaces (which also
     seeds the default isolation user — see sync_interfaces), the Crema Automation Task
     interface picker's options (sync_interface_options), the guardrail picker's options
     (sync_guardrail_options), the default guardrail rows (sync_guardrails), and the
@@ -56,7 +56,7 @@ def _isolation_user_email() -> str:
 
 
 def _ensure_isolation_user() -> str:
-    """Idempotently create a dedicated, fenced isolation user — `crema@<site>` — with
+    """Create (safe to re-run) a dedicated, fenced isolation user — `crema@<site>` — with
     only the 'Crema User' role and no password (send_welcome_email = 0 and no password
     set means it can never log in; it exists purely as a sandbox identity). This is
     what makes "Default Isolation User" pre-filled out of the box instead of a hard
@@ -260,7 +260,7 @@ _DASHBOARD_CHARTS = [
 
 
 def sync_dashboard() -> None:
-    """Idempotently create the three Number Cards and two Dashboard Charts the Crema
+    """Create (safe to re-run) the three Number Cards and two Dashboard Charts the Crema
     workspace links to (crema/crema/workspace/crema/crema.json's number_cards/charts).
 
     The cards are all-time totals — Number Card filters_json takes literal filter values,

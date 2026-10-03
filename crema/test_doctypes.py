@@ -166,7 +166,7 @@ class IntegrationTestCremaProvider(CremaFixtureTestCase):
                 frappe.delete_doc("Crema Provider", name, ignore_permissions=True, force=True)
 
     def test_create_from_template_enabled_string_zero_is_treated_as_disabled(self):
-        """The exact footgun frappe.utils.sbool guards against: a plain `bool` param on
+        """The exact trap frappe.utils.sbool guards against: a plain `bool` param on
         a whitelisted method with `from __future__ import annotations` gets no
         automatic string coercion, and the non-empty string "0" is truthy in Python."""
         from crema.crema.doctype.crema_provider.crema_provider import create_from_template
@@ -1427,7 +1427,7 @@ class IntegrationTestCremaConfigure(CremaFixtureTestCase):
         self.assertEqual(row.model, "second-model")
         self.assertEqual(row.provider, TEST_PROVIDER)  # untouched, not cleared
 
-        api.configure("translation", model="second-model")  # idempotent
+        api.configure("translation", model="second-model")  # safe to re-run
         row = next(r for r in frappe.get_single("Crema Settings").assignments if r.interface == "translation")
         self.assertEqual(row.model, "second-model")
 

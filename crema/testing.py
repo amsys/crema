@@ -32,7 +32,7 @@ def seed_provider(
     CremaConfigError — client._complete is then the only thing a caller's test needs
     to mock.
 
-    Idempotent and non-overriding: a `name` provider that already exists is left as
+    Safe to re-run and non-overriding: a `name` provider that already exists is left as
     is, and `set_defaults` only fills a blank Crema Settings default, never replaces
     one already set — calling this twice, or on a site an admin already configured by
     hand, changes nothing. Clears the disabled kill switch so _resolve does not raise

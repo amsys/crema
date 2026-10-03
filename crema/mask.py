@@ -33,6 +33,22 @@ answer (see _hide_literals) — both look identical to a dumb regex once restore
 Detection is deliberately tuned to over-mask: because reversal is exact, a false
 positive only costs the model some comprehension. A false negative ships a real name
 to a third party, permanently. See the ceilings called out at each pass below.
+
+Grouping. Values that name one entity share one entity id, so the legend can tell the
+model they are the same thing. Three tiers, from exact to best-effort:
+1. A record's own terms (crema.terms) share one entity by construction.
+2. A structured identifier's spelling variants (a phone number with and without
+   spaces) share one entity through _pattern_entity_key.
+3. A capitalised-sweep name joins an existing NAME entity when its words contain, or
+   are contained in, that entity's words, or when the spelling is close
+   (Vault.name_entity_key). Over-merging costs comprehension only: restore is exact
+   either way, because tokens, not values, identify an entity.
+
+Collision guards. Two rules keep a token from ever restoring to the wrong value:
+1. Text in the input that already looks like a token is masked first, before any real
+   token is minted (_hide_literals).
+2. A value that contains `"` or `\\` never gets a token, so a restore cannot break a
+   JSON-mode reply (Vault.token_for).
 """
 
 from __future__ import annotations
@@ -70,7 +86,7 @@ def _map_outside_tokens(text: str, fn) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Vault — the in-memory index. One per client._complete call. Never logged, never
+# Vault — the in-memory index. One per guardrail row per guardrails.run call (ctx.slot). Never logged, never
 # persisted, never sent to a provider; it dies with the call that built it.
 # ---------------------------------------------------------------------------
 
@@ -86,7 +102,7 @@ class Vault:
     assignment over a same-named match the capitalised sweep finds later.
 
     `allowed`: values never masked, however matched — e.g. the site's own company
-    name, so it isn't masked out of every prompt (see client._allowed_names).
+    name, so it isn't masked out of every prompt (see guardrails._allowed_names).
     """
 
     def __init__(self, terms: Iterable = (), allowed: Iterable[str] = ()):
@@ -130,8 +146,8 @@ class Vault:
         return token
 
     def _register_term_group(self, group) -> None:
-        """One record's surface forms share one entity, by construction — the exact
-        tier of grouping (see mask.py's module docstring / crema.terms)."""
+        """One record's surface forms share one entity, by construction — grouping tier
+        1 in the module docstring (see also crema.terms)."""
         eid = self._new_entity()
         for value in group.values:
             if not value or value in self.allowed or '"' in value or "\\" in value:
@@ -145,7 +161,7 @@ class Vault:
     def token_for(self, value: str, label: str, entity_key: str | None = None) -> str | None:
         """A token for `value`, or None to leave it unmasked: allowlisted, or
         containing a `"`/`\\` that would corrupt a JSON-mode response on restore (see
-        the module docstring's collision guards — no pattern below can itself match a
+        collision guard 2 in the module docstring — no pattern below can itself match a
         quote, this only guards a future one that could)."""
         if value in self.allowed or '"' in value or "\\" in value:
             return None
@@ -216,7 +232,7 @@ _SENSITIVE: list[tuple[re.Pattern[str], str]] = [
 
 def _pattern_entity_key(value: str, label: str) -> str | None:
     """Deterministic grouping for a structured identifier's own spelling variants —
-    the second tier in mask.py's module docstring. IBAN/CARD/NID/IP get no
+    grouping tier 2 in the module docstring. IBAN/CARD/NID/IP get no
     normalisation here: same string -> same token already, via Vault.by_value, and a
     different string is a different identifier, not a variant of one."""
     if label == "PHONE":
@@ -441,7 +457,7 @@ def _hide_sweep(text: str, vault: Vault) -> str:
 
 def _hide_literals(text: str, vault: Vault) -> str:
     """Mask any [[LABEL_n]]-shaped text already present in the INPUT, before any real
-    token is minted — the first collision guard from the module docstring. Without
+    token is minted — collision guard 1 in the module docstring. Without
     this, a document that literally contains '[[NAME_1]]' could later collide with (or
     be mistaken for) a token this module assigns for a real name."""
 
@@ -464,7 +480,7 @@ def hide(
 
     `patterns`/`sweep` select the detection profile: the defaults are the PI profile
     (structured identifiers plus the capitalised-name sweep); the PHI guardrail passes
-    _PHI_SENSITIVE with sweep=False (health keywords name no people)."""
+    phi_patterns(<site words>) with sweep=False (health keywords name no people)."""
     if not text:
         return text
     text = _hide_literals(text, vault)

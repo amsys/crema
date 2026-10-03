@@ -16,7 +16,8 @@ assignment row itself is removed by CremaSettings._reconcile_assignments on this
 migrate's after_migrate hook.
 
 Also drops the "Checked By" Property Setter (Crema Guardrail.guard_interface): that
-field is gone, replaced by guard_provider/guard_model.
+field is gone. guard_provider/guard_model replaced it, and the later removal of the AI
+Guard dropped those two as well.
 """
 
 from __future__ import annotations

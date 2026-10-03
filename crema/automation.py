@@ -1155,7 +1155,7 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Stages 3 & 4 — EXTRACT (LLM) and UPSERT (pure code, permission-fenced)
+# Stages 3 & 4 — EXTRACT (LLM) and INSERT OR UPDATE (pure code, permission-fenced)
 # ---------------------------------------------------------------------------
 
 
@@ -1474,7 +1474,7 @@ def _upsert(
     allowed_names: set[str] | None = None,
     written: _Written | None = None,
 ) -> dict[str, int]:
-    """Find-or-create one record per row, then (optionally) upsert one child row from the
+    """Find-or-create one record per row, then (optionally) insert or update one child row from the
     same row. Plain `doc.save()` — permissions are the isolation user's. Returns counts.
     `written`, if given, is appended with each saved record's (doctype, name) — see
     `_Written`."""
@@ -1500,7 +1500,7 @@ def _upsert(
         if match and not child and _unchanged(doc, values):
             # Skipping the save is what stops an incremental Update Source task from
             # bumping `modified` on every run and re-reading its own output forever. It
-            # also makes the replan-after-partial-failure path idempotent.
+            # also makes the replan-after-partial-failure path safe to re-run.
             counts["unchanged"] += 1
             continue
 

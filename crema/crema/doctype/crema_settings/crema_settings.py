@@ -14,6 +14,7 @@ from crema import cache, interfaces
 from crema.crema.doctype.crema_model_assignment.crema_model_assignment import validate_isolation_user
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import cint, flt
 
 
 class CremaSettings(Document):
@@ -29,7 +30,16 @@ class CremaSettings(Document):
             row.validate()
         validate_isolation_user(self.default_isolation_user, "Default Isolation User")
         self._validate_provider_isolation_pairing()
+        self._validate_documents()
         self._warn_missing_models()
+
+    def _validate_documents(self) -> None:
+        """The Documents section: a page limit of at least one page, and a confidence
+        threshold that is a percentage."""
+        if cint(self.ocr_max_pages) < 1:
+            frappe.throw(_("Longest Document (pages) must be 1 or more."))
+        if not 0 <= flt(self.ocr_min_confidence) <= 100:
+            frappe.throw(_("Use the Advanced Reader Below must be between 0 and 100."))
 
     def _validate_provider_isolation_pairing(self) -> None:
         """A provider and an isolation user are required together — evaluated on

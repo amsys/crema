@@ -18,6 +18,7 @@ import frappe
 from crema import _ocr, cache, sandbox
 from crema._json import strip_fence
 from crema.api import ocr
+from crema.exceptions import CremaBlockedError
 from crema.test_fixtures import (
     TEST_ISOLATION_USER,
     TEST_PROVIDER,
@@ -115,6 +116,8 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
         _clear_defaults()  # else the real site's default_provider could resolve
         # "advanced_ocr" out from under test_low_confidence_no_advanced_ocr_returns_as_is
         _drop_advanced_ocr()  # every test starts with a known, uncached-stale state
+        # The escalation tests assume the shipped 70 % threshold, not this site's value.
+        self._set_documents(ocr_min_confidence=70, ocr_max_pages=20, ocr_over_limit="Refuse")
 
     def test_text_pdf_takes_text_path(self):
         """>=100 extractable chars -> the extracted text is sent as text content, no images."""
@@ -154,6 +157,64 @@ class IntegrationTestCremaOcr(CremaFixtureTestCase):
 
         self.assertEqual(mock_complete.call_count, 2)
         self.assertEqual(result, {"text": "clear", "confidence": 0.92, "escalated": True})
+
+    def _set_documents(self, **values) -> None:
+        """Set fields of Crema Settings' Documents section for one test, and put the
+        stored row back exactly afterwards — a missing row stays missing."""
+        for field, value in values.items():
+            old = frappe.db.sql(
+                "select value from `tabSingles` where doctype = 'Crema Settings' and field = %s", field
+            )
+            frappe.db.set_single_value("Crema Settings", field, value)
+            self.addCleanup(self._restore_document_field, field, old[0][0] if old else None, bool(old))
+
+    @staticmethod
+    def _restore_document_field(field: str, value, existed: bool) -> None:
+        if existed:
+            frappe.db.set_single_value("Crema Settings", field, value)
+            return
+        frappe.db.sql("delete from `tabSingles` where doctype = 'Crema Settings' and field = %s", field)
+        frappe.clear_document_cache("Crema Settings", "Crema Settings")
+
+    def test_pdf_over_the_page_limit_is_refused_before_any_call(self):
+        self._set_documents(ocr_max_pages=2, ocr_over_limit="Refuse")
+        with patch("crema.client._complete") as mock_complete:
+            with self.assertRaises(CremaBlockedError):
+                ocr(_scanned_pdf_bytes(pages=3))
+        mock_complete.assert_not_called()
+
+    def test_read_first_pages_sends_only_the_pages_within_the_limit(self):
+        self._set_documents(ocr_max_pages=2, ocr_over_limit="Read the First Pages")
+        canned = '{"text": "scan", "confidence": 0.9}'
+        with patch("crema.client._complete", return_value=canned) as mock_complete:
+            ocr(_scanned_pdf_bytes(pages=3))
+
+        user_content = mock_complete.call_args[0][1][-1]["content"]
+        self.assertEqual(len([p for p in user_content if p.get("type") == "image_url"]), 2)
+
+    def test_min_confidence_setting_controls_escalation(self):
+        """0.6 escalates under the default 70 %, but not once the threshold is 50 %."""
+        self._set_documents(ocr_min_confidence=50)
+        _ensure_interface("advanced_ocr", model="test-model-advanced")
+        middling = '{"text": "fair", "confidence": 0.6}'
+        with patch("crema.client._complete", return_value=middling) as mock_complete:
+            result = ocr(_scanned_pdf_bytes())
+
+        self.assertEqual(mock_complete.call_count, 1)
+        self.assertFalse(result["escalated"])
+
+    def test_escalation_keeps_the_guardrails_of_the_requested_interface(self):
+        """advanced_ocr lends its provider and model; the guardrail rows stay those of
+        the interface the caller asked for, since the same document is sent again."""
+        _ensure_interface("advanced_ocr", model="test-model-advanced")
+        low = '{"text": "blurry", "confidence": 0.3}'
+        high = '{"text": "clear", "confidence": 0.92}'
+        with patch("crema.client._complete", side_effect=[low, high]) as mock_complete:
+            ocr(_scanned_pdf_bytes())
+
+        second_cfg = mock_complete.call_args_list[1][0][0]
+        self.assertEqual(second_cfg["model"], "test-model-advanced")
+        self.assertEqual(second_cfg["requested"], "ocr")
 
     def test_low_confidence_no_advanced_ocr_returns_as_is(self):
         """confidence < 0.7 and advanced_ocr NOT configured -> no retry, escalated=False."""

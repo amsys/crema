@@ -940,6 +940,27 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         self.assertIn("enabled", str(ctx.exception))
 
 
+class IntegrationTestCremaSettingsDocuments(CremaFixtureTestCase):
+    """CremaSettings._validate_documents: the page limit and the confidence threshold
+    of the Documents section."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        frappe.set_user("Administrator")
+
+    def test_a_page_limit_below_one_is_refused(self):
+        settings = frappe.get_single("Crema Settings")
+        settings.ocr_max_pages = 0
+        with self.assertRaises(frappe.ValidationError):
+            settings.save(ignore_permissions=True)
+
+    def test_a_confidence_above_one_hundred_percent_is_refused(self):
+        settings = frappe.get_single("Crema Settings")
+        settings.ocr_min_confidence = 120
+        with self.assertRaises(frappe.ValidationError):
+            settings.save(ignore_permissions=True)
+
+
 class IntegrationTestCremaSettingsReconcile(CremaFixtureTestCase):
     """CremaSettings.validate's cross-row rules: the assignments child table always
     matches interfaces.PREDEFINED, in order — add a missing name, drop an unknown

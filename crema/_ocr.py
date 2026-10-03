@@ -26,10 +26,13 @@ from crema import client
 from crema import log as _log
 from crema._json import strip_fence
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
+from frappe.utils import cint, flt
 
 _MAX_SIDE_PX = 1568  # optimal long-edge resolution for vision models
 _TEXT_PDF_MIN_CHARS = 100  # minimum extractable chars to treat a PDF as "text", not scanned
-_MIN_CONFIDENCE = 0.7
+# Defaults for the Documents section of Crema Settings, used while a field is empty.
+_DEFAULT_MAX_PAGES = 20
+_DEFAULT_MIN_CONFIDENCE = 70.0  # percent
 
 _JSON_INSTRUCTION = 'Output ONLY JSON `{"text": "<extracted text>", "confidence": <0-1>}`.'
 
@@ -92,24 +95,48 @@ def _load_bytes(file: str | bytes) -> tuple[bytes, str]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_pdf_text(data: bytes) -> str:
-    """Extract text from a PDF. Returns "" if it's a scan (no embedded text)."""
+def _min_confidence() -> float:
+    """Crema Settings' "Use the Advanced Reader Below", as a 0-1 fraction."""
+    value = frappe.get_cached_doc("Crema Settings").get("ocr_min_confidence")
+    return (_DEFAULT_MIN_CONFIDENCE if value is None else flt(value)) / 100
+
+
+def _pdf_pages(data: bytes) -> list:
+    """The pages of a PDF that crema may read, within Crema Settings' "Longest Document
+    (pages)". Above the limit, "Refuse" raises CremaBlockedError before any page is
+    read or rendered; "Read the First Pages" keeps the first pages and records a note
+    on the Crema Log row. Each page of a scanned PDF becomes one image in a paid call,
+    so the limit also limits the cost."""
     import pymupdf
 
+    from crema import guardrails
+
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    settings = frappe.get_cached_doc("Crema Settings")
+    limit = cint(settings.get("ocr_max_pages")) or _DEFAULT_MAX_PAGES
+    if doc.page_count <= limit:
+        return list(doc)
+    if settings.get("ocr_over_limit") == "Read the First Pages":
+        guardrails._record_note(f"document: read the first {limit} of {doc.page_count} pages")
+        return [doc[i] for i in range(limit)]
+    raise CremaBlockedError(f"document: {doc.page_count} pages, the limit is {limit}")
+
+
+def _extract_pdf_text(pages: list) -> str:
+    """Extract text from PDF pages. Returns "" if it's a scan (no embedded text)."""
     try:
-        doc = pymupdf.open(stream=data, filetype="pdf")
-        return "".join(page.get_text() for page in doc).strip()
+        return "".join(page.get_text() for page in pages).strip()
     except Exception:
+        frappe.logger("crema").warning("PDF text extraction failed; reading the pages as images")
         return ""
 
 
-def _pdf_to_images(data: bytes) -> list[tuple[bytes, str]]:
+def _pdf_to_images(pages: list) -> list[tuple[bytes, str]]:
     """Render each PDF page at 2x zoom, capping the long edge at _MAX_SIDE_PX."""
     import pymupdf
 
-    doc = pymupdf.open(stream=data, filetype="pdf")
     images: list[tuple[bytes, str]] = []
-    for page in doc:
+    for page in pages:
         pix = page.get_pixmap(matrix=pymupdf.Matrix(2.0, 2.0))
         if max(pix.width, pix.height) > _MAX_SIDE_PX:
             zoom = 2.0 * _MAX_SIDE_PX / max(pix.width, pix.height)
@@ -134,6 +161,7 @@ def _downscale_image(data: bytes, mime: str) -> tuple[bytes, str]:
         img.save(buf, format=fmt)
         return buf.getvalue(), ("image/png" if fmt == "PNG" else "image/jpeg")
     except Exception:
+        frappe.logger("crema").warning("Image downscale failed; sending the image at full size")
         return data, mime
 
 
@@ -150,10 +178,11 @@ def prep_parts(content: bytes, mime: str) -> list[dict]:
     plain image. [] for anything else. Shared by ocr() below and crema.api._resolve_files
     (the ask(files=[...]) vision path)."""
     if _is_pdf(content, mime):
-        text = _extract_pdf_text(content)
+        pages = _pdf_pages(content)
+        text = _extract_pdf_text(pages)
         if len(text) >= _TEXT_PDF_MIN_CHARS:
             return [{"type": "text", "text": text}]
-        return [_image_part(data, m) for data, m in _pdf_to_images(content)]
+        return [_image_part(data, m) for data, m in _pdf_to_images(pages)]
     if mime.startswith("image/"):
         return [_image_part(*_downscale_image(content, mime))]
     return []
@@ -191,7 +220,7 @@ def _run(cfg: dict[str, Any], user_message: dict, response_format: dict) -> tupl
     try/except/log. Returns (result, cfg_of_the_interface_the_returned_text_came_from)
     — "ocr" unless escalation to "advanced_ocr" fired."""
     text, confidence = _parse_result(_call(cfg, user_message, response_format))
-    if confidence is not None and confidence >= _MIN_CONFIDENCE:
+    if confidence is not None and confidence >= _min_confidence():
         return {"text": text, "confidence": confidence, "escalated": False}, cfg
 
     try:
@@ -214,7 +243,10 @@ def _run(cfg: dict[str, Any], user_message: dict, response_format: dict) -> tupl
     except CremaBudgetError:
         return {"text": text, "confidence": confidence or 0.0, "escalated": False}, cfg
 
-    adv_text, adv_confidence = _parse_result(_call(adv_cfg, user_message, response_format))
+    # The second call carries the same document, so it keeps the guardrail rows of the
+    # interface the caller asked for: advanced_ocr lends its provider and model only.
+    escalation_cfg = {**adv_cfg, "requested": cfg.get("requested", cfg["interface"])}
+    adv_text, adv_confidence = _parse_result(_call(escalation_cfg, user_message, response_format))
     if adv_confidence is not None and (confidence is None or adv_confidence > confidence):
         return {"text": adv_text, "confidence": adv_confidence, "escalated": True}, adv_cfg
     # The retry did not beat the first attempt, so the ORIGINAL text is what's served —

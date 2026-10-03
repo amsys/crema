@@ -1,4 +1,5 @@
-"""litellm client boundary — the only place a provider's api_key is ever touched.
+"""litellm client boundary. A provider's api_key is read in one function only,
+_api_key, and used only in this module.
 
 No public function here accepts a model/provider/api_key parameter; callers only ever
 pass an interface name (see crema/api.py). That is the "direct provider calls
@@ -134,12 +135,15 @@ def _resolve(interface: str) -> dict[str, Any]:
         name = fallback
 
 
-def _api_key(provider: str) -> str | None:
-    """Decrypted provider api_key, memoized request-local only (never redis)."""
+def _api_key(provider: str, *, refresh: bool = False) -> str | None:
+    """Decrypted provider api_key, memoized request-local only (never redis). The only
+    place crema reads the key. The memo is also the list log.redact strips from every
+    error text, so a provider that echoes its key back cannot leak it. `refresh` reads
+    the key again: the uncached connection check must see a key saved a moment ago."""
     if not hasattr(frappe.local, "crema_keys"):
         frappe.local.crema_keys = {}
 
-    if provider not in frappe.local.crema_keys:
+    if refresh or provider not in frappe.local.crema_keys:
         doc = frappe.get_doc("Crema Provider", provider)
         frappe.local.crema_keys[provider] = doc.get_password("api_key", raise_exception=False)
 
@@ -254,8 +258,8 @@ def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict |
 
 
 def _call_raw(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
-    """The bare litellm.completion call — the single api_key touchpoint. No guardrail
-    runs here; only _complete's own closure calls it."""
+    """The bare litellm.completion call. No guardrail runs here; only _complete's own
+    closure calls it."""
     import litellm
 
     kwargs: dict[str, Any] = {
@@ -345,20 +349,8 @@ def _fetch_models(provider: str) -> tuple[list[str], str | None, bool]:
     if not base_url:
         return [], "No Base URL configured", True
 
-    api_key = doc.get_password("api_key", raise_exception=False)
+    api_key = _api_key(provider, refresh=True)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-
-    # log.redact only strips keys it finds in frappe.local.crema_keys, which _api_key
-    # populates — but this function reads the key directly via get_password rather
-    # than going through _api_key (list_models/check_connection have no "interface" to
-    # resolve a provider from, so there's no cfg to hand _complete's usual path). Feed
-    # the memo here too, or a provider that echoes its key back in an error body (a
-    # bad-request response, a proxy's debug page) would leak it into the uncached
-    # Providers-panel connection check.
-    if api_key:
-        if not hasattr(frappe.local, "crema_keys"):
-            frappe.local.crema_keys = {}
-        frappe.local.crema_keys[provider] = api_key
 
     try:
         response = requests.get(f"{base_url}/models", headers=headers, timeout=10)

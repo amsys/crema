@@ -1,8 +1,8 @@
 app_name = "crema"
 app_title = "Crema"
-app_publisher = "martin@its.mu"
+app_publisher = "Martin"
 app_description = "LLM interface and security layer for Frappe apps"
-app_email = "martin@its.mu"
+app_email = "dev@amsys.cz"
 app_license = "mit"
 
 # Apps

@@ -622,6 +622,11 @@ known vulnerability inside that range, the pin flags the range itself.
 
 ## Known limits
 
+- The audit row is written after the provider answers. If that insert fails — a
+  database fault, for example — the caller still gets the answer, because the
+  provider has already been paid, and the failure goes to the Error Log as "Crema Log
+  insert failed". That call then has no Crema Log row and does not count toward a
+  budget. Watch the Error Log for this title.
 - `api.trigger_automation` is replay-protected only while its task carries a **Webhook
   Secret** — a `timestamp`/`signature` HMAC, checked against a freshness window and a
   single-use nonce cache. A task with no secret set is fenced by Frappe token auth

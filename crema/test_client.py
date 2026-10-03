@@ -1102,7 +1102,7 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
             get_guardrails()
 
     # --- health()/is_configured() — no role gate of their own; the app-level check
-    # is what the consuming app applies before calling in-process (see PLAN.md) -----
+    # is what the consuming app applies before calling in-process (see api.health) -------
 
     def test_health_unconfigured_interface_reports_not_configured(self):
         """ "transcribe" has no FALLBACKS entry (audio cannot fall back to a chat
@@ -1776,7 +1776,7 @@ class IntegrationTestCremaHistory(CremaFixtureTestCase):
 
 class UnitTestCremaMockBoundary(UnitTestCase):
     """client._complete is the documented, supported patch point for a consuming app's
-    own tests (docs/use.md, "Testing an app that uses crema" — PLAN.md item 10). A
+    own tests (docs/use.md, "Testing an app that uses crema"). A
     refactor of its parameters must fail here, in crema's own suite, not silently in a
     downstream app's."""
 

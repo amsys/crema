@@ -306,7 +306,10 @@ The isolation user must be a low-privilege, dedicated account. The system refuse
 because `System Manager` can read a provider's API key. Either choice would remove
 the sandbox. The system also refuses a disabled user. These rules apply equally to
 Crema Settings' `default_isolation_user` and to a Model Assignment row's own
-`isolation_user` override.
+`isolation_user` override. The system checks these rules when you save the settings, and again
+each time a call enters the sandbox. If a System Manager later gives the isolation user
+the `System Manager` role, or disables the user, the next call fails with
+`CremaConfigError` and no data is read.
 
 The install step creates a default isolation user for you: `crema@<site>` (or
 `crema@<site>.localhost` if the site name is not a valid email domain — see

@@ -1457,13 +1457,13 @@ class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):
 
 class IntegrationTestCremaSandbox(CremaFixtureTestCase):
     """crema.sandbox.isolation — runs as the isolation user, restores session state
-    on exit (the form_dict/session.sid/session.data footgun documented in CLAUDE.md)."""
+    on exit (the form_dict/session.sid/session.data trap documented in CLAUDE.md)."""
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
         frappe.set_user("Administrator")
-        _ensure_user(TEST_SANDBOX_USER, roles=["System Manager"])
+        _ensure_user(TEST_SANDBOX_USER)
         _ensure_user(TEST_SANDBOX_VICTIM)
 
         if not frappe.db.exists(
@@ -1532,6 +1532,26 @@ class IntegrationTestCremaSandbox(CremaFixtureTestCase):
         self.assertEqual(frappe.session.user, "Administrator")
         self.assertEqual(frappe.local.session.sid, "_test_crema_escape_sid")
         self.assertEqual(frappe.local.session.data.last_updated, "2026-07-30 08:00:00")
+
+    def test_isolation_refuses_a_user_who_gained_system_manager_after_the_save(self):
+        """The settings forms check the user only on save. A role granted later must
+        close the sandbox, not silently open it."""
+        with patch.object(sandbox.frappe, "get_roles", return_value=["System Manager"]):
+            with self.assertRaises(CremaConfigError):
+                with sandbox.isolation(TEST_SANDBOX_USER):
+                    self.fail("the block must not run")
+        self.assertEqual(frappe.session.user, "Administrator")
+
+    def test_isolation_refuses_a_disabled_user(self):
+        with patch.object(sandbox.frappe.db, "get_value", return_value=0):
+            with self.assertRaises(CremaConfigError):
+                with sandbox.isolation(TEST_SANDBOX_USER):
+                    self.fail("the block must not run")
+
+    def test_isolation_refuses_administrator(self):
+        with self.assertRaises(CremaConfigError):
+            with sandbox.isolation("Administrator"):
+                self.fail("the block must not run")
 
 
 class IntegrationTestCremaFiles(CremaFixtureTestCase):

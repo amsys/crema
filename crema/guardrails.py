@@ -41,6 +41,7 @@ merge `security.py` itself cannot do — it stays free of any frappe import.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import secrets
@@ -238,15 +239,25 @@ class _Mask:
 # A output-side content filter: removes remote image/link targets from a reply, so an
 # app that renders the reply as markdown or HTML cannot be made to call another server
 # on render (see docs/security.md's "Crema's own desk UI escapes..." Known limit).
-_MD_TARGET_RE = re.compile(r"(!?\[[^\]]*\]\(\s*<?)([^)\s]+)([^)]*\))")
-_HTML_TARGET_RE = re.compile(r'((?:src|href)=")([^"]+)(")', re.I)
+# The model writes the text these patterns scan, so every quantifier is possessive and
+# bounded: a reply full of unclosed "[](" stays linear instead of backtracking.
+_MD_TARGET_RE = re.compile(r"(!?\[[^\]]{0,2048}+\]\(\s*+<?+)([^)\s]{1,2048}+)([^)]{0,2048}+\))")
+# A quoted value in either quote, or an unquoted one up to whitespace or ">".
+_HTML_TARGET_RE = re.compile(
+    r"""(\b(?:src|href)\s*+=\s*+)(?:"([^"]{0,2048}+)"|'([^']{0,2048}+)'|([^\s"'>]{1,2048}+))""", re.I
+)
+# Characters a browser drops from a URL before it reads the scheme.
+_URL_NOISE_RE = re.compile(r"[\x00-\x20]")
 
 
 def _is_remote(target: str) -> bool:
     """A target is remote if it names a scheme (`https:`, `data:`, `javascript:`) or
     is protocol-relative (`//host/...`). A path relative to this site (`/files/x.png`)
-    is not — it never leaves the server that rendered it."""
-    return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:|^//", target))
+    is not — it never leaves the server that rendered it. HTML entities are decoded
+    and control characters and spaces are removed first, as a browser does, so
+    `&#104;ttps:` and ` https:` are remote too."""
+    target = _URL_NOISE_RE.sub("", html.unescape(target))
+    return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:|^[/\\]{2}", target))
 
 
 def _strip_remote_targets(text: str) -> tuple[str, int]:
@@ -261,15 +272,23 @@ def _strip_remote_targets(text: str) -> tuple[str, int]:
     enough."""
     count = 0
 
-    def _sub(m: re.Match) -> str:
+    def _md(m: re.Match) -> str:
         nonlocal count
         if not _is_remote(m.group(2)):
             return m.group(0)
         count += 1
         return f"{m.group(1)}#{m.group(3)}"
 
-    text = _MD_TARGET_RE.sub(_sub, text)
-    text = _HTML_TARGET_RE.sub(_sub, text)
+    def _html(m: re.Match) -> str:
+        nonlocal count
+        value = next(v for v in m.group(2, 3, 4) if v is not None)
+        if not _is_remote(value):
+            return m.group(0)
+        count += 1
+        return f'{m.group(1)}"#"'
+
+    text = _MD_TARGET_RE.sub(_md, text)
+    text = _HTML_TARGET_RE.sub(_html, text)
     return text, count
 
 

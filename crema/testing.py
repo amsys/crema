@@ -63,20 +63,16 @@ def seed_provider(
             user.insert(ignore_permissions=True)
 
         settings = frappe.get_single("Crema Settings")
-        changed = False
-        if not settings.default_provider:
-            settings.default_provider = name
-            changed = True
-        if not settings.default_model:
-            settings.default_model = model
-            changed = True
-        if not settings.default_isolation_user:
-            settings.default_isolation_user = isolation_user
-            changed = True
-        if settings.get("disabled"):
-            settings.disabled = 0
-            changed = True
-        if changed:
+        defaults = {
+            "default_provider": name,
+            "default_model": model,
+            "default_isolation_user": isolation_user,
+        }
+        blank = {field: value for field, value in defaults.items() if not settings.get(field)}
+        settings.update(blank)
+        was_disabled = settings.get("disabled")
+        settings.disabled = 0
+        if blank or was_disabled:
             settings.save(ignore_permissions=True)
 
     return name

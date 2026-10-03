@@ -774,33 +774,14 @@ def _read_documents(
         if child_note:
             notes.append(child_note)
 
-    kept, dropped = rows, 0
     interface = cfg.get("requested") or cfg.get("interface") or ""
-    if guardrails.active("scan", interface) != "Off":
-        # Triage, not the fence — api.ask_json's input gate still scans the assembled
-        # content. Without it one soft hyphen in one record blocks all 50, and five
-        # such runs disable the task. Only meaningful when the text scan actually
-        # applies to this task's interface.
-        extra = guardrails.scan_patterns()
-        kept = [row for row in rows if not security.scan(frappe.as_json(row), extra=extra)]
-        dropped = len(rows) - len(kept)
-
-    if dropped:
-        notes.append(f"{dropped} skipped by the security scan")
+    kept = _scan_triage(rows, interface)
+    if len(kept) < len(rows):
+        notes.append(f"{len(rows) - len(kept)} skipped by the security scan")
     if not kept:
         return "", set(), "; ".join(notes), read_up_to
 
-    # Masking's term source (see crema.terms / crema.mask): harvested here, inside the
-    # caller's sandbox.isolation, and appended rather than replaced — a task with
-    # several Document Query sources calls _read_documents once per source, and each
-    # source's terms are as real as the last one's. Skipped when no Hide Personal
-    # Information row applies to this task's interface — the harvest is a
-    # get_doc-per-row cost not worth paying for a masking pass that will never run
-    # (guardrails.run drains the accumulator unconditionally either way).
-    if guardrails.active("pi", interface) != "Off":
-        term_groups = [g for row in kept for g in _terms.harvest(source.source_doctype, row["name"])]
-        if term_groups:
-            frappe.local.crema_terms = (getattr(frappe.local, "crema_terms", None) or []) + term_groups
+    _harvest_terms(source.source_doctype, kept, interface)
 
     text = frappe.as_json(kept)
     if source.read_attachments:
@@ -810,6 +791,31 @@ def _read_documents(
             notes.append(attachment_note)
 
     return text[:budget], {row["name"] for row in kept}, "; ".join(notes), read_up_to
+
+
+def _scan_triage(rows: list[dict], interface: str) -> list[dict]:
+    """The rows the text scan passes, one row at a time. Triage, not the fence —
+    api.ask_json's input gate still scans the assembled content. Without it one soft
+    hyphen in one record blocks all 50, and five such runs disable the task. Only
+    meaningful when the text scan applies to this task's interface."""
+    if guardrails.active("scan", interface) == "Off":
+        return rows
+    extra = guardrails.scan_patterns()
+    return [row for row in rows if not security.scan(frappe.as_json(row), extra=extra)]
+
+
+def _harvest_terms(doctype: str, rows: list[dict], interface: str) -> None:
+    """Masking's term source (see crema.terms / crema.mask): harvested inside the
+    caller's sandbox.isolation, and appended rather than replaced — a task with several
+    Document Query sources reads each one in turn, and each source's terms are as real
+    as the last one's. Skipped when no Hide Personal Information row applies to this
+    task's interface — the harvest is a get_doc-per-row cost not worth paying for a
+    masking pass that will never run."""
+    if guardrails.active("pi", interface) == "Off":
+        return
+    term_groups = [g for row in rows for g in _terms.harvest(doctype, row["name"])]
+    if term_groups:
+        frappe.local.crema_terms = (getattr(frappe.local, "crema_terms", None) or []) + term_groups
 
 
 def _ocr_readable(file_name: str | None) -> bool:

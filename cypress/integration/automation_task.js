@@ -77,6 +77,7 @@ context("Crema Automation Task form", () => {
 				interface: "complex",
 				instruction: "Create a record per contact.",
 				action: "Create or Update Records",
+				target_doctype: "Contact",
 				// A past run's write summary — never a real record, this doctype/name pair
 				// only has to render in the confirm dialog below.
 				last_written_json: JSON.stringify({ created: [["Contact", XSS_NAME]] }),

@@ -47,9 +47,21 @@ function crema_last_written(frm) {
 }
 
 function crema_write_list_html(pairs) {
-	return pairs
-		.map(([doctype, name]) => `<li>${frappe.utils.get_form_link(doctype, name, true)}</li>`)
-		.join("");
+	return (
+		pairs
+			// Pass the escaped name as the label: older frappe builds use the raw name when
+			// no label is given, so leaving it to frappe is not safe on every version.
+			.map(
+				([doctype, name]) =>
+					`<li>${frappe.utils.get_form_link(
+						doctype,
+						name,
+						true,
+						frappe.utils.escape_html(name)
+					)}</li>`
+			)
+			.join("")
+	);
 }
 
 function crema_undo_last_run(frm) {
@@ -87,7 +99,9 @@ function crema_undo_last_run(frm) {
 				if ((result.failed || []).length) {
 					frappe.msgprint({
 						title: __("Some records were not deleted"),
-						message: result.failed.join("<br>"),
+						message: result.failed
+							.map((f) => frappe.utils.escape_html(f))
+							.join("<br>"),
 						indicator: "orange",
 					});
 				}

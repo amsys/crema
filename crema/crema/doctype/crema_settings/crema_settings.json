@@ -155,10 +155,10 @@
   },
   {
    "default": "0",
-   "description": "Switch this on to check every AI service once an hour and switch off any that does not answer. Crema switches an unreachable service back on by itself once it answers again. A service you switch off yourself stays off.",
+   "description": "Switch this on to check every AI service once an hour. A rejected API key switches a service off at once; a service that cannot be reached or reports a server error is switched off after three failed checks in a row. The last service still on is never switched off. Crema switches a service back on by itself once it passes again, and tells System Managers each time. A service you switch off yourself stays off.",
    "fieldname": "auto_disable_unreachable",
    "fieldtype": "Check",
-   "label": "Switch Off Services That Do Not Answer"
+   "label": "Switch Off Services That Fail"
   }
  ],
  "links": [],

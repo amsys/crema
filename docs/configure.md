@@ -46,17 +46,31 @@ delete is done.
 | `api_key` | Password | Required to enable, unless the base URL is local or private. |
 | `enabled` | Check | Off by default. |
 | `timeout_seconds` | Int | Label **Wait Up To (seconds)**. 60 by default. Raise this for a local or self-hosted provider, for example Ollama on CPU. |
-| `last_checked` | Datetime (read-only) | Label **Last Checked**. When the hourly health check last ran against this service. Blank until Crema Settings' **Switch Off Services That Do Not Answer** is on. |
+| `last_checked` | Datetime (read-only) | Label **Last Checked**. When the hourly health check last ran against this service. Blank until Crema Settings' **Switch Off Services That Fail** is on. |
 | `last_check_detail` | Small Text (read-only) | Label **Last Check Result**. What the last check found: the number of models it saw, or the error it got. |
+| `check_failures` | Int (hidden) | Label **Failed Checks in a Row**. The health check counts failures here and resets the count when a check passes. |
 | `auto_disabled` | Check (hidden) | True when this service was switched off by the health check, not by a person. Cleared by any save of this form — see [The scheduled health check](#the-scheduled-health-check) below. |
 
 ### The scheduled health check
 
-**Switch Off Services That Do Not Answer**, on Crema Settings' Operations section
+**Switch Off Services That Fail**, on Crema Settings' Operations section
 (`auto_disable_unreachable`), is off by default. Switch it on and Crema checks every
-service once an hour, the same check the Providers panel runs live. A service that
-does not answer is switched off; a service Crema switched off that answers again is
-switched on again.
+service once an hour, the same check the Providers panel runs live. What happens
+depends on how the check fails:
+
+| The check finds | Crema does |
+|---|---|
+| The service answers | Resets the failure count. Switches the service on again if the health check switched it off. |
+| The API key is rejected (401, 403) | Switches the service off at once. Every call would fail, so a fallback takes over. |
+| No answer: DNS, connect, or timeout error | Switches the service off after three failed checks in a row. |
+| A server error (500 and above) | Switches the service off after three failed checks in a row. |
+| The service has no `/models` list (404, 405, or another answer the check cannot read) | Nothing. The service can still serve calls; the result says that it does not support the check. |
+| A rate limit (429) | Nothing. The service works. |
+| No address, or no such provider | Nothing. The service was never usable; the result names the configuration error. |
+
+Crema never switches off the last service that is on: that would only change the
+error every call gets. Each time a service goes off, comes back on, or fails its check
+as the last service on, every System Manager gets one notification in the desk.
 
 A service you switch off yourself — by unticking **Enabled** and saving — stays off.
 Saving any provider clears its `auto_disabled` flag, so the health check only ever
@@ -261,7 +275,7 @@ As, the Use Cases grid's own budget field — stays a desk edit.
 | `ocr_min_confidence` | Percent | Label **Use the Advanced Reader Below**. 70 by default. When the first OCR reading reports a lower confidence, the system reads the document again with `advanced_ocr`. |
 | `blocked_doctypes` | Table | Label **Blocked Doctypes**. Empty by default. Record types the AI may never create, edit, or delete — see "Block a doctype outright" below. |
 | `disabled` | Check | Label **Crema Is Off**. Switch this on to stop every LLM call. A kill in `site_config.json` (key `crema_disabled`) has the same effect and a desk edit cannot undo it. Either one kills; clearing both restores service. |
-| `auto_disable_unreachable` | Check | Label **Switch Off Services That Do Not Answer**. Off by default. See [The scheduled health check](#the-scheduled-health-check) above. |
+| `auto_disable_unreachable` | Check | Label **Switch Off Services That Fail**. Off by default. See [The scheduled health check](#the-scheduled-health-check) above. |
 
 ## Block a doctype outright
 

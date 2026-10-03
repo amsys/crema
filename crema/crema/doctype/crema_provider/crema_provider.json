@@ -15,7 +15,8 @@
   "section_health",
   "last_checked",
   "last_check_detail",
-  "auto_disabled"
+  "auto_disabled",
+  "check_failures"
  ],
  "fields": [
   {
@@ -66,7 +67,7 @@
    "label": "Health"
   },
   {
-   "description": "When the hourly check last ran against this service. Blank until Crema Settings' \"Switch Off Services That Do Not Answer\" is on.",
+   "description": "When the hourly check last ran against this service. Blank until Crema Settings' \"Switch Off Services That Fail\" is on.",
    "fieldname": "last_checked",
    "fieldtype": "Datetime",
    "label": "Last Checked",
@@ -85,10 +86,18 @@
    "fieldtype": "Check",
    "hidden": 1,
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "check_failures",
+   "fieldtype": "Int",
+   "hidden": 1,
+   "label": "Failed Checks in a Row",
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-08-28 00:00:00.000000",
+ "modified": "2026-10-03 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Provider",

@@ -334,20 +334,22 @@ def _transcribe(
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,128}$")
 
 
-def _fetch_models(provider: str) -> tuple[list[str], str | None, bool]:
-    """(ids, error, reachable). Shared by list_models (cached, ids only) and
+def _fetch_models(provider: str) -> tuple[list[str], str | None, bool, str]:
+    """(ids, error, reachable, kind). Shared by list_models (cached, ids only) and
     check_connection (uncached, surfaces the error) — litellm has no generic
     list-models call, so this hits the OpenAI-compatible GET {base_url}/models
     directly. Ids that don't match _MODEL_ID_RE are silently dropped from the ids
     list but don't affect success. `reachable` is False only for a genuine
-    connection/timeout failure — a 401/403/500 still means the endpoint answered."""
+    connection/timeout failure — a 401/403/500 still means the endpoint answered.
+    `kind` names the outcome for the hourly sweep (see check_providers): "ok",
+    "unreachable", "server_error", "auth", "rate_limited", "unsupported" or "config"."""
     if not frappe.db.exists("Crema Provider", provider):
-        return [], "No such provider", True
+        return [], "No such provider", True, "config"
 
     doc = frappe.get_doc("Crema Provider", provider)
     base_url = (doc.base_url or "").rstrip("/")
     if not base_url:
-        return [], "No Base URL configured", True
+        return [], "No Base URL configured", True, "config"
 
     api_key = _api_key(provider, refresh=True)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -361,58 +363,82 @@ def _fetch_models(provider: str) -> tuple[list[str], str | None, bool]:
             for m in data
             if isinstance(m, dict) and isinstance(m.get("id"), str) and _MODEL_ID_RE.match(m["id"])
         ]
-        return ids, None, True
+        return ids, None, True, "ok"
     except (requests.ConnectionError, requests.Timeout) as exc:
-        return [], _log.redact(f"{type(exc).__name__}: {exc}"), False
+        return [], _log.redact(f"{type(exc).__name__}: {exc}"), False, "unreachable"
     except Exception as exc:
-        return [], _log.redact(f"{type(exc).__name__}: {exc}"), True
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return [], _log.redact(f"{type(exc).__name__}: {exc}"), True, _failure_kind(status)
+
+
+def _failure_kind(status: int | None) -> str:
+    """The sweep's name for an answered but failed /models request."""
+    if status in (401, 403):
+        return "auth"
+    if status == 429:
+        return "rate_limited"
+    if status is not None and status >= 500:
+        return "server_error"
+    # 404/405 (a gateway with no /models), another 4xx, or a body that is not the
+    # expected JSON: the check cannot judge this provider.
+    return "unsupported"
 
 
 @redis_cache(ttl=3600)
 def list_models(provider: str) -> list[str]:
     """Model ids available from `provider`. [] on any error."""
-    ids, _error, _reachable = _fetch_models(provider)
+    ids, _error, _reachable, _kind = _fetch_models(provider)
     return ids
 
 
 def check_connection(provider: str) -> dict[str, Any]:
     """Live (uncached — an hour-stale status is worse than none) connectivity check
     for the Providers panel on Crema Settings. {"ok": bool, "reachable": bool,
-    "detail": str}: detail is "<n> models" on success, else the redacted error
-    _fetch_models returned. `reachable=False` means the endpoint itself couldn't be
-    reached (DNS/connect/timeout) — as opposed to reachable but rejecting (401/403)
-    or erroring (5xx)."""
-    ids, error, reachable = _fetch_models(provider)
+    "detail": str, "kind": str}: detail is "<n> models" on success, else the redacted
+    error _fetch_models returned. `reachable=False` means the endpoint itself couldn't
+    be reached (DNS/connect/timeout) — as opposed to reachable but rejecting (401/403)
+    or erroring (5xx). `kind` is _fetch_models' name for the outcome."""
+    ids, error, reachable, kind = _fetch_models(provider)
     if error is None:
-        return {"ok": True, "reachable": True, "detail": f"{len(ids)} models"}
-    return {"ok": False, "reachable": reachable, "detail": error}
+        return {"ok": True, "reachable": True, "detail": f"{len(ids)} models", "kind": kind}
+    if kind == "unsupported":
+        error = f"This service does not support the health check. {error}"
+    return {"ok": False, "reachable": reachable, "detail": error, "kind": kind}
+
+
+# How many failed hourly checks in a row switch a provider off, per kind of failure.
+# A rejected key fails every call, so one check is enough; a network or server fault
+# is often brief, so the sweep waits three hours. Any other kind never switches a
+# provider off: a rate limit means it works, a gateway without /models still serves
+# completions, and a configuration error was never usable to begin with.
+_FAILURE_LIMITS = {"auth": 1, "unreachable": 3, "server_error": 3}
 
 
 def check_providers() -> None:
     """Scheduler entry point (hourly — same cadence as list_models' cache): the
-    scheduled half of automatic fallback. check_connection is the existing live probe
-    a human triggers by opening the Providers panel; this is what feeds an unreachable
-    provider's `enabled` back automatically, so a dead provider stops being a fallback
-    target instead of staying `enabled` forever.
+    scheduled half of automatic fallback. Runs only when Crema Settings' "Switch Off
+    Services That Fail" is on and the kill switch is off.
 
-    Off by default, and off entirely under the kill switch or Crema Settings'
-    "Switch Off Services That Do Not Answer": a gateway that serves completions but
-    does not implement /models would otherwise be switched off every sweep — an outage
-    caused by the health check itself.
-
-    No flap counter: a transient timeout disables a provider for one hour and the next
-    sweep restores it, with fallback covering the gap in between.
-    ponytail: a provider that flaps hourly gets disabled and re-enabled hourly forever,
-    with no visibility beyond last_check_detail. Add a consecutive-failure counter
-    (the same shape automation._MAX_FAILURES uses) if that ever shows up in practice.
+    For each provider, the check result decides (see _FAILURE_LIMITS):
+    - a passing check resets the failure count and switches back on a provider this
+      sweep switched off (`auto_disabled`); a provider an admin switched off stays off;
+    - a failure counts towards its limit, and at the limit the provider goes off,
+      unless it is the last enabled provider — switching that one off only changes
+      the error every call gets;
+    - System Managers get one notification when a provider goes off, comes back, or
+      reaches its limit as the last enabled provider.
     """
     if policy.disabled():
         return
     if not cint(frappe.get_cached_doc("Crema Settings").get("auto_disable_unreachable")):
         return
 
+    providers = frappe.get_all(
+        "Crema Provider", fields=["name", "enabled", "auto_disabled", "check_failures"]
+    )
+    enabled_count = sum(1 for p in providers if p.enabled)
     flipped = False
-    for provider in frappe.get_all("Crema Provider", fields=["name", "enabled", "auto_disabled"]):
+    for provider in providers:
         try:
             status = check_connection(provider.name)
         except Exception as exc:
@@ -422,13 +448,32 @@ def check_providers() -> None:
             )
             continue
 
-        values = {"last_checked": now_datetime(), "last_check_detail": status["detail"]}
-        if provider.enabled and not status["ok"]:
-            values.update(enabled=0, auto_disabled=1)
-            flipped = True
-        elif not provider.enabled and provider.auto_disabled and status["ok"]:
+        values: dict[str, Any] = {"last_checked": now_datetime(), "last_check_detail": status["detail"]}
+        limit = _FAILURE_LIMITS.get(status["kind"])
+        failures = cint(provider.check_failures) + 1 if limit else 0
+        values["check_failures"] = failures
+
+        if status["ok"] and not provider.enabled and provider.auto_disabled:
             values.update(enabled=1, auto_disabled=0)
+            enabled_count += 1
             flipped = True
+            _notify(provider.name, _("Crema switched the AI service {0} back on.").format(provider.name))
+        elif limit and provider.enabled and failures >= limit:
+            if enabled_count > 1:
+                values.update(enabled=0, auto_disabled=1)
+                enabled_count -= 1
+                flipped = True
+                _notify(
+                    provider.name,
+                    _("Crema switched off the AI service {0}: {1}").format(provider.name, status["detail"]),
+                )
+            elif failures == limit:
+                _notify(
+                    provider.name,
+                    _("The AI service {0} fails its check, but it is the last one switched on: {1}").format(
+                        provider.name, status["detail"]
+                    ),
+                )
         frappe.db.set_value("Crema Provider", provider.name, values, update_modified=False)
 
     if flipped:
@@ -436,5 +481,22 @@ def check_providers() -> None:
         # interface, so a flip that skipped this would leave a resolved config
         # pointing at a provider that just changed out from under it.
         cache.clear_provider()
-        # nosemgrep: frappe-manual-commit — a scheduler job commits its own work
-        frappe.db.commit()
+    # nosemgrep: frappe-manual-commit — a scheduler job commits its own work
+    frappe.db.commit()
+
+
+def _notify(provider: str, subject: str) -> None:
+    """One in-app notification to every System Manager about `provider`."""
+    from frappe.desk.doctype.notification_log.notification_log import enqueue_create_notification
+    from frappe.utils.user import get_users_with_role
+
+    enqueue_create_notification(
+        get_users_with_role("System Manager"),
+        {
+            "type": "Alert",
+            "subject": subject,
+            "document_type": "Crema Provider",
+            "document_name": provider,
+            "from_user": "Administrator",
+        },
+    )

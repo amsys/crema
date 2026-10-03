@@ -1,8 +1,8 @@
 """Public API — the only entry surface into crema.
 
-No public function anywhere accepts a model/provider/api_key parameter; that
-parameter only exists inside client._complete. Direct provider calls are
-structurally impossible from caller code.
+No public function anywhere accepts a model/provider/api_key parameter; only
+client._api_key reads the key. Direct provider calls are structurally impossible
+from caller code.
 """
 
 from __future__ import annotations

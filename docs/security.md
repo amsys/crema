@@ -9,10 +9,9 @@ No public function accepts a model name, a provider name, or an API key for an L
 call. Every call names an interface only. Two System-Manager utility endpoints,
 `get_models` and `check_provider`, do take a provider name — they list models and
 check connectivity, and neither makes an LLM call. The API key stays inside one
-module, `crema/client.py`, in exactly three functions: `_call_raw` (chat calls),
-`_transcribe` (transcription calls), and `_fetch_models` (the model list and
-connection check). The key never leaves that module, and never enters redis or any
-other cache.
+module, `crema/client.py`. One function, `_api_key`, reads it, and the chat call, the
+transcription call, and the model list use that function. The key never leaves that
+module, and never enters redis or any other cache.
 
 The HTTP surface refuses the internal interface `advanced_ocr`. It is reachable
 from Python code only.

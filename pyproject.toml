@@ -1,7 +1,7 @@
 [project]
 name = "crema"
 authors = [
-    { name = "martin@its.mu", email = "martin@its.mu"}
+    { name = "Martin", email = "dev@amsys.cz" }
 ]
 description = "LLM interface and security layer for Frappe apps"
 requires-python = ">=3.14,<3.15"

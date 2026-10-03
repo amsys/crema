@@ -6,6 +6,7 @@ real client._complete."""
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -590,6 +591,40 @@ class UnitTestGuardrailModules(UnitTestCase):
         # first row's own restore puts the real value back, not double-escaped.
         self.assertEqual(result, "mail john@example.com")
         self.assertEqual(len(seen), 1)
+
+
+class UnitTestGuardrailReplyFilterTargets(UnitTestCase):
+    """guardrails._strip_remote_targets — the Reply Filter's pure core. Pins the forms a
+    browser still loads as remote, and the run time on a reply the model can be made to
+    write."""
+
+    def _strip(self, text: str) -> str:
+        return guardrails._strip_remote_targets(text)[0]
+
+    def test_a_leading_space_does_not_hide_a_remote_src(self):
+        self.assertEqual(self._strip('<img src=" https://evil.example/x.png">'), '<img src="#">')
+
+    def test_a_single_quoted_src_is_stripped(self):
+        self.assertEqual(self._strip("<img src='https://evil.example/x.png'>"), '<img src="#">')
+
+    def test_an_unquoted_src_is_stripped(self):
+        self.assertEqual(self._strip("<img src=https://evil.example/x.png>"), '<img src="#">')
+
+    def test_an_entity_encoded_scheme_is_stripped(self):
+        self.assertEqual(self._strip('<img src="&#104;ttps://evil.example/x.png">'), '<img src="#">')
+
+    def test_a_backslash_protocol_relative_target_is_stripped(self):
+        self.assertEqual(self._strip("![a](\\\\evil.example/x.png)"), "![a](#)")
+
+    def test_a_relative_html_target_is_left_alone(self):
+        self.assertEqual(self._strip("<img src='/files/x.png'>"), "<img src='/files/x.png'>")
+
+    def test_unclosed_markdown_links_stay_linear(self):
+        """The old pattern backtracked with cubic cost: 8,000 characters of "[](" took
+        about 27 seconds. The bound is loose so a slow CI runner does not fail it."""
+        started = time.monotonic()
+        self._strip("[](" * 20000)
+        self.assertLess(time.monotonic() - started, 2.0)
 
 
 class IntegrationTestGuardrailGate(CremaFixtureTestCase):

@@ -14,7 +14,7 @@
 // categories, not states, so a dot next to "Schedule" reads as a status that doesn't
 // exist. A formatter bypasses that branch entirely; this returns the same filterable
 // anchor frappe gives a Data column, so click-to-filter still works.
-const plain = (value, df) =>
+const crema_plain_formatter = (value, df) =>
 	`<a class="filterable ellipsis" data-filter="${df.fieldname},=,${frappe.utils.escape_html(
 		value
 	)}">${frappe.utils.escape_html(__(value))}</a>`;
@@ -25,8 +25,8 @@ frappe.listview_settings["Crema Automation Task"] = {
 	hide_name_column: true,
 	add_fields: ["enabled", "last_status"],
 	formatters: {
-		trigger: plain,
-		interface: plain,
+		trigger: crema_plain_formatter,
+		interface: crema_plain_formatter,
 	},
 	get_indicator(doc) {
 		if (!doc.enabled) {

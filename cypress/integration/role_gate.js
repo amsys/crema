@@ -1,5 +1,5 @@
 // Covers crema_allowed() (crema.bundle.js: Crema User OR System Manager) and the "you
-// lack the role" notice on Crema Settings (crema_settings.js explain_crema_user_role).
+// lack the role" notice on Crema Settings (crema_settings.js crema_explain_user_role).
 //
 // Neither is reachable while logged in as Administrator: frappe.permissions.get_roles
 // hands Administrator every Role in the system (permissions.py), so
@@ -114,7 +114,7 @@ context("Crema role gate", () => {
 
 	it("tells a System-Manager-only user they lack the role, with a self-service grant button", () => {
 		// crema_allowed() is Crema User OR System Manager — this user can already use
-		// Crema (the button above is visible for them too), but explain_crema_user_role on
+		// Crema (the button above is visible for them too), but crema_explain_user_role on
 		// Crema Settings still flags that they personally don't hold Crema User, since
 		// that's what everyone *else* on the site needs to see the robot button.
 		cy.login(SYS_MGR_USER, PASSWORD);

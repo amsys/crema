@@ -318,6 +318,26 @@ context("Crema Proposal review", () => {
 		action_button("Undo").should("not.exist");
 	});
 
+	// crema_run_proposal_action must escape a server-reported error before handing it to
+	// msgprint, or markup in that text runs instead of reading as text.
+	it("shows a failed approval's error as text, not markup", () => {
+		cy.visit(`/app/crema-proposal/${names[0]}`);
+		const XSS = "<img src=x onerror=window.__xss=1>";
+		cy.intercept("POST", "/api/method/crema.api.approve_proposals", {
+			body: { message: [{ name: names[0], error: XSS }] },
+		}).as("approve_failed");
+		cy.window().then((win) => {
+			win.__xss = undefined;
+		});
+
+		action_button("Approve").click();
+		cy.wait("@approve_failed");
+
+		cy.get(".modal-title").should("contain.text", "Failed");
+		cy.get(".modal-body").should("contain.text", XSS);
+		cy.window().its("__xss").should("eq", undefined);
+	});
+
 	it("previews every parked write before a bulk approve, and writes only on confirm", () => {
 		// Filtered to this file's own task: the assertions below count rows.
 		cy.visit(`/app/crema-proposal?task=${TASK}`);

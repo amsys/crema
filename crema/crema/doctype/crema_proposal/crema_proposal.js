@@ -1,8 +1,8 @@
 // Copyright (c) 2026, Crema and contributors
 // For license information, please see license.txt
 
-/* global crema_diff_table, crema_proposal_record */
-// Both defined once in crema.bundle.js (app_include_js, so already loaded here).
+/* global crema_diff_table, crema_proposal_record, crema_show_error */
+// All three defined once in crema.bundle.js (app_include_js, so already loaded here).
 
 frappe.ui.form.on("Crema Proposal", {
 	refresh(frm) {
@@ -36,8 +36,13 @@ function crema_run_proposal_action(frm, method) {
 			frm.reload_doc();
 			const failed = (r.message || []).find((row) => row.name === frm.doc.name);
 			if (failed) {
-				frappe.msgprint({ title: __("Failed"), message: failed.error, indicator: "red" });
+				frappe.msgprint({
+					title: __("Failed"),
+					message: frappe.utils.escape_html(failed.error),
+					indicator: "red",
+				});
 			}
 		},
+		error: crema_show_error,
 	});
 }

@@ -705,6 +705,9 @@ const CREMA_FALLBACK_FIELD_CAP = 8;
 // so the per-word probe's or_filters (candidates x words) stays a bounded scan, same
 // reasoning as CREMA_FALLBACK_FIELD_CAP above.
 const CREMA_FALLBACK_WORD_CAP = 4;
+// How long crema_widen_on_render waits for the list to render the applied filters. A
+// list that does not render in this time gets no zero-result check, and keeps no hook.
+const CREMA_WIDEN_WAIT_MS = 10000;
 // How many child-table fieldnames crema_view_prompt lists per table field — a wide child
 // doctype (e.g. Sales Invoice Item) would otherwise balloon every prompt built against it.
 const CREMA_MAX_CHILD_FIELDS = 10;
@@ -859,10 +862,11 @@ function crema_refresh_live(live, doctype, view, state, filters, spec) {
 	}
 	apply
 		.then(() => {
+			crema_widen_on_render(live, doctype, filters);
 			live.start = 0;
 			return live.refresh();
 		})
-		.then(() => crema_after_view(doctype, spec, filters))
+		.then(() => crema_show_reason(spec))
 		// filter_area.set/refresh rejecting would otherwise skip the reason alert and
 		// the zero-result widen fallback with nothing shown at all.
 		.catch(crema_show_error);
@@ -871,7 +875,10 @@ function crema_refresh_live(live, doctype, view, state, filters, spec) {
 // The router path: a doctype change, Report/Kanban, or a group_by — _group_by only
 // round-trips through frappe.route_options (report_view.js).
 function crema_route_to_view(doctype, view, state, filters, group_by, spec) {
-	frappe.route_options = filters;
+	// A copy: router.js set_route_options_from_url() writes the URL's query string into
+	// frappe.route_options, which replaces each [op, value] pair in `filters` with its
+	// JSON string, and crema_widen_on_render below reads `filters`.
+	frappe.route_options = { ...filters };
 	if (group_by) frappe.route_options._group_by = JSON.stringify(group_by);
 	frappe
 		.set_route("List", doctype, view)
@@ -883,8 +890,12 @@ function crema_route_to_view(doctype, view, state, filters, group_by, spec) {
 			// filter set with the List). A non-empty spec is already applied by then.
 			const stale = !Object.keys(filters).length && cur_list.filter_area?.get().length;
 			return (stale ? cur_list.filter_area.clear(false) : Promise.resolve()).then(() => {
-				if (seeded || stale) cur_list.refresh();
-				crema_after_view(doctype, spec, filters);
+				// set_route resolves before the list has rendered the route's filters, and
+				// can resolve after it. A refresh after the hook is set makes sure that a
+				// render under those filters comes after it.
+				const armed = crema_widen_on_render(cur_list, doctype, filters);
+				if (seeded || stale || armed) cur_list.refresh();
+				crema_show_reason(spec);
 			});
 		})
 		.catch(crema_show_error);
@@ -1137,25 +1148,53 @@ function crema_widen_if_empty(doctype, filters) {
 		);
 }
 
-// Where both apply paths in crema_apply_view_spec converge once the list has rendered:
-// the model's reason alert, then the zero-result fallback.
-function crema_after_view(doctype, spec, filters) {
+// The model's reason alert, shown by both apply paths in crema_apply_view_spec.
+function crema_show_reason(spec) {
 	// spec.reason is model-authored text; frappe.show_alert interpolates its message raw
 	// into an HTML template (frappe/public/js/frappe/ui/messages.js), so this is a DOM
 	// sink without the escape.
 	if (spec.reason) {
 		frappe.show_alert({ message: frappe.utils.escape_html(spec.reason), indicator: "blue" });
 	}
-	// live.refresh() can be a no-op: filter_area's own debounced refresh (300ms,
-	// base_list.js) may not yet have fired — or may have JUST fired — by the time
-	// crema_refresh_live calls it, and no_change() then hands back an already-resolved
-	// promise while the real query is still in flight, or not even dispatched yet.
-	// frappe.after_ajax only catches a query already under way (it checks
-	// frappe.request.ajax_count synchronously) — a debounced refresh whose setTimeout
-	// hasn't fired at all yet slips past that check with cur_list.data still the
-	// previous page of rows. Outlast the debounce window itself before checking, so a
-	// not-yet-dispatched debounced refresh can't slip past frappe.after_ajax either.
-	setTimeout(() => frappe.after_ajax(() => crema_widen_if_empty(doctype, filters)), 300);
+}
+
+// Runs the zero-result fallback once, when `list` first renders the rows it fetched
+// under exactly `filters`. The caller refreshes the list right after this call. Returns
+// whether a check is pending (only a single text-lookup filter can widen).
+//
+// No fixed delay can find that point. base_list.js refresh() sets list.data in a .then
+// of frappe.call, and frappe.after_ajax runs on jQuery's ajaxComplete, before that .then.
+// set_route resolves through after_ajax too, often before the list has sent its query.
+// A check at such a point sees the rows from before the filter and returns (the CI
+// "UI Tests" flake, fixed 300 ms timer). refresh() calls after_render() only after
+// prepare_data() has set list.data, so the check runs there.
+//
+// One pending check per list: a newer prompt replaces it. After CREMA_WIDEN_WAIT_MS,
+// the hook removes itself, so a later refresh by the user never widens.
+function crema_widen_on_render(list, doctype, filters) {
+	if (!crema_failed_term(doctype, filters)) return false;
+	const want = JSON.stringify(crema_filter_rows(doctype, filters));
+	const original = list.crema_after_render || list.after_render;
+	const restore = () => {
+		if (list.after_render !== hook) return;
+		list.after_render = original;
+		delete list.crema_after_render;
+	};
+	const hook = function (...args) {
+		const result = original.apply(this, args);
+		if (JSON.stringify(this.get_filters_for_args()) === want) {
+			restore();
+			crema_widen_if_empty(doctype, filters);
+		}
+		return result;
+	};
+	list.crema_after_render = original;
+	list.after_render = hook;
+	setTimeout(restore, CREMA_WIDEN_WAIT_MS);
+	// no_change() returns without a render for args sent in the last 3 seconds (for
+	// example, by filter_area's debounced refresh). The caller's refresh must render.
+	list.last_args = null;
+	return true;
 }
 
 // ---- Path B continued: prompt -> create / edit / delete ----------------------------

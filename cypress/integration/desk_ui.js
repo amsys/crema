@@ -43,7 +43,8 @@ function crema_stub_ask_417(message) {
 }
 
 function crema_prompt(text) {
-	cy.get("[data-crema]").click();
+	// frappe keeps a hidden page per visited view, each with its own button.
+	cy.get("[data-crema]:visible").click();
 	crema_modal().within(() => {
 		cy.get(".frappe-control[data-fieldname=instruction] textarea").type(text);
 		cy.get(".btn-modal-primary").click();
@@ -385,14 +386,39 @@ context("Crema desk UI", () => {
 			reason: "contacts about Acme Corp One",
 		});
 		crema_prompt("contacts about Acme Corp One");
-		// 20s, not cy.wait's 5s default: the probe fires only after the route, the
-		// list refresh, and after_ajax settle — a slow CI runner needs the room.
+		// 20s, not cy.wait's 5s default: the probe fires only after the list renders the
+		// applied filter — a slow CI runner needs the room.
 		cy.wait("@probe", { requestTimeout: 20000 });
 		cy.wait("@probe", { requestTimeout: 20000 });
 
 		cy.get("@probe.all").should("have.length", 2);
 		cy.location("search").should("contain", encodeURIComponent('["like","%Acme%"]'));
 		cy.get(".list-row-container .list-row").its("length").should("be.gte", 1);
+	});
+
+	it("widens after a slow list query, not after a fixed delay", () => {
+		// Regression for the CI flake. The check used to run once, 300 ms after the route
+		// resolved. A list query slower than that left the rows from before the filter in
+		// cur_list.data, the check returned, and no probe was sent. Report view makes
+		// crema take the router path, which does not wait for the list query itself.
+		crema_insert_contact({ first_name: "crema slow probe" });
+		cy.get(".list-row-container .list-row").should("exist");
+		cy.window().then((win) => win.frappe.set_route("List", "Contact", "Report"));
+		cy.window().its("cur_list.view_name").should("eq", "Report");
+		cy.intercept(/frappe\.desk\.reportview\.get\b/, (req) => {
+			req.on("response", (res) => res.setDelay(1000));
+		});
+		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
+		crema_stub_ask({
+			view: "List",
+			filters: { designation: ["like", "%slow probe%"] },
+			reason: "contacts referencing slow probe",
+		});
+		crema_prompt("contacts referencing slow probe");
+		cy.wait("@probe", { requestTimeout: 20000 });
+
+		cy.get("@probe.all").should("have.length", 1);
+		cy.location("search").should("contain", "first_name");
 	});
 
 	it("leaves an empty list alone when nothing matches anywhere", () => {

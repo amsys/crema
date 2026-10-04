@@ -55,8 +55,9 @@ function crema_prefetch(listview) {
 
 	if (!probes.length) return;
 	// allSettled, not all: a blank Connection column is better than a list that never
-	// shows the connection results because one call failed.
-	Promise.allSettled(probes).then(() => listview.refresh());
+	// shows the connection results because one call failed. `void`: allSettled never
+	// rejects, and frappe shows a refresh error itself.
+	void Promise.allSettled(probes).then(() => listview.refresh());
 }
 
 frappe.listview_settings["Crema Provider"] = {

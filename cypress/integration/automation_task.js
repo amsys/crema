@@ -171,6 +171,8 @@ context("Crema Automation Task form", () => {
 			"Crema Automation Task",
 			{
 				task_name: PROPOSE_TASK,
+				// Disabled on purpose: the Task filter on the Proposal list must keep a
+				// disabled task (crema_proposal_list.js onload, include_disabled).
 				enabled: 0,
 				trigger: "Schedule",
 				schedule_preset: "Daily 03:00",

@@ -6,10 +6,14 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "section_pipeline",
+  "pipeline_html",
   "section_status",
   "last_status",
+  "last_failed_stage",
   "next_run",
   "last_run",
+  "last_dry_run",
   "last_result",
   "last_written_json",
   "column_break_status",
@@ -48,6 +52,14 @@
   "plan_json"
  ],
  "fields": [
+  {
+   "fieldname": "section_pipeline",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "pipeline_html",
+   "fieldtype": "HTML"
+  },
   {
    "fieldname": "section_basic",
    "fieldtype": "Section Break"
@@ -159,7 +171,7 @@
   {
    "fieldname": "section_llm",
    "fieldtype": "Section Break",
-   "label": "Instruction"
+   "label": "AI and Action"
   },
   {
    "description": "Which AI profile this task runs as. The profile decides the AI provider, the model, the spending limit, and the account the task acts as. Set them up in Crema Settings.",
@@ -297,10 +309,24 @@
    "read_only": 1
   },
   {
+   "fieldname": "last_dry_run",
+   "fieldtype": "Datetime",
+   "label": "Last Dry Run",
+   "read_only": 1
+  },
+  {
+   "description": "Replanned means the first plan failed and a second plan, made from that failure, worked.",
    "fieldname": "last_status",
    "fieldtype": "Select",
    "label": "Last Status",
    "options": "\nSuccess\nReplanned\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_failed_stage",
+   "fieldtype": "Select",
+   "label": "Failed Step",
+   "options": "\nSetup\nSource\nPlan\nExtract\nWrite\nAsk",
    "read_only": 1
   },
   {
@@ -338,7 +364,7 @@
   }
  ],
  "links": [],
- "modified": "2026-08-28 12:00:00.000000",
+ "modified": "2026-10-05 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema Automation Task",

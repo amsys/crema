@@ -21,6 +21,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 
 | Field | Type | Notes |
 |---|---|---|
+| `pipeline_html` | HTML (read-only) | The pipeline strip at the top of the form — see [The pipeline strip](#the-pipeline-strip) below. |
 | `task_name` | Data | Required. Unique. |
 | `enabled` | Check | Off by default. |
 | `trigger` | Select | Label **Trigger**. `Schedule`, `Once`, `Document Event`, `Incoming Email`, or `Webhook`. |
@@ -34,7 +35,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `on_source_error` | Check | Label **Stop if a Source Fails**. Off by default. Shown when a task has more than one source. |
 | `interface` | Select | Label **AI Profile**. Required. A dropdown of use cases, shown by name (see [configure.md](configure.md)). `Advanced OCR`, `View`, `Transform`, `OCR` and `Transcribe` are not offered — a task must never run as any of them. |
 | `run_as` | Link (User) | Label **Runs As**. The account this task acts as. Empty uses the account set for the AI profile. Not `Administrator`, not a System Manager, not a disabled user. |
-| `instruction` | Text | Required. What to read from the source, and what to do with it. |
+| `instruction` | Text | Required. What to read from the source, and what to do with it. Sits, with `interface`, `run_as`, and `action`, in the **AI and Action** section. |
 | `action` | Select | `Create or Update Records`, `Update the Records It Read`, `Propose Only`, or `No Changes`. |
 | `target_doctype` | Link (DocType) | Label **Record Type to Write**. For `Create or Update Records` and `Propose Only`. The only doctype this task can write to (or propose writing to). |
 | `match_on` | Data | Label **Match Records On**. Comma-separated fieldname(s) on `target_doctype`. Required for a `File Query` source — see [File Query](#file-query) below. Unused, and cleared, by the other actions. |
@@ -47,7 +48,9 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `plan_prompt` | Small Text (read-only) | Label **What the AI Is Asked to Pull Out**. Read from the stored plan. |
 | `next_run` | Datetime (read-only) | Label **Next Run**. When the task is due next. Empty while the task is off, after a Once task has run, or when the trigger is neither Schedule nor Once. |
 | `last_run` | Datetime (read-only) | |
-| `last_status` | Select (read-only) | `Success`, `Replanned`, or `Failed`. |
+| `last_dry_run` | Datetime (read-only) | Label **Last Dry Run**. When you last ran Dry Run on this task. Empty until the first Dry Run. |
+| `last_status` | Select (read-only) | `Success`, `Replanned`, or `Failed`. Replanned means the first plan failed and a second plan, made from that failure, worked. |
+| `last_failed_stage` | Select (read-only) | Label **Failed Step**. `Setup`, `Source`, `Plan`, `Extract`, `Write`, or `Ask` — the step the run stopped at. Set only when `last_status` is `Failed`; empty on every other status, a Replanned run included. |
 | `last_result` | Text (read-only) | What the last run did — for example `3 created, 2 updated, 1 skipped`, `no new records`, or the report text. |
 | `last_written_json` | Code (read-only) | The records the last run created and updated. Feeds the **Undo Last Run** button — see [Undo a run](#undo-a-run). |
 | `consecutive_failures` | Int (read-only) | The task turns itself off at 5. |
@@ -82,9 +85,41 @@ URL row shows all four empty, and clears them when you save.
 | `source_label` | Data (read-only) | Label **What**. Filled in for you: the record type, the address, or `Files`, and the number of filters (`Communication · 2 filters`). A grid column only — it does not appear when you open the row. |
 
 The result of the last run shows as a coloured indicator next to the task name at the
-top of the form. Open **Last Run** for the times, the result, and any error. Open
-**Plan** to read the plan in a table instead of raw JSON. A task that failed three times
-in a row also shows a warning across the top of the form.
+top of the form, and as the pipeline strip described below. Open **Last Run** for the
+times, the result, any error, and — on a failed run — **Failed Step**, the one stage
+(Setup, Source, Plan, Extract, Write, or Ask) that stopped the run. Open **Plan** to
+read the plan in a table instead of raw JSON. A task that failed three times in a row
+also shows a warning across the top of the form.
+
+## The pipeline strip
+
+The strip sits above every other section, and shows one card per step: **Trigger**,
+**Source**, **Plan**, **Extract**, and **Write**. Each card says in plain words how
+you set up that step — for example, the Trigger card shows "Schedule — Daily 03:00",
+and the Write card shows the action and the record type it writes to. A step you have
+not set up yet shows "Not set" or "Not planned yet".
+
+Two actions change the cards:
+
+* A **File Query** source has no Plan or Extract step — the Plan and Extract cards
+  grey out and say "Not used: each file is read directly into records".
+* A **No Changes** task has one step after Source, not three — Plan, Extract, and
+  Write merge into a single card, "Ask, then report".
+* A **Propose Only** task's Write card also shows the number of rows still waiting
+  for a person, as a link straight to the filtered **Crema Proposal** list. This link
+  replaces the old **Proposals** button.
+
+After the last run, each card also shows whether that step ran: **Done**, **Failed**,
+or **Not reached** for a step after the one that failed. A run that failed during
+setup — before the pipeline itself starts — shows no card as failed; a line under the
+strip says so instead. Below the cards: the last run's time and error (if any), and
+the next run's time and the account the task runs as.
+
+Click a card to jump to its fields further down the form.
+
+While the kill switch is on (see [docs/security.md](security.md#kill-switch)), the
+strip shows "Crema is off. No task runs." instead of the cards, and a red banner says
+the same thing at the top of the form.
 
 ## Crema Proposal fields
 
@@ -111,7 +146,8 @@ Never edited by hand; a System Manager only reads, approves, or discards a row.
 3. Write the `instruction` and pick an **AI Profile**.
 4. Save the document.
 5. Click **Dry Run**. Do this before you enable the task — see below.
-6. Set `enabled`, then save again.
+6. Set `enabled`, then save again. If you tick it with no Dry Run on record, the form
+   warns you — in orange, without stopping you — to do a Dry Run first.
 
 The save checks more than required fields. It needs at least one source (a Webhook task
 may have none while **Use Webhook Data** is on), refuses a Crema doctype as `source_doctype`, trial-runs each row's
@@ -124,21 +160,25 @@ one of the record types the task is pointed at.
 
 **Dry Run** reads the source, writes or reuses the plan, and asks the LLM for the
 rows — then stops. It creates and changes nothing. The dialog shows what the task
-would write.
+would write, with the pipeline strip at the top marking the steps the Dry Run itself
+went through — Write never shows as done, since a Dry Run never writes.
 
 Use it to correct the `instruction` before the task runs on its own. A Dry Run stores
 the plan it settles on, so the next real run uses the plan you looked at.
 
 Dry Run always ignores `incremental`, so it shows records even directly after a real
 run. It needs the `System Manager` role, and allows 20 calls per hour per client IP.
+A Dry Run that finishes stamps **Last Dry Run** with the time — a record you can check
+before you set `enabled`, see [Create a task](#create-a-task).
 
 **Run Now**, beside Dry Run, queues one real run immediately. It uses the same code
 path as the scheduler — always a background job, never an inline run — and needs the
-`System Manager` role too.
+`System Manager` role too. It is the form's primary button.
 
 ## Undo a run
 
-**Undo Last Run** deletes every record the task's last run created. It leaves every
+**Undo Last Run** sits in the **More** menu, next to Dry Run and Run Now — it deletes
+records, so it does not carry the same weight as the other two. It deletes every
 record the run updated alone, for a person to review — the form's dialog links to both
 lists before you confirm. Only the most recent run is reversible: `last_written_json`
 holds one run's list, replaced by the next run. The button is hidden once there is
@@ -329,8 +369,9 @@ schedule, can run without writing anything on its own.
 Each proposal carries the record type, the field values it would set, and — for a File
 Query source — the confidence the OCR pass had in the file it came from (see
 [File Query](#file-query) above; a plan-based source has no equivalent measurement).
-Open the **Proposals** button on the task, or the **Crema Proposal** list, to review
-them: **Approve** writes the record the same way `Create or Update Records` would have,
+Open the pending count on the task's pipeline strip (its Write card), or the **Crema
+Proposal** list, to review them: **Approve** writes the record the same way
+`Create or Update Records` would have,
 and stamps what it did; **Discard** removes it from the queue and writes nothing. An
 Approved row also shows **Undo**: it deletes the record approving it created and returns
 the row to Pending, so it can be approved again or discarded. All three work on one row

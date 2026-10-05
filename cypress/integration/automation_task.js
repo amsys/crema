@@ -12,6 +12,19 @@ context("Crema Automation Task form", () => {
 	// Last Run confirm dialog test below — crema_write_list_html must escape it.
 	const XSS_TASK = "_cypress_crema_xss_task";
 	const XSS_NAME = "<img src=x onerror=window.__xss=1>";
+	// A File Query task, for the "Plan and Extract are not used" strip test.
+	const FILE_QUERY_TASK = "_cypress_crema_file_query_task";
+	// A task seeded already Failed at Plan, for the strip's mark test — set directly, the
+	// same way XSS_TASK seeds last_written_json: both are read-only fields, but nothing
+	// stops a direct insert from setting them, and a real run is not worth driving here.
+	const FAILED_TASK = "_cypress_crema_failed_task";
+	// A task seeded already Failed at Setup — last_failed_stage is "Setup" itself here,
+	// not blank, since run_task tags that failure before _run_inside is ever reached.
+	const SETUP_FAILED_TASK = "_cypress_crema_setup_failed_task";
+	// A Propose Only task with two Pending rows parked against it, for the Write card's
+	// pending-proposals link.
+	const PROPOSE_TASK = "_cypress_crema_propose_task";
+	const PROPOSE_NAMES = [];
 
 	before(() => {
 		cy.visit("/login");
@@ -84,6 +97,112 @@ context("Crema Automation Task form", () => {
 			},
 			true
 		);
+		cy.insert_doc(
+			"Crema Automation Task",
+			{
+				task_name: FILE_QUERY_TASK,
+				enabled: 0,
+				trigger: "Schedule",
+				schedule_preset: "Daily 03:00",
+				sources: [
+					{ source_type: "File Query", source_doctype: "File", source_filters: "[]" },
+				],
+				interface: "complex",
+				instruction: "Read each uploaded invoice into a record.",
+				action: "Create or Update Records",
+				target_doctype: "Contact",
+				match_on: "email_id",
+			},
+			true
+		);
+		cy.insert_doc(
+			"Crema Automation Task",
+			{
+				task_name: FAILED_TASK,
+				enabled: 0,
+				trigger: "Schedule",
+				schedule_preset: "Daily 03:00",
+				sources: [
+					{
+						source_type: "Document Query",
+						source_doctype: "Contact",
+						source_filters: "[]",
+						source_limit: 50,
+					},
+				],
+				interface: "complex",
+				instruction: "Set a priority on every open item.",
+				action: "Create or Update Records",
+				target_doctype: "Contact",
+				last_status: "Failed",
+				last_failed_stage: "Plan",
+				last_run: new Date().toISOString().slice(0, 19).replace("T", " "),
+				last_error: "the model returned an unparsable plan",
+			},
+			true
+		);
+		cy.insert_doc(
+			"Crema Automation Task",
+			{
+				task_name: SETUP_FAILED_TASK,
+				enabled: 0,
+				trigger: "Schedule",
+				schedule_preset: "Daily 03:00",
+				sources: [
+					{
+						source_type: "Document Query",
+						source_doctype: "Contact",
+						source_filters: "[]",
+						source_limit: 50,
+					},
+				],
+				interface: "complex",
+				instruction: "Set a priority on every open item.",
+				action: "Create or Update Records",
+				target_doctype: "Contact",
+				last_status: "Failed",
+				last_failed_stage: "Setup",
+				last_run: new Date().toISOString().slice(0, 19).replace("T", " "),
+				last_error: "interface unresolvable — the provider is disabled",
+			},
+			true
+		);
+		cy.insert_doc(
+			"Crema Automation Task",
+			{
+				task_name: PROPOSE_TASK,
+				enabled: 0,
+				trigger: "Schedule",
+				schedule_preset: "Daily 03:00",
+				sources: [
+					{
+						source_type: "Document Query",
+						source_doctype: "Contact",
+						source_filters: "[]",
+						source_limit: 50,
+					},
+				],
+				interface: "complex",
+				instruction: "Park a proposal per open item.",
+				action: "Propose Only",
+				target_doctype: "Contact",
+			},
+			true
+		).then(() => {
+			[1, 2].forEach(() => {
+				cy.insert_doc(
+					"Crema Proposal",
+					{
+						task: PROPOSE_TASK,
+						status: "Pending",
+						target_doctype: "Contact",
+						payload_json: "{}",
+						mapping_json: "{}",
+					},
+					true
+				).then((doc) => PROPOSE_NAMES.push(doc.name));
+			});
+		});
 	});
 
 	beforeEach(() => {
@@ -289,6 +408,8 @@ context("Crema Automation Task form", () => {
 
 	// crema_write_list_html must escape a record name before handing it to
 	// get_form_link, or a name holding markup runs as HTML inside the confirm dialog.
+	// Undo Last Run now lives inside the "More" group (the button weight fix), so it
+	// opens that dropdown first rather than finding the button directly on the page.
 	it("shows a malicious record name as text in the Undo Last Run confirm dialog", () => {
 		cy.visit(`/app/crema-automation-task/${XSS_TASK}`);
 		cy.wait("@interfaces");
@@ -296,14 +417,179 @@ context("Crema Automation Task form", () => {
 			win.__xss = undefined;
 		});
 
-		cy.findByRole("button", { name: "Undo Last Run" }).click();
+		// Opens the group, same as a person would. The group's own dropdown-item anchor
+		// is frappe's "hidden item store" (page.js get_or_add_inner_group_button) — it
+		// stays display:none even once open (an espresso panel renders the visible menu
+		// from a snapshot of it elsewhere in the DOM), but it still carries both the
+		// text-danger class this test checks and the real click handler, so a forced
+		// click on it exercises the same handler a click through the open menu would.
+		cy.get('.inner-group-button[data-label="More"]').find("button").first().click();
+		cy.get('.inner-group-button[data-label="More"] .dropdown-item')
+			.contains("Undo Last Run")
+			.should("have.class", "text-danger")
+			.click({ force: true });
 		cy.get(".modal-body").should("contain.text", XSS_NAME);
 		cy.window().its("__xss").should("eq", undefined);
 	});
 
+	// --- the pipeline strip ---------------------------------------------------------
+
+	it("renders a card for each pipeline step", () => {
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get(".crema-pipeline-cards .crema-pipeline-card").should("have.length", 5);
+		cy.get(".crema-pipeline-cards").should("contain.text", "Trigger");
+		cy.get(".crema-pipeline-cards").should("contain.text", "Schedule");
+		cy.get(".crema-pipeline-cards").should("contain.text", "Source");
+		cy.get(".crema-pipeline-cards").should("contain.text", "1 source: Document Query");
+		cy.get(".crema-pipeline-cards").should("contain.text", "Write");
+		cy.get(".crema-pipeline-cards").should("contain.text", "Update the Records It Read");
+	});
+
+	it("marks the failed step and the steps before and after it", () => {
+		cy.visit(`/app/crema-automation-task/${FAILED_TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get('.crema-pipeline-card[data-crema-field="trigger"]').should("contain.text", "Done");
+		cy.get('.crema-pipeline-card[data-crema-field="sources"]').should("contain.text", "Done");
+		cy.get('.crema-pipeline-card[data-crema-field="plan_json"]').should(
+			"contain.text",
+			"Failed"
+		);
+		cy.get('.crema-pipeline-card[data-crema-field="plan_prompt"]').should(
+			"contain.text",
+			"Not reached"
+		);
+		cy.get('.crema-pipeline-card[data-crema-field="action"]').should(
+			"contain.text",
+			"Not reached"
+		);
+		cy.get(".crema-pipeline-cards")
+			.parent()
+			.should("contain.text", "the model returned an unparsable plan");
+	});
+
+	// Regression pin: last_failed_stage is "Setup" itself on a Setup failure (run_task's
+	// own Setup guard, outside _run_inside), not blank — the line under the strip has to
+	// match that exact value, not "falsy", or it never shows for a real Setup failure.
+	it("shows a line under the strip, and no card marked failed, on a Setup failure", () => {
+		cy.visit(`/app/crema-automation-task/${SETUP_FAILED_TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get(".crema-pipeline-card").should("not.contain.text", "Failed");
+		cy.get(".crema-pipeline-cards")
+			.parent()
+			.should("contain.text", "The task setup failed before any step ran.");
+	});
+
+	it("greys the Plan and Extract cards on a File Query task", () => {
+		cy.visit(`/app/crema-automation-task/${FILE_QUERY_TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get('.crema-pipeline-card[data-crema-field="plan_json"]')
+			.should("contain.text", "Not used: each file is read directly into records")
+			.should("have.css", "opacity", "0.55");
+		cy.get('.crema-pipeline-card[data-crema-field="plan_prompt"]').should(
+			"contain.text",
+			"Not used: each file is read directly into records"
+		);
+		cy.get('.crema-pipeline-card[data-crema-field="action"]').should(
+			"contain.text",
+			"Create or Update Records"
+		);
+	});
+
+	it("shows the pending proposal count as a link to the filtered Crema Proposal list", () => {
+		cy.visit(`/app/crema-automation-task/${PROPOSE_TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get('.crema-pipeline-card[data-crema-field="action"] [data-crema-pending]')
+			.should("contain.text", "2 pending")
+			.click();
+		cy.location("pathname").should("contain", "/crema-proposal");
+		cy.location("search").should("contain", `task=${PROPOSE_TASK}`);
+		cy.location("search").should("contain", "status=Pending");
+	});
+
+	it("scrolls to a step's field when its card is clicked", () => {
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+		cy.window()
+			.its("cur_frm")
+			.then((frm) => cy.spy(frm, "scroll_to_field").as("scroll"));
+
+		cy.get('.crema-pipeline-card[data-crema-field="sources"]').click();
+		cy.get("@scroll").should("have.been.calledWith", "sources");
+	});
+
+	it("warns, without blocking, when a saved task with no Dry Run is enabled", () => {
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+
+		cy.get(
+			'.frappe-control[data-fieldname="enabled"] .input-area input[type="checkbox"]'
+		).check({
+			force: true,
+		});
+		cy.get(".es-toast, .desk-alert").should("contain.text", "Do a Dry Run");
+		// Not blocked — the checkbox stays ticked and the form is left dirty, not reset.
+		cy.get(
+			'.frappe-control[data-fieldname="enabled"] .input-area input[type="checkbox"]'
+		).should("be.checked");
+	});
+
+	context("while Crema is off", () => {
+		// One test in this group — after() clears the switch exactly the way afterEach()
+		// would, and .eslintrc's globals list (shared across the app) does not carry
+		// afterEach.
+		after(() => {
+			// The kill switch stops every LLM call site-wide — it must not survive a test
+			// that failed halfway through toggling it, or every later spec starts broken.
+			cy.call("frappe.client.set_value", {
+				doctype: "Crema Settings",
+				name: "Crema Settings",
+				fieldname: { disabled: 0 },
+			});
+		});
+
+		it("hides Dry Run, Run Now and every Ask Crema affordance", () => {
+			cy.call("frappe.client.set_value", {
+				doctype: "Crema Settings",
+				name: "Crema Settings",
+				fieldname: { disabled: 1 },
+			});
+
+			cy.visit(`/app/crema-automation-task/${TASK}`);
+			cy.wait("@interfaces");
+
+			cy.contains("Crema is off. No task runs.").should("be.visible");
+			// The cards still show the configuration, grey and with no run marks.
+			cy.get(".crema-pipeline-cards").should("have.attr", "style").and("contain", "opacity");
+			cy.get(".crema-pipeline-cards [data-crema-mark]").should("not.exist");
+			cy.get('.frappe-control[data-fieldname="pipeline_html"]').should(
+				"contain.text",
+				"Crema is off. No task runs."
+			);
+			cy.findByRole("button", { name: "Dry Run" }).should("not.exist");
+			cy.findByRole("button", { name: "Run Now" }).should("not.exist");
+
+			// The robot button crema.bundle.js adds to every list view toolbar — gone too,
+			// since crema_allowed() reads the same frappe.boot.crema_disabled flag.
+			cy.visit("/app/crema-automation-task");
+			cy.get(".list-row-container, .no-result");
+			cy.get("[data-crema]").should("not.exist");
+		});
+	});
+
 	after(() => {
+		PROPOSE_NAMES.forEach((name) => cy.remove_doc("Crema Proposal", name, true));
 		cy.remove_doc("Crema Automation Task", TASK);
 		cy.remove_doc("Crema Automation Task", FILTERED_TASK);
 		cy.remove_doc("Crema Automation Task", XSS_TASK);
+		cy.remove_doc("Crema Automation Task", FILE_QUERY_TASK);
+		cy.remove_doc("Crema Automation Task", FAILED_TASK);
+		cy.remove_doc("Crema Automation Task", SETUP_FAILED_TASK);
+		cy.remove_doc("Crema Automation Task", PROPOSE_TASK);
 	});
 });

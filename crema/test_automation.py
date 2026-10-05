@@ -442,6 +442,96 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
         self.assertEqual(task.last_status, "Failed")
         log_error.assert_called_once()
 
+    # --- which step failed --------------------------------------------------
+
+    def test_setup_failure_records_last_failed_stage_as_setup(self):
+        """client._resolve fails before the source is even read — run_task's own
+        Setup-stage guard, outside _run_inside entirely."""
+        task = _make_task()
+
+        with (
+            patch("requests.get", return_value=_response()),
+            patch("crema.api.ask_json") as ask_json,
+            patch("frappe.db.commit"),
+            patch("crema.client._resolve", side_effect=CremaConfigError("provider disabled")),
+        ):
+            status = automation.run_task(task.name)
+
+        self.assertEqual(status, "Failed")
+        ask_json.assert_not_called()
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "Setup")
+
+    def test_source_read_failure_records_last_failed_stage_as_source(self):
+        bad_response = MagicMock()
+        bad_response.is_redirect = False
+        bad_response.raise_for_status.side_effect = Exception("503 Service Unavailable")
+        task = _make_task()
+
+        with patch("requests.get", return_value=bad_response), patch("frappe.db.commit"):
+            status = automation.run_task(task.name)
+
+        self.assertEqual(status, "Failed")
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "Source")
+
+    def test_plan_failure_in_both_attempts_records_last_failed_stage_as_plan(self):
+        bad_plan = _todo_plan()
+        bad_plan["map"]["field_map"] = {"text": "not_a_real_todo_field"}
+        bad_plan["map"]["match_fields"] = ["not_a_real_todo_field"]
+        task = _make_task()
+
+        status, _ = _run(task.name, [bad_plan, bad_plan])
+
+        self.assertEqual(status, "Failed")
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "Plan")
+
+    def test_extract_failure_in_both_attempts_records_last_failed_stage_as_extract(self):
+        """A stored plan skips the Plan stage on the first attempt, so both failures here
+        land in _execute's own extraction call — the replan's own Extract failure is what
+        ends up stored, not the first attempt's."""
+        task = _make_task(plan_json=frappe.as_json(_todo_plan()))
+
+        status, ask_json = _run(task.name, [{"rows": []}, _todo_plan(), {"rows": []}])
+
+        self.assertEqual(status, "Failed")
+        self.assertEqual(ask_json.call_count, 3)
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "Extract")
+
+    def test_write_failure_in_both_attempts_records_last_failed_stage_as_write(self):
+        """The isolation user has no Role permissions — doc.save() raises inside the Write
+        stage on the first attempt and again on the replan."""
+        plan = {
+            "version": 1,
+            "extract": {"prompt": EXTRACT_PROMPT},
+            "map": {
+                "doctype": "Role",
+                "match_fields": ["role_name"],
+                "field_map": {"role": "role_name"},
+            },
+        }
+        rows = {"rows": [{"role": f"_test_crema_role_{uuid.uuid4().hex[:8]}"}]}
+        task = _make_task(target_doctype="Role", plan_json=frappe.as_json(plan))
+
+        status, _ = _run(task.name, [rows, plan, rows])
+
+        self.assertEqual(status, "Failed")
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "Write")
+
+    def test_a_successful_run_clears_a_previously_recorded_failed_stage(self):
+        marker = uuid.uuid4().hex[:10]
+        task = _make_task()
+        task.db_set("last_failed_stage", "Source", update_modified=False)
+
+        status, _ = _run(task.name, [_todo_plan(), _todo_rows(marker)])
+
+        self.assertEqual(status, "Success")
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "")
+
     # --- sandbox enforcement ------------------------------------------------
 
     def test_upsert_without_permission_fails_the_task(self):
@@ -1649,6 +1739,17 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         sendmail.assert_called_once()
         self.assertEqual(sendmail.call_args.kwargs["recipients"], ["ops@example.com"])
 
+    def test_ask_failure_records_last_failed_stage_as_ask(self):
+        self._todo(f"{uuid.uuid4().hex[:10]} alpha")
+        task = _make_query_task(action="No Changes")
+
+        with patch("crema.api.ask", side_effect=Exception("boom")), patch("frappe.db.commit"):
+            status = automation.run_task(task.name)
+
+        self.assertEqual(status, "Failed")
+        task.reload()
+        self.assertEqual(task.last_failed_stage, "Ask")
+
     def test_a_task_that_writes_records_also_emails_what_it_did(self):
         """Reporting is independent of the action now: "write nothing" and "tell me" used
         to be the same choice, so a task that wrote records could never say so."""
@@ -1680,6 +1781,18 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         self.assertEqual(result["row_count"], 1)
         self.assertTrue(result["used_stored_plan"])
         self.assertEqual(frappe.db.get_value("ToDo", name, "priority"), "Low")  # untouched
+
+    def test_dry_run_stamps_last_dry_run(self):
+        marker = uuid.uuid4().hex[:10]
+        name = self._todo(f"{marker} alpha")
+        task = _make_query_task(plan_json=frappe.as_json(_update_plan()))
+        self.assertFalse(task.last_dry_run)
+
+        with patch("crema.api.ask_json", return_value={"rows": [{"id": name, "prio": "High"}]}):
+            automation.dry_run(task.name)
+
+        task.reload()
+        self.assertTrue(task.last_dry_run)
 
     # --- triggers ---------------------------------------------------------
 

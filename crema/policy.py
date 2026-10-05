@@ -35,5 +35,10 @@ def extend_bootinfo(bootinfo) -> None:
     """Publish the blocked-doctype set to the desk as frappe.boot.crema_blocked_doctypes,
     so crema.bundle.js can fence its own write shapes client-side. Crema Settings is
     System-Manager read-only, so this is the only way an ordinary Crema User ever sees
-    the list at all."""
+    the list at all.
+
+    Also publishes the kill switch itself as frappe.boot.crema_disabled -- without it the
+    desk has no way to know crema is off at all, and keeps showing stale "Ask Crema"
+    affordances and a stale last-run status until a click fails."""
     bootinfo.crema_blocked_doctypes = sorted(blocked_doctypes())
+    bootinfo.crema_disabled = disabled()

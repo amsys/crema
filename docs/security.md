@@ -558,6 +558,14 @@ Log row** — the budget stop logs `Blocked`, but a kill-switch stop logs silenc
 (the alternative is five extra call sites to produce a log row for the one path
 that already raises).
 
+`policy.extend_bootinfo` publishes the switch itself as `frappe.boot.crema_disabled`,
+so the desk can act on it without a failed call first. While it is set, the desk hides
+every Ask Crema affordance (the list button, the form button, the field draft button,
+and the awesomebar entry) and a Crema Automation Task's Run Now and Dry Run buttons.
+This takes effect after a page reload — `frappe.boot` is read once, at page load, so a
+switch flipped in another tab or by another person needs a reload to reach a session
+already open.
+
 The kill switch does not touch: `automation.cleanup_logs` (retention must keep
 running), or `client.check_connection` / `_fetch_models` (an admin needs the
 Providers panel during an incident).

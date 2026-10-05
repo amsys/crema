@@ -52,6 +52,7 @@ import ipaddress
 import mimetypes
 import re
 import socket
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -134,6 +135,25 @@ verbatim from the source. Rows naming a record the source query did not return a
 
 class AutomationError(frappe.ValidationError):
     """A plan was structurally invalid, or a stage of the pipeline failed."""
+
+
+@contextmanager
+def _stage(name: str):
+    """Tag an exception that escapes this block with the pipeline stage it failed in --
+    Setup, Source, Plan, Extract, Write or Ask (`last_failed_stage`'s options) -- but only
+    when nothing has tagged it yet. A replan's own Plan/Extract/Write call re-enters this
+    block, so the stage an exception finally reaches `_record` with is always the
+    innermost (first) one it passed through, not an outer caller's wider label."""
+    try:
+        yield
+    except Exception as exc:
+        if not getattr(exc, "_crema_stage", None):
+            exc._crema_stage = name
+        raise
+
+
+def _exc_stage(exc: Exception) -> str | None:
+    return getattr(exc, "_crema_stage", None)
 
 
 # ---------------------------------------------------------------------------
@@ -328,12 +348,19 @@ def run_task(
     frappe.db.commit()
 
     try:
-        cfg = client._resolve(doc.interface)
+        with _stage("Setup"):
+            cfg = client._resolve(doc.interface)
     except Exception as exc:
         # e.g. the interface's provider was disabled. Left uncaught this skipped
         # _record() entirely, so last_status stayed stale and the 5-failure
         # auto-disable never fired while tick() re-enqueued the task every 15 minutes.
-        return _record(doc, "Failed", f"interface unresolvable — {_describe(exc)}", written=written)
+        return _record(
+            doc,
+            "Failed",
+            f"interface unresolvable — {_describe(exc)}",
+            written=written,
+            stage=_exc_stage(exc),
+        )
 
     # A copy, not a mutation: _resolve's dict may be shared, and everything downstream —
     # the sandbox, _read_documents' "skip my own writes" filter, _ocr's file loading —
@@ -344,7 +371,7 @@ def run_task(
     frappe.local.crema_in_automation = True
     try:
         with sandbox.isolation(cfg["isolation_user"]):
-            status, error, plan, result, watermarks = _run_inside(
+            status, error, plan, result, watermarks, stage = _run_inside(
                 doc, cfg, started, doc_doctype, doc_name, payload, written=written
             )
 
@@ -360,7 +387,7 @@ def run_task(
                 frappe.db.set_value(
                     "Crema Automation Source", source_name, "last_read", read_up_to, update_modified=False
                 )
-        outcome = _record(doc, status, error, result, written=written)
+        outcome = _record(doc, status, error, result, written=written, stage=stage)
     finally:
         frappe.local.crema_in_automation = False
 
@@ -376,22 +403,23 @@ def _run_inside(
     doc_name: str | None,
     payload: str | None = None,
     written: _Written | None = None,
-) -> tuple[str, str, dict | None, str, dict[str, Any]]:
+) -> tuple[str, str, dict | None, str, dict[str, Any], str | None]:
     """Everything that runs as the isolation user. Returns
-    (status, error, plan_to_store, result, watermarks)."""
+    (status, error, plan_to_store, result, watermarks, failed_stage)."""
     try:
-        content, allowed_names, note, watermarks, records = _read_source(
-            doc, cfg, started, doc_doctype, doc_name, payload=payload
-        )
+        with _stage("Source"):
+            content, allowed_names, note, watermarks, records = _read_source(
+                doc, cfg, started, doc_doctype, doc_name, payload=payload
+            )
     except Exception as exc:
-        return "Failed", f"source read failed — {_describe(exc)}", None, "", {}
+        return "Failed", f"source read failed — {_describe(exc)}", None, "", {}, _exc_stage(exc)
 
     if not content.strip() and not records:
         # The normal state of a quiet incremental task. Left to fall through it would
         # cost two LLM calls, record Failed, and auto-disable the task after five quiet
         # nights. The watermarks still propagate: a batch whose records were all dropped
         # by the scan must still advance, or the backlog behind it is never read.
-        return "Success", "", None, note or "no new records", watermarks
+        return "Success", "", None, note or "no new records", watermarks, None
 
     if doc.file_sources():
         # PLAN/EXTRACT don't run for a File Query — extract() already planned against
@@ -400,24 +428,28 @@ def _run_inside(
         match_fields = [f.strip() for f in (doc.match_on or "").split(",") if f.strip()]
         mapping = {"doctype": doc.target_doctype, "match_fields": match_fields}
         try:
-            if doc.action == "Propose Only":
-                entries = [(r["_source_file"], r, r.get("confidence")) for r in records]
-                result = _propose(doc, mapping, entries)
-            else:
-                result = _summary(_upsert_files(doc.target_doctype, records, match_fields, written=written))
+            with _stage("Write"):
+                if doc.action == "Propose Only":
+                    entries = [(r["_source_file"], r, r.get("confidence")) for r in records]
+                    result = _propose(doc, mapping, entries)
+                else:
+                    result = _summary(
+                        _upsert_files(doc.target_doctype, records, match_fields, written=written)
+                    )
         except Exception as exc:
-            return "Failed", _describe(exc), None, "", {}
-        return "Success", "", None, _join_note(result, note), watermarks
+            return "Failed", _describe(exc), None, "", {}, _exc_stage(exc)
+        return "Success", "", None, _join_note(result, note), watermarks, None
 
     if doc.action == "No Changes":
         try:
-            report = api.ask(doc.interface, doc.instruction, context=content)
+            with _stage("Ask"):
+                report = api.ask(doc.interface, doc.instruction, context=content)
         except Exception as exc:
-            return "Failed", _describe(exc), None, "", {}
-        return "Success", "", None, _join_note(report[:_RESULT_MAX_CHARS], note), watermarks
+            return "Failed", _describe(exc), None, "", {}, _exc_stage(exc)
+        return "Success", "", None, _join_note(report[:_RESULT_MAX_CHARS], note), watermarks, None
 
-    status, error, plan, result = _plan_and_execute(doc, content, allowed_names, written=written)
-    return status, error, plan, _join_note(result, note), watermarks
+    status, error, plan, result, stage = _plan_and_execute(doc, content, allowed_names, written=written)
+    return status, error, plan, _join_note(result, note), watermarks, stage
 
 
 def _join_note(result: str, note: str) -> str:
@@ -426,42 +458,53 @@ def _join_note(result: str, note: str) -> str:
 
 def _plan_and_execute(
     doc, content: str, allowed_names: set[str] | None, written: _Written | None = None
-) -> tuple[str, str, dict | None, str]:
+) -> tuple[str, str, dict | None, str, str | None]:
     """Execute the stored plan (planning first if there is none); on any failure,
     replan exactly once with the failure text appended and try again.
 
-    Returns (status, error, plan_to_store, result). `plan_to_store` is None when the
-    stored plan is still the right one — a plan is only persisted once it has actually run.
+    Returns (status, error, plan_to_store, result, failed_stage). `plan_to_store` is None
+    when the stored plan is still the right one — a plan is only persisted once it has
+    actually run. `failed_stage` is only meaningful when status is "Failed", and when a
+    replan was attempted it is the replan's own stage, not the first attempt's — the first
+    attempt's failure is already folded into the error text, and a run that ultimately
+    succeeded (even via a replan) has no failed stage to show at all.
     """
     stored = _stored_plan(doc)
     try:
-        plan = stored if stored is not None else _make_plan(doc, content)
+        with _stage("Plan"):
+            plan = stored if stored is not None else _make_plan(doc, content)
         result = _execute(doc, plan, content, allowed_names, written=written)
-        return "Success", "", None if stored is not None else plan, result
+        return "Success", "", None if stored is not None else plan, result, None
     except Exception as exc:
         first_error = _describe(exc)
 
     try:
-        plan = _make_plan(doc, content, failure=first_error)
+        with _stage("Plan"):
+            plan = _make_plan(doc, content, failure=first_error)
         result = _execute(doc, plan, content, allowed_names, written=written)
-        return "Replanned", "", plan, result
+        return "Replanned", "", plan, result, None
     except Exception as exc:
-        return "Failed", f"{first_error} || replan: {_describe(exc)}", None, ""
+        return "Failed", f"{first_error} || replan: {_describe(exc)}", None, "", _exc_stage(exc)
 
 
-def _record(doc, status: str, error: str, result: str = "", written: _Written | None = None) -> str:
+def _record(
+    doc, status: str, error: str, result: str = "", written: _Written | None = None, stage: str | None = None
+) -> str:
     """Persist the outcome. Five consecutive failures disable the task.
 
     `last_written_json` is set on every call, including a Failed one — a run that
     half-wrote before failing is exactly when "Undo Last Run" matters, and a run that
     never got past `client._resolve` (see `run_task`) must clear out the previous run's
-    list rather than leave it stale."""
+    list rather than leave it stale. `last_failed_stage` follows the same shape: set on a
+    Failed run (blank if the caller could not place one), cleared on every other status —
+    a Replanned run succeeded in the end and has nothing to show as failed."""
     written_json = (written or _Written(doc.name)).as_json()
     if status == "Failed":
         failures = (doc.consecutive_failures or 0) + 1
         doc.db_set(
             {
                 "last_status": "Failed",
+                "last_failed_stage": stage or "",
                 "last_error": error[:_ERROR_MAX_CHARS],
                 "last_result": result[:_RESULT_MAX_CHARS] or None,
                 "last_written_json": written_json,
@@ -478,6 +521,7 @@ def _record(doc, status: str, error: str, result: str = "", written: _Written | 
         doc.db_set(
             {
                 "last_status": status,
+                "last_failed_stage": "",
                 "last_error": None,
                 "last_result": result[:_RESULT_MAX_CHARS] or None,
                 "last_written_json": written_json,
@@ -1392,22 +1436,30 @@ def _execute(
     mapping = plan["map"]
     if doc.action == "Propose Only":
         source_id = hashlib.sha256(f"{plan['extract']['prompt']}\n\n{content}".encode()).hexdigest()
-        rows = _extract(doc, plan, content)
-        return _propose(doc, mapping, [(source_id, row, None) for row in rows])
+        with _stage("Extract"):
+            rows = _extract(doc, plan, content)
+        with _stage("Write"):
+            return _propose(doc, mapping, [(source_id, row, None) for row in rows])
     if doc.action != "Update the Records It Read":
-        return _summary(_upsert(mapping, _extract(doc, plan, content), written=written))
+        with _stage("Extract"):
+            rows = _extract(doc, plan, content)
+        with _stage("Write"):
+            return _summary(_upsert(mapping, rows, written=written))
 
     # Checked before the extraction call, so a plan of the wrong shape costs nothing.
     # Raised, not thrown: this lands in _plan_and_execute's replan, so the failure text
     # goes back to the planner and it corrects itself on the same run.
     if list(mapping["match_fields"]) != ["name"]:
-        raise AutomationError('an update-source plan must match on ["name"]')
+        with _stage("Plan"):
+            raise AutomationError('an update-source plan must match on ["name"]')
 
     # A document query reads parent fields only, so the model has never seen the existing
     # child rows — a child_table here would append against nothing it can dedup on.
     mapping = {key: value for key, value in mapping.items() if key != "child_table"}
-    rows = _extract(doc, plan, content)
-    return _summary(_upsert(mapping, rows, create=False, allowed_names=allowed_names, written=written))
+    with _stage("Extract"):
+        rows = _extract(doc, plan, content)
+    with _stage("Write"):
+        return _summary(_upsert(mapping, rows, create=False, allowed_names=allowed_names, written=written))
 
 
 def _summary(counts: dict[str, int]) -> str:
@@ -1575,50 +1627,59 @@ def dry_run(task: str) -> dict[str, Any]:
 
     The plan it settles on IS stored: reviewing plan A in a dialog and then letting the
     3am run write plan B would defeat the point of previewing at all.
+
+    `last_dry_run` is stamped once, at the end, only when the function returns normally —
+    an exception propagates to the caller untouched and leaves the field as it was, the
+    same "only on a clean finish" rule `_record`'s own fields follow for a real run.
     """
     doc = frappe.get_doc("Crema Automation Task", task)
     cfg = client._resolve(doc.interface)
     cfg = {**cfg, "isolation_user": doc.isolation_user(cfg)}
 
+    new_plan = None
     with sandbox.isolation(cfg["isolation_user"]):
         content, allowed_names, note, _, records = _read_source(
             doc, cfg, now_datetime(), None, None, preview=True
         )
         if not content.strip() and not records:
-            return {"action": doc.action, "row_count": 0, "note": note or "no records matched"}
-
-        if doc.file_sources():
+            result = {"action": doc.action, "row_count": 0, "note": note or "no records matched"}
+        elif doc.file_sources():
             # No plan for a File Query — each file already reads as a full {"set",
             # "child_set"} record via api.extract(), so (unlike the plan-based rows
             # below) the preview can show child rows too. crema_show_dry_run treats a
             # missing used_stored_plan key as "there is no plan to describe" rather than
             # "a new one was written".
-            return {
+            result = {
                 "action": doc.action,
                 "rows": records[:20],
                 "row_count": len(records),
                 "note": note,
             }
+        elif doc.action == "No Changes":
+            result = {
+                "action": doc.action,
+                "report": api.ask(doc.interface, doc.instruction, context=content),
+            }
+        else:
+            stored = _stored_plan(doc)
+            plan = stored if stored is not None else _make_plan(doc, content)
+            if stored is None:
+                new_plan = plan
+            rows = _extract(doc, plan, content)
+            result = {
+                "action": doc.action,
+                "used_stored_plan": stored is not None,
+                "plan": plan,
+                "rows": rows[:20],
+                "row_count": len(rows),
+                "allowed_names": len(allowed_names) if allowed_names is not None else None,
+                "note": note,
+            }
 
-        if doc.action == "No Changes":
-            return {"action": doc.action, "report": api.ask(doc.interface, doc.instruction, context=content)}
-
-        stored = _stored_plan(doc)
-        plan = stored if stored is not None else _make_plan(doc, content)
-        rows = _extract(doc, plan, content)
-
-    if stored is None:
-        doc.db_set("plan_json", frappe.as_json(plan))
-
-    return {
-        "action": doc.action,
-        "used_stored_plan": stored is not None,
-        "plan": plan,
-        "rows": rows[:20],
-        "row_count": len(rows),
-        "allowed_names": len(allowed_names) if allowed_names is not None else None,
-        "note": note,
-    }
+    if new_plan is not None:
+        doc.db_set("plan_json", frappe.as_json(new_plan))
+    doc.db_set("last_dry_run", now_datetime(), update_modified=False)
+    return result
 
 
 def _upsert_child(doc, child: dict, row: dict) -> None:

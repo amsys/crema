@@ -1682,6 +1682,26 @@ class IntegrationTestCremaPolicy(CremaFixtureTestCase):
         policy.extend_bootinfo(bootinfo)
         self.assertIn("ToDo", bootinfo.crema_blocked_doctypes)
 
+    def test_extend_bootinfo_publishes_crema_disabled_off_by_default(self):
+        bootinfo = frappe._dict()
+        policy.extend_bootinfo(bootinfo)
+        self.assertFalse(bootinfo.crema_disabled)
+
+    def test_extend_bootinfo_publishes_crema_disabled_from_the_settings_switch(self):
+        settings = frappe.get_doc("Crema Settings")
+        settings.disabled = 1
+        settings.save()
+
+        bootinfo = frappe._dict()
+        policy.extend_bootinfo(bootinfo)
+        self.assertTrue(bootinfo.crema_disabled)
+
+    def test_extend_bootinfo_publishes_crema_disabled_from_site_config(self):
+        with patch.dict(frappe.conf, {"crema_disabled": 1}):
+            bootinfo = frappe._dict()
+            policy.extend_bootinfo(bootinfo)
+        self.assertTrue(bootinfo.crema_disabled)
+
 
 class IntegrationTestCremaListColumns(IntegrationTestCase):
     """A field the list's get_indicator already renders, or that is the autoname source,

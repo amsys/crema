@@ -21,6 +21,8 @@
 // server enforces on save/delete regardless of what this file lets through.
 
 function crema_allowed() {
+	// frappe.boot.crema_disabled: published by policy.extend_bootinfo, read at page load
+	if (frappe.boot.crema_disabled) return false;
 	return (
 		frappe.user_roles.includes("Crema User") || frappe.user_roles.includes("System Manager")
 	);

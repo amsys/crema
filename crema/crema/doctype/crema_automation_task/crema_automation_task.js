@@ -8,8 +8,10 @@
 // The run status and the stored plan are ordinary doctype fields — the "Last Run" section
 // and the virtual plan_* fields declared in the JSON, filled server-side by properties on
 // CremaAutomationTask. This file only adds what a field cannot express: the header
-// indicator, the failure warning, the source-filter picker, and Dry Run (the affordance
-// that makes it safe to schedule something that writes).
+// indicator (including the site-wide "Crema is off" state), the pipeline strip rendered
+// into the pipeline_html field (and reused at the top of the Dry Run dialog), the failure
+// warning, the source-filter picker, and Dry Run and Run Now (the affordances that make it
+// safe to schedule something that writes).
 
 const CREMA_STATUS_COLORS = {
 	Success: "green",
@@ -25,6 +27,14 @@ function crema_render_status(frm) {
 		CREMA_STATUS_COLORS[frm.doc.last_status] || "gray"
 	);
 
+	// frappe.boot.crema_disabled (policy.extend_bootinfo, read once at page load) wins
+	// over the failure-streak warning below — a task that is off cannot also be failing,
+	// and the off state is the more urgent thing to tell the user.
+	if (frappe.boot.crema_disabled) {
+		frm.dashboard.set_headline_alert(__("Crema is off. No task runs."), "red");
+		return;
+	}
+
 	// The auto-disable at 5 is otherwise completely silent — the only signal is the
 	// Enabled checkbox clearing itself. Set unconditionally: an empty message clears the
 	// banner, so a task that recovers doesn't keep a stale warning on the next refresh.
@@ -36,6 +46,283 @@ function crema_render_status(frm) {
 			: "",
 		"red"
 	);
+}
+
+// --- the pipeline strip --------------------------------------------------------------
+//
+// A read-only diagram of the fixed Trigger -> Source -> Plan -> Extract -> Write chain,
+// rendered into the pipeline_html field (crema_render_pipeline) and reused, unclickable,
+// at the top of the Dry Run dialog (crema_show_dry_run passes dry_run_stages instead of
+// reading the saved run status). Every card is built from the document itself — nothing
+// here calls the server except the Propose Only pending count.
+
+// A card's "stage" key, matched case-insensitively against last_failed_stage (Setup is
+// deliberately absent: a Setup failure has no card of its own, see the line rendered
+// under the cards below). "ask" shares write's rank: for a No Changes task the merged
+// card stands in for Plan, Extract and Write together, and the run's own stage tag for
+// that branch is "Ask", never "Write".
+const CREMA_PIPELINE_STAGE_RANK = { source: 0, plan: 1, extract: 2, write: 3, ask: 3 };
+
+function crema_pipeline_stage_marks(doc, dry_run_stages) {
+	if (dry_run_stages) {
+		const done = new Set(dry_run_stages);
+		const marks = {};
+		Object.keys(CREMA_PIPELINE_STAGE_RANK).forEach((key) => {
+			marks[key] = done.has(key) ? "ok" : "not-reached";
+		});
+		return marks;
+	}
+	if (!doc.last_status) return {};
+	if (doc.last_status !== "Failed") {
+		return { source: "ok", plan: "ok", extract: "ok", write: "ok", ask: "ok" };
+	}
+	const failed_rank = CREMA_PIPELINE_STAGE_RANK[(doc.last_failed_stage || "").toLowerCase()];
+	const marks = {};
+	Object.keys(CREMA_PIPELINE_STAGE_RANK).forEach((key) => {
+		if (failed_rank === undefined) {
+			// Setup failed (or, defensively, an unrecognised stage) — nothing below it ran.
+			marks[key] = "not-reached";
+			return;
+		}
+		const rank = CREMA_PIPELINE_STAGE_RANK[key];
+		marks[key] = rank < failed_rank ? "ok" : rank === failed_rank ? "failed" : "not-reached";
+	});
+	return marks;
+}
+
+function crema_pipeline_mark_html(mark) {
+	if (!mark) return "";
+	const cls = { ok: "text-success", failed: "text-danger", "not-reached": "text-muted" }[mark];
+	const label = { ok: __("Done"), failed: __("Failed"), "not-reached": __("Not reached") }[mark];
+	return `<div class="small ${cls}" data-crema-mark="${mark}">${label}</div>`;
+}
+
+function crema_pipeline_trigger_text(doc) {
+	const esc = frappe.utils.escape_html;
+	const title = __(doc.trigger || "Not set");
+	if (doc.trigger === "Schedule") {
+		const detail =
+			doc.schedule_preset && doc.schedule_preset !== "Custom"
+				? esc(doc.schedule_preset)
+				: esc(doc.schedule || __("Not set"));
+		return `${title} — ${detail}`;
+	}
+	if (doc.trigger === "Once") {
+		return `${title} — ${
+			doc.run_at ? esc(frappe.datetime.str_to_user(doc.run_at)) : __("Not set")
+		}`;
+	}
+	if (doc.trigger === "Document Event") {
+		return `${title} — ${doc.event ? esc(doc.event) : __("Not set")}`;
+	}
+	return title; // Incoming Email / Webhook — the trigger name says it all
+}
+
+function crema_pipeline_source_text(doc) {
+	const sources = doc.sources || [];
+	if (!sources.length) return __("Not set");
+	const esc = frappe.utils.escape_html;
+	const types = [...new Set(sources.map((row) => esc(row.source_type || "")))].join(", ");
+	return sources.length === 1
+		? __("1 source: {0}", [types])
+		: __("{0} sources: {1}", [sources.length, types]);
+}
+
+function crema_pipeline_plan_text(doc) {
+	if (!doc.plan_target_doctype) return __("Not planned yet");
+	const esc = frappe.utils.escape_html;
+	return doc.plan_match_fields
+		? __("Writes to {0}, matched by {1}", [
+				esc(doc.plan_target_doctype),
+				esc(doc.plan_match_fields),
+		  ])
+		: __("Writes to {0}", [esc(doc.plan_target_doctype)]);
+}
+
+function crema_pipeline_extract_text(doc) {
+	return doc.plan_prompt ? __("Prompt set") : __("Not planned yet");
+}
+
+function crema_pipeline_write_text(doc, pending_slot) {
+	const esc = frappe.utils.escape_html;
+	let text = __(doc.action || "Not set");
+	if (doc.target_doctype) text += ` → ${esc(doc.target_doctype)}`;
+	const emails = (doc.notify_to || "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	if (emails.length === 1) text += ` · ${__("emails 1 recipient")}`;
+	else if (emails.length > 1) text += ` · ${__("emails {0} recipients", [emails.length])}`;
+	if (pending_slot) {
+		text += `<br><a class="small" data-crema-pending href="javascript:void(0)"></a>`;
+	}
+	return text;
+}
+
+function crema_pipeline_card(title, body_html, opts) {
+	opts = opts || {};
+	const field_attr = opts.field ? ` data-crema-field="${opts.field}"` : "";
+	const style = [
+		"flex:1 1 0",
+		"min-width:130px",
+		"border:1px solid var(--border-color)",
+		"border-radius:var(--border-radius, 6px)",
+		"background:var(--control-bg)",
+		"padding:8px 10px",
+		opts.field ? "cursor:pointer" : "",
+		opts.grey ? "opacity:0.55" : "",
+	]
+		.filter(Boolean)
+		.join(";");
+	return `<div class="crema-pipeline-card"${field_attr} style="${style}">
+		<div class="small text-muted" style="text-transform:uppercase; letter-spacing:.02em">${title}</div>
+		<div class="small" style="margin-top:2px">${body_html}</div>
+		${opts.mark_html || ""}
+	</div>`;
+}
+
+// The card content always comes from the document; only the marks differ between the
+// saved form (dry_run_stages omitted, read from last_status/last_failed_stage) and the
+// Dry Run dialog (dry_run_stages given — a Dry Run never writes, so "write" is never
+// marked done, and a Dry Run that raised never reaches this function at all: the error
+// goes through crema_show_error instead, so there is no "failed" mark to show here).
+function crema_pipeline_html(frm, dry_run_stages) {
+	// While Crema is off the cards still show the configuration, but grey and with no
+	// marks: the last run's marks describe a past state, not what happens next.
+	const off = frappe.boot.crema_disabled;
+	const doc = frm.doc;
+	const esc = frappe.utils.escape_html;
+	const marks = off ? {} : crema_pipeline_stage_marks(doc, dry_run_stages);
+	const trigger_mark = off || dry_run_stages ? null : doc.last_status ? "ok" : null;
+	const show_pending = !dry_run_stages && !frm.is_new() && doc.action === "Propose Only";
+
+	const cards = [
+		crema_pipeline_card(__("Trigger"), crema_pipeline_trigger_text(doc), {
+			field: "trigger",
+			mark_html: crema_pipeline_mark_html(trigger_mark),
+		}),
+		crema_pipeline_card(__("Source"), crema_pipeline_source_text(doc), {
+			field: "sources",
+			mark_html: crema_pipeline_mark_html(marks.source),
+		}),
+	];
+
+	const is_file_query = (doc.sources || []).some((row) => row.source_type === "File Query");
+	if (doc.action === "No Changes") {
+		cards.push(
+			crema_pipeline_card(__("Plan, Extract, Write"), __("Ask, then report"), {
+				field: "instruction",
+				mark_html: crema_pipeline_mark_html(marks.ask),
+			})
+		);
+	} else if (is_file_query) {
+		const not_used = __("Not used: each file is read directly into records");
+		cards.push(crema_pipeline_card(__("Plan"), not_used, { field: "plan_json", grey: true }));
+		cards.push(
+			crema_pipeline_card(__("Extract"), not_used, { field: "plan_prompt", grey: true })
+		);
+		cards.push(
+			crema_pipeline_card(__("Write"), crema_pipeline_write_text(doc, show_pending), {
+				field: "action",
+				mark_html: crema_pipeline_mark_html(marks.write),
+			})
+		);
+	} else {
+		cards.push(
+			crema_pipeline_card(__("Plan"), crema_pipeline_plan_text(doc), {
+				field: "plan_json",
+				mark_html: crema_pipeline_mark_html(marks.plan),
+			})
+		);
+		cards.push(
+			crema_pipeline_card(__("Extract"), crema_pipeline_extract_text(doc), {
+				field: "plan_prompt",
+				mark_html: crema_pipeline_mark_html(marks.extract),
+			})
+		);
+		cards.push(
+			crema_pipeline_card(__("Write"), crema_pipeline_write_text(doc, show_pending), {
+				field: "action",
+				mark_html: crema_pipeline_mark_html(marks.write),
+			})
+		);
+	}
+
+	let html = off
+		? `<div class="text-danger small" style="margin-bottom:4px">${__(
+				"Crema is off. No task runs."
+		  )}</div>`
+		: "";
+	html += `<div class="crema-pipeline-cards" style="display:flex; flex-wrap:wrap; gap:8px${
+		off ? "; opacity:0.55" : ""
+	}">${cards.join("")}</div>`;
+
+	// last_failed_stage is "Setup" for a Setup failure (run_task's own Setup guard,
+	// outside _run_inside) — "setup" carries no rank in CREMA_PIPELINE_STAGE_RANK, so no
+	// card above is marked failed; this line is the only place that failure shows.
+	if (!dry_run_stages && doc.last_status === "Failed" && doc.last_failed_stage === "Setup") {
+		html += `<div class="text-danger small" style="margin-top:4px">${__(
+			"The task setup failed before any step ran."
+		)}</div>`;
+	}
+
+	if (!dry_run_stages && !frm.is_new()) {
+		const lines = [];
+		if (doc.last_run) {
+			let line = __("Last run {0}", [esc(frappe.datetime.str_to_user(doc.last_run))]);
+			if (doc.last_error) {
+				const err =
+					doc.last_error.length > 160
+						? doc.last_error.slice(0, 160) + "…"
+						: doc.last_error;
+				line += ` — ${esc(err)}`;
+			}
+			lines.push(line);
+		} else {
+			lines.push(__("Never run"));
+		}
+		const runs_as = doc.run_as ? esc(doc.run_as) : __("the AI profile's account");
+		lines.push(
+			doc.next_run
+				? __("Next run {0} · Runs As {1}", [
+						esc(frappe.datetime.str_to_user(doc.next_run)),
+						runs_as,
+				  ])
+				: __("Runs As {0}", [runs_as])
+		);
+		html += `<div class="text-muted small" style="margin-top:6px">${lines.join(" · ")}</div>`;
+	}
+
+	return html;
+}
+
+// frappe.db.count is permission-scoped the same way a list view's own count is — a user
+// who cannot read Crema Proposal sees no number rather than an error.
+function crema_pipeline_update_pending_link($wrapper, frm) {
+	const $slot = $wrapper.find("[data-crema-pending]");
+	if (!$slot.length) return;
+	frappe.db
+		.count("Crema Proposal", { filters: { task: frm.doc.name, status: "Pending" } })
+		.then((count) => {
+			$slot.text(__("{0} pending", [count])).on("click", (e) => {
+				e.stopPropagation(); // the card itself scrolls on click; this link opens the list instead
+				frappe.set_route("List", "Crema Proposal", {
+					task: frm.doc.name,
+					status: "Pending",
+				});
+			});
+		});
+}
+
+function crema_render_pipeline(frm) {
+	const $wrapper = $(frm.fields_dict.pipeline_html.wrapper);
+	$wrapper.html(crema_pipeline_html(frm, null));
+	if (frappe.boot.crema_disabled) return;
+
+	$wrapper.find(".crema-pipeline-card[data-crema-field]").on("click", function () {
+		frm.scroll_to_field($(this).attr("data-crema-field"));
+	});
+	if (!frm.is_new()) crema_pipeline_update_pending_link($wrapper, frm);
 }
 
 function crema_last_written(frm) {
@@ -126,12 +413,30 @@ function crema_dry_run(frm) {
 }
 
 function crema_show_dry_run(frm, result) {
+	// What a Dry Run actually runs: always the source; Plan and Extract too for a
+	// plan-based task, once there is something to extract; never Write — Dry Run reads,
+	// plans and previews, but creates and changes nothing (see automation.dry_run). A No
+	// Changes task's single Ask call IS its whole action, so that one is marked done. A
+	// File Query task has no Plan/Extract step to run either way (the preview comes
+	// straight from reading the files) — its Plan/Extract cards are greyed "Not used" in
+	// the strip regardless, so this only matters for correctness, not for what renders.
+	const is_file_query = (frm.doc.sources || []).some((row) => row.source_type === "File Query");
+	const dry_run_stages =
+		result.action === "No Changes"
+			? ["source", "ask"]
+			: !result.row_count || is_file_query
+			? ["source"]
+			: ["source", "plan", "extract"];
+	const strip = crema_pipeline_html(frm, dry_run_stages);
+
 	if (result.action === "No Changes") {
 		frappe.msgprint({
 			title: __("Dry Run"),
-			message: `<pre style="white-space:pre-wrap">${frappe.utils.escape_html(
-				result.report || result.note || ""
-			)}</pre>`,
+			message:
+				strip +
+				`<pre style="white-space:pre-wrap">${frappe.utils.escape_html(
+					result.report || result.note || ""
+				)}</pre>`,
 			wide: true,
 		});
 		return;
@@ -140,7 +445,9 @@ function crema_show_dry_run(frm, result) {
 	if (!result.row_count) {
 		frappe.msgprint({
 			title: __("Dry Run"),
-			message: frappe.utils.escape_html(result.note || __("The source produced no rows.")),
+			message:
+				strip +
+				frappe.utils.escape_html(result.note || __("The source produced no rows.")),
 		});
 		return;
 	}
@@ -173,7 +480,7 @@ function crema_show_dry_run(frm, result) {
 	const rows = (result.rows || [])
 		.map((row) => crema_diff_table(row?.set !== undefined ? row : { set: row }))
 		.join("");
-	frappe.msgprint({ title: __("Dry Run"), message: header + rows, wide: true });
+	frappe.msgprint({ title: __("Dry Run"), message: strip + header + rows, wide: true });
 }
 
 // A point-and-click builder over one source row's source_filters JSON, following
@@ -489,33 +796,46 @@ frappe.ui.form.on("Crema Automation Task", {
 		frm.layout.refresh_dependency();
 	},
 
+	// Ticking Enabled does not block — the task may well be new and untested, and
+	// _warn_unreadable_sources already shows the pattern of an orange, non-blocking
+	// warning at save time for the same kind of "this will probably fail" concern.
+	enabled(frm) {
+		if (frm.is_new() || !frm.doc.enabled || frm.doc.last_dry_run) return;
+		frappe.show_alert({
+			message: __("Do a Dry Run before you turn this task on."),
+			indicator: "orange",
+		});
+	},
+
 	refresh(frm) {
 		crema_render_status(frm);
+		crema_render_pipeline(frm);
 		crema_render_match_on_picker(frm);
 		if (frm.is_new()) return;
 
-		frm.add_custom_button(__("Dry Run"), () => crema_dry_run(frm));
-		if (frm.doc.action === "Propose Only") {
-			frm.add_custom_button(__("Proposals"), () => {
-				frappe.set_route("List", "Crema Proposal", { task: frm.doc.name });
-			});
+		if (!frappe.boot.crema_disabled) {
+			frm.add_custom_button(__("Dry Run"), () => crema_dry_run(frm));
+			frm.add_custom_button(__("Run Now"), () => {
+				frappe.call({
+					method: "crema.api.run_automation_now",
+					args: { task: frm.doc.name },
+					freeze: true,
+					callback(r) {
+						frappe.show_alert({
+							message: __("Queued as {0}", [r.message]),
+							indicator: "green",
+						});
+					},
+					error: crema_show_error,
+				});
+			}).addClass("btn-primary");
 		}
 		if ((crema_last_written(frm).created || []).length) {
-			frm.add_custom_button(__("Undo Last Run"), () => crema_undo_last_run(frm));
+			frm.add_custom_button(
+				__("Undo Last Run"),
+				() => crema_undo_last_run(frm),
+				__("More")
+			).addClass("text-danger");
 		}
-		frm.add_custom_button(__("Run Now"), () => {
-			frappe.call({
-				method: "crema.api.run_automation_now",
-				args: { task: frm.doc.name },
-				freeze: true,
-				callback(r) {
-					frappe.show_alert({
-						message: __("Queued as {0}", [r.message]),
-						indicator: "green",
-					});
-				},
-				error: crema_show_error,
-			});
-		});
 	},
 });

@@ -13,7 +13,7 @@
 > Test Crema on a non-production site before you deploy it.
 
 Crema gives every app in your bench one route to OpenAI-compatible LLM providers —
-OpenAI, OpenRouter, Groq, and about twenty more, hosted and local. A named **interface**
+OpenAI, OpenRouter, Groq, and 26 more, hosted and local. A named **interface**
 (one per use-case: translation, OCR, extraction, ...) binds a provider, a model, a
 system prompt, and an isolation user; one ordered, site-wide guardrail list checks
 every request. Application code never names a provider — every call is
@@ -94,6 +94,12 @@ can register their own — see [docs/configure.md](docs/configure.md).
   once, and creates or updates records on a schedule, a document event, or a webhook
   ([docs/automation.md](docs/automation.md)). An unattended run is reversible: **Undo
   Last Run** deletes what it created and leaves what it updated for you to review.
+  A strip at the top of the task form shows each step of the last run, and the step
+  where a failed run stopped
+  ([docs/automation.md](docs/automation.md#the-pipeline-strip)).
+- **Kill switch** — one setting, or one `site_config.json` key, stops every LLM
+  call. While it is on, the desk hides every Ask Crema button
+  ([docs/security.md](docs/security.md#kill-switch)).
 - **Cost control and audit** — per-user and per-interface monthly budgets, response
   caching, a usage dashboard, and a tamper-evident audit row for
   every call — never the prompt or document content itself.

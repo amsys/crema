@@ -10,6 +10,16 @@
 frappe.listview_settings["Crema Proposal"] = {
 	hide_name_column: true,
 
+	// The Task filter is a Link, and frappe checks a Link value with search_widget, which
+	// drops every row whose `enabled` Check is 0 unless the filters say include_disabled.
+	// A task is often disabled while its proposals still wait, so without this the filter
+	// clears itself (frappe version-16) and the list shows the proposals of every task.
+	// onload runs after the standard filters exist and before route_options apply.
+	onload(listview) {
+		const task = listview.page.fields_dict.task;
+		if (task) task.get_query = () => ({ filters: { include_disabled: 1 } });
+	},
+
 	get_indicator(doc) {
 		const colors = { Pending: "orange", Approved: "green", Discarded: "gray" };
 		return [__(doc.status), colors[doc.status] || "gray", `status,=,${doc.status}`];

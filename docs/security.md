@@ -621,7 +621,7 @@ text before that text reaches a Crema Log row, a task's `last_error`, or the sit
 error log.
 
 Every provider call routes through `litellm`, the one dependency with a direct line to
-a provider's network address. `pyproject.toml` pins it to `>=1.102.1,<2`. The floor rules out
+a provider's network address. `pyproject.toml` pins it to `>=1.104.0,<2`. The floor rules out
 the two compromised releases (1.82.7 and 1.82.8, since pulled from PyPI) and the releases
 before the fix for GHSA-3cv6-jpf6-8222. That advisory is about the litellm proxy server,
 which crema does not use. The ceiling stops an unreviewed major version from arriving on

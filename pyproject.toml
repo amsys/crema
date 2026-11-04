@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["flit_core >=4.1.0,<5"]
+requires = ["flit_core >=4.2.0,<5"]
 build-backend = "flit_core.buildapi"
 
 # bench and the Frappe marketplace read this range to check the app against the

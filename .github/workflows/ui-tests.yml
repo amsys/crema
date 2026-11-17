@@ -1,6 +1,6 @@
 name: UI Tests
 
-# Cypress is not routine verification for this app (see CLAUDE.md) — bench build plus
+# Cypress is not routine verification for this app — bench build plus
 # the Python suite is what CI checks on every push. This workflow also runs automatically,
 # but only when a push/PR actually touches JS or cypress files, so an unrelated Python
 # change doesn't pay for it.

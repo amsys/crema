@@ -5,8 +5,8 @@ holds a connection to an LLM API. An interface binds a provider and a model to o
 named use-case. The safety checks live on the **Guardrails** page, one ordered list
 for the whole site (Procedure D).
 
-Add the provider first. **Providers** is a list of its own, first in the Crema
-workspace sidebar. Interfaces live on **Crema Settings**, below it in the same
+Add the provider first. **Providers** is a list of its own, the first item under
+**Setup** in the Crema sidebar. Interfaces live on **Crema Settings**, below it in the same
 sidebar: the defaults and a **Use Cases** grid. Crema Settings tells you when no
 provider is switched on, because nothing on that page can work until one is.
 
@@ -16,7 +16,7 @@ Caution: the system refuses to enable a provider with no API key, unless the bas
 is a local or private address (for example, a local Ollama server).
 
 1. Open the **Providers** list and click **New from Template**.
-2. Pick a preset — OpenAI, OpenRouter, Groq, or one of about twenty more, hosted and
+2. Pick a preset — OpenAI, OpenRouter, Groq, or one of 26 more, hosted and
    local. The system fills in the provider name and base URL. The provider name must be
    unique — change it when you add a second key for the same vendor.
 3. Paste your API key into the **API Key** field.
@@ -273,7 +273,7 @@ As, the Use Cases grid's own budget field — stays a desk edit.
 | `ocr_over_limit` | Select | Label **When a Document Is Longer**. `Refuse` (default) fails the call with a `Blocked` log row before any page is read. `Read the First Pages` reads only the first pages up to the limit and writes a note on the log row. |
 | `ocr_min_confidence` | Percent | Label **Use the Advanced Reader Below**. 70 by default. When the first OCR reading reports a lower confidence, the system reads the document again with `advanced_ocr`. |
 | `blocked_doctypes` | Table | Label **Blocked Doctypes**. Empty by default. Record types the AI may never create, edit, or delete — see "Block a doctype outright" below. |
-| `disabled` | Check | Label **Crema Is Off**. Switch this on to stop every LLM call. A kill in `site_config.json` (key `crema_disabled`) has the same effect and a desk edit cannot undo it. Either one kills; clearing both restores service. |
+| `disabled` | Check | Label **Crema Is Off**. Switch this on to stop every LLM call. A kill in `site_config.json` (key `crema_disabled`) has the same effect and a desk edit cannot undo it. Either one kills; clearing both restores service. While this box is set, a red banner at the top of the form says that Crema is off for the whole site. The banner goes away when you clear the box, before you save. |
 | `auto_disable_unreachable` | Check | Label **Switch Off Services That Fail**. Off by default. See [The scheduled health check](#the-scheduled-health-check) above. |
 
 ## Block a doctype outright

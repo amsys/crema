@@ -3,7 +3,7 @@
 Frappe's loader globs `test_*.py` (frappe/testing/loader.py), so this module is
 imported like any other test module and simply yields no test methods. The name has to
 match that glob to stay consistent with the rest of the suite, which sits beside the
-code it tests rather than in a separate `tests/` package (see CLAUDE.md).
+code it tests rather than in a separate `tests/` package.
 
 Everything here used to live in `test_client.py`, which meant every other test module
 imported the client tests to get a user fixture — and several had to do it from inside
@@ -39,7 +39,7 @@ TEST_PLAIN_USER = "_test_crema_plain_user@example.com"
 # frappe.db.commit() (isolation() needs the row visible in a real transaction, not
 # just the test's uncommitted one). That commit survives past the test class, so
 # repeated suite runs leave rows behind on whatever site the suite is pointed at —
-# see CLAUDE.md's `bench --site fcr.local run-tests --app crema`. Track exactly what
+# a `bench --site <site> run-tests --app crema` on a populated site. Track exactly what
 # each helper touches and undo it in CremaFixtureTestCase.tearDownClass.
 
 _CREATED: list[tuple[str, str]] = []
@@ -290,7 +290,7 @@ def _clear_defaults() -> None:
 
     A resolution test that expects a blank row to fall back (interfaces.FALLBACKS) or
     fail (CremaConfigError) is testing "not configured" — but the real site this suite
-    runs against (see CLAUDE.md: `bench --site fcr.local run-tests`) may already have
+    runs against (`bench --site <site> run-tests`) may already have
     these set, and so may an earlier test in the same run. Call this from `setUp`, not
     `setUpClass`: CremaFixtureTestCase's per-test savepoint (or, for a plain
     IntegrationTestCase, its single class-level rollback) then undoes it same as any

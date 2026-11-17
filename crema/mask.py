@@ -220,8 +220,12 @@ def _name_key(raw: str) -> str:
 # Specific before generic: PHONE's `\d[\d ()-]{7,}\d` would otherwise eat every
 # IBAN/CARD/NID's digits. Same first-match-matters discipline as
 # security._INJECTION_PATTERNS, applied per-pass rather than first-match-wins overall.
+# EMAIL starts only at the start of a run of local-part characters, and its
+# quantifiers are possessive. Without the lookbehind the pattern tried every position
+# of a long run with no "@" in it and read to the end of the run each time, which is
+# quadratic in the length of the run.
 _SENSITIVE: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "EMAIL"),
+    (re.compile(r"(?<![\w.+-])[\w.+-]++@[\w-]++\.[\w.-]++"), "EMAIL"),
     (re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b"), "IBAN"),
     (re.compile(r"\b(?:\d[ -]?){13,19}\b"), "CARD"),
     (re.compile(r"\b[A-Z]\d{6}[A-Z0-9]{6}\b"), "NID"),  # Mauritian NIC shape
@@ -404,13 +408,11 @@ def _hide_terms(text: str, vault: Vault) -> str:
     if not terms:
         return text
 
-    def repl(chunk: str) -> str:
-        for term in terms:
-            if term in chunk:
-                chunk = chunk.replace(term, vault.by_value[term])
-        return chunk
-
-    return _map_outside_tokens(text, repl)
+    # One pass with one alternation, not one replace per term. A replace per term
+    # reads the text again after each term, tokens included, so a short term ("1",
+    # "M") changed a token that an earlier term had put there a moment before.
+    pattern = re.compile("|".join(re.escape(term) for term in terms))
+    return _map_outside_tokens(text, lambda chunk: pattern.sub(lambda m: vault.by_value[m.group(0)], chunk))
 
 
 # Runs of 2+ capitalised words, or a title followed by 1+ capitalised words. A bare
@@ -424,7 +426,10 @@ def _hide_terms(text: str, vault: Vault) -> str:
 _TITLE_WORD = r"(?:Mr|Mrs|Ms|Mme|Dr|M)\.?"
 # The character class below includes a real curly apostrophe, not a lookalike — a name
 # like the curly-quote spelling of "O'Brien".
-_CAP_WORD = r"[A-Z][a-z]{2,}(?:['’-][A-Z][a-z]+)*"  # noqa: RUF001
+# At most five joined parts ("Jean-Pierre", "O'Brien"). With no limit, a long chain
+# such as "Aaa-Aaa-Aaa-..." is read to its end from each of its parts, which is
+# quadratic in the length of the chain.
+_CAP_WORD = r"[A-Z][a-z]{2,}(?:['’-][A-Z][a-z]+){0,5}"  # noqa: RUF001
 _SWEEP_RE = re.compile(
     rf"\b(?:{_TITLE_WORD}\s+{_CAP_WORD}(?:\s+{_CAP_WORD})*|{_CAP_WORD}(?:\s+{_CAP_WORD})+)\b"
 )
@@ -455,18 +460,29 @@ def _hide_sweep(text: str, vault: Vault) -> str:
     return _map_outside_tokens(text, repl)
 
 
-def _hide_literals(text: str, vault: Vault) -> str:
+def _hide_literals(text: str, vault: Vault, labels: Iterable[str] = ()) -> str:
     """Mask any [[LABEL_n]]-shaped text already present in the INPUT, before any real
     token is minted — collision guard 1 in the module docstring. Without
     this, a document that literally contains '[[NAME_1]]' could later collide with (or
-    be mistaken for) a token this module assigns for a real name."""
+    be mistaken for) a token this module assigns for a real name.
+
+    restore() also reads a token with no brackets (`EMAIL_1`). So a bare `LABEL_n` in
+    the input is masked too, for each label in `labels`: the labels this call can
+    issue. Without that, a bare `EMAIL_1` the caller wrote would come back as the
+    value hidden behind [[EMAIL_1]]. A bare word with another label (`SKU_12`) is
+    left alone."""
 
     def repl(m: re.Match) -> str:
         original = m.group(0)
         token = vault.token_for(original, "LITERAL", entity_key=original)
         return token if token else original
 
-    return _TOKEN_RE.sub(repl, text)
+    text = _TOKEN_RE.sub(repl, text)
+    alt = "|".join(re.escape(label) for label in sorted(set(labels), key=len, reverse=True))
+    if not alt:
+        return text
+    bare = re.compile(rf"\b(?:{alt})_\d+(?:[.\-]\d+)?\b")
+    return _map_outside_tokens(text, lambda chunk: bare.sub(repl, chunk))
 
 
 def hide(
@@ -483,7 +499,9 @@ def hide(
     phi_patterns(<site words>) with sweep=False (health keywords name no people)."""
     if not text:
         return text
-    text = _hide_literals(text, vault)
+    labels = {"NAME", "LITERAL", *(label for _, label in patterns)}
+    labels.update(token[2 : token.index("_", 2)] for token in vault.by_token)
+    text = _hide_literals(text, vault, labels)
     text = _hide_terms(text, vault)
     text = _hide_patterns(text, vault, patterns)
     if sweep:

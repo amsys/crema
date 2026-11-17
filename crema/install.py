@@ -14,8 +14,9 @@ def after_install() -> None:
     """Create the 'Crema User' role (safe to re-run), then seed interfaces (which also
     seeds the default isolation user — see sync_interfaces), the Crema Automation Task
     interface picker's options (sync_interface_options), the guardrail picker's options
-    (sync_guardrail_options), the default guardrail rows (sync_guardrails), and the
-    workspace's usage dashboard."""
+    (sync_guardrail_options), the default guardrail rows (sync_guardrails), the
+    failure notification (sync_notification), the workspace's usage dashboard
+    (sync_dashboard), and the example task (sync_example_task)."""
     _ensure_crema_user_role()
     sync_interfaces()
     sync_interface_options()
@@ -165,7 +166,7 @@ def sync_notification() -> None:
     """Seed one standard, DISABLED Notification on Crema Log (condition: a Blocked
     row) — the escalation rail for malicious events. Create-if-missing only: an admin
     who enables it, edits its recipients, or deletes it must never have that undone by
-    a migrate (same idempotence rule as sync_dashboard's cards)."""
+    a migrate (the same create-if-missing rule as sync_dashboard's cards)."""
     if frappe.db.exists("Notification", {"subject": _BLOCKED_NOTIFICATION_SUBJECT}):
         return
 
@@ -187,6 +188,21 @@ def sync_notification() -> None:
 
 
 _DASHBOARD_CARDS = [
+    # The two cards that ask for action. They count rows of other doctypes, and a click
+    # opens that doctype's list with the same filters.
+    {
+        "name": "Failed Tasks",
+        "document_type": "Crema Automation Task",
+        "function": "Count",
+        "filters_json": '[["Crema Automation Task","enabled","=",1],'
+        '["Crema Automation Task","last_status","=","Failed"]]',
+    },
+    {
+        "name": "Pending Proposals",
+        "document_type": "Crema Proposal",
+        "function": "Count",
+        "filters_json": '[["Crema Proposal","status","=","Pending"]]',
+    },
     {"name": "Calls", "function": "Count", "filters_json": "[]"},
     {
         "name": "Spend",
@@ -260,7 +276,7 @@ _DASHBOARD_CHARTS = [
 
 
 def sync_dashboard() -> None:
-    """Create (safe to re-run) the three Number Cards and two Dashboard Charts the Crema
+    """Create (safe to re-run) the five Number Cards and two Dashboard Charts the Crema
     workspace links to (crema/crema/workspace/crema/crema.json's number_cards/charts).
 
     The cards are all-time totals — Number Card filters_json takes literal filter values,
@@ -286,7 +302,7 @@ def sync_dashboard() -> None:
         doc.update(
             {
                 "label": card["name"],
-                "document_type": "Crema Log",
+                "document_type": card.get("document_type", "Crema Log"),
                 "type": "Document Type",
                 "function": card["function"],
                 "aggregate_function_based_on": card.get("aggregate_function_based_on"),

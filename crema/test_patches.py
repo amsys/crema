@@ -58,6 +58,20 @@ class IntegrationTestCremaConsolidateGuardrails(IntegrationTestCase):
     def setUp(self) -> None:
         super().setUp()
         frappe.set_user("Administrator")
+        # The test site holds the Patch Log row of this patch, so execute() would
+        # return at once. Each test here is a first run.
+        patcher = patch.object(consolidate_guardrails, "_already_ran", return_value=False)
+        self.already_ran = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_second_run_by_hand_changes_nothing(self):
+        self._add_columns("output_trap")
+        self._set_legacy("output_trap", {"simple": "Log Only"})
+        before = self._snapshot()
+        self.already_ran.return_value = True
+        consolidate_guardrails.execute()
+        frappe.clear_document_cache("Crema Guardrails")
+        self.assertEqual(self._snapshot(), before)
 
     def tearDown(self) -> None:
         _clear_column_cache()
@@ -201,6 +215,20 @@ class IntegrationTestCremaRechainCremaLog(CremaFixtureTestCase):
         result = log.verify_chain()
         self.assertTrue(result["ok"])
         self.assertIsNone(result["first_break"])
+
+    def test_a_second_run_changes_nothing_and_reports_no_break(self):
+        tag = uuid.uuid4().hex
+        names = [self._insert(f"rechain-twice-{i}-{tag}") for i in range(3)]
+        self._simulate_pre_upgrade_chain(names)
+        rechain_crema_log_for_version_fields.execute()
+        first = [frappe.db.get_value("Crema Log", n, "chain_sha") for n in names]
+
+        with patch("frappe.log_error") as mock_log_error:
+            rechain_crema_log_for_version_fields.execute()
+        mock_log_error.assert_not_called()
+
+        self.assertEqual(first, [frappe.db.get_value("Crema Log", n, "chain_sha") for n in names])
+        self.assertTrue(log.verify_chain()["ok"])
 
     def test_a_break_before_the_upgrade_is_left_untouched(self):
         tag = uuid.uuid4().hex

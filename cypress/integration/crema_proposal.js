@@ -15,7 +15,7 @@
 // them for the Python suite — non-overriding, so a bench that is already configured is
 // left exactly as it is, and after() clears only what this file set.
 //
-// Run with: bench --site fcr.local run-ui-tests crema --headless
+// Run with: bench --site <site> run-ui-tests crema --headless
 const TASK = "_cypress_crema_proposal_task";
 const PROVIDER = "_cypress_crema_proposal_provider";
 const RUNNER = "cypress-crema-proposal-runner@example.com";

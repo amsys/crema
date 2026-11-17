@@ -33,7 +33,16 @@ def _most_severe(values: list[str]) -> str:
     return max(values, key=_SEVERITY.index) if values else "Off"
 
 
+def _already_ran() -> bool:
+    """True on a second run by hand. frappe writes the Patch Log row after the first
+    run. The old columns are still in the table then, so a second fold would write the
+    old values over the rows an admin changed since."""
+    return bool(frappe.db.exists("Patch Log", {"patch": "crema.patches.consolidate_guardrails"}))
+
+
 def execute() -> None:
+    if _already_ran():
+        return
     install.sync_guardrails()  # make sure the Single and its default rows exist
 
     columns = [
@@ -82,9 +91,8 @@ def execute() -> None:
         grow.action = _most_severe(list(actions.values()))
         grow.interfaces = "" if set(enabled) >= {row.interface for row in rows} else ", ".join(enabled)
 
-    # The guard's save-time executor check would throw here if the old site had the
-    # guard on but no resolvable provider — that is exactly the fail-loud
-    # misconfiguration the old CremaSettings rule threw for, so let it throw.
+    # CremaGuardrails.validate runs here. A filter that names an unknown use case
+    # stops the patch, so the admin sees it.
     doc.save(ignore_permissions=True)
 
     frappe.db.delete("Property Setter", {"doc_type": "Crema Guardrail", "field_name": "guard_interface"})

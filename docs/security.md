@@ -45,7 +45,7 @@ Each row has an **Action** and a **Use Cases** filter:
 |---|---|
 | `Off` | The check does not run. |
 | `Log Only` | A finding is recorded on the Crema Log row; the call proceeds. |
-| `Retry Once` | One fresh attempt, then stop. Only the Reply Check retries; the other checks treat this as `Block`. |
+| `Retry Once` | One fresh attempt, then stop. Only the Reply Check retries; the other checks treat this as `Block`. A call gets one retry in total: if a check asks for a retry on the second attempt, the call is blocked. |
 | `Block` | The call fails with a blocked-call error, and the log records a `Blocked` row. |
 
 Leave **Use Cases** empty to run the check for every use case, or list use-case keys
@@ -118,7 +118,9 @@ Presidio sidecar. That is a worked example, not a bundled dependency.
 
 **Pass-through identity.** Every provider call carries `user` (the real caller,
 captured before Crema's own isolation-user sandbox opens) and `metadata.tags` (the
-interface that serves the call). Behind litellm-proxy, its own per-end-user and
+interface that serves the call). While a **Hide Personal Information** row applies to
+the use case, `user` is a hash of the login (`crema-` and 16 hex characters, the same
+for each call of one user), because a login is an email address on most sites. Behind litellm-proxy, its own per-end-user and
 per-tag spend then lines up with Crema's audit log, with no separate integration
 step. In front of no gateway, both fields cost nothing — litellm's SDK sends them
 along and nothing else reads them.
@@ -167,6 +169,8 @@ relative to the site (`/files/x.png`) passes through unchanged. The check reads 
 target as a browser does: it accepts double quotes, single quotes, or no quotes, decodes
 HTML entities (`&#104;ttps:`), and removes spaces and control characters before it reads
 the scheme. Its patterns run in linear time, so a long reply cannot stall the worker.
+The check reads the first 2048 characters of a target. It removes a target that is
+longer, remote or not, and the length of a link label has no effect on the check.
 
 It is a text pass, not a full markdown or HTML parser: a markdown *reference*
 definition, or an HTML attribute other than `src`/`href`, is not covered. It fails
@@ -339,8 +343,11 @@ just the calling user's name.
 
 A cached reply is keyed by a SHA-256 hash of the request: the interface the caller
 asked for, the interface that served it after the fallback walk, the isolation
-user, the model, the system prompt, the prompt, the context, the response format,
-and the history. It is not keyed by the session user — two users who make the
+user, the model, the system prompt, the guardrail rows that apply to the use case
+(each check and its Action), the prompt, the context, the response format,
+and the history. A change on the Guardrails page thus starts a new set of cache
+entries: a reply made with a check off is not served after you turn that check on.
+It is not keyed by the session user — two users who make the
 identical request are served the identical reply.
 
 That is deliberate, and it is safe for one reason: no part of a crema request is
@@ -391,7 +398,7 @@ alone. An OCR call that escalates to `advanced_ocr` still writes one row, but it
 | `app_version` | The crema app version that produced this row, so an incident can be replayed against the exact stack that made the call. Blank on a row written before this field existed. |
 | `user` | The session user. On a row an automation task writes, this is the interface's isolation user — the whole run happens inside the sandbox. |
 | `status` | `Success`, `Cached`, `Blocked`, or `Error`. |
-| `prompt_sha` | A SHA-256 fingerprint of the full request: the requested and serving interfaces, the isolation user, the model, the prompts, the context, the history, and the response format. On an OCR or transcription row: a hash of the file bytes. For correlation only — two identical requests carry the same hash. It is also the response-cache key (see "The answer cache" above): two rows sharing a `prompt_sha` are two calls that would have shared a cache entry. |
+| `prompt_sha` | A SHA-256 fingerprint of the full request: the requested and serving interfaces, the isolation user, the model, the guardrail rows, the prompts, the context, the history, and the response format. On an OCR or transcription row: a hash of the file bytes. For correlation only — two identical requests carry the same hash. It is also the response-cache key (see "The answer cache" above): two rows sharing a `prompt_sha` are two calls that would have shared a cache entry. |
 | `chain_seq` | This row's position in the tamper-evidence chain. See "A tamper-evident chain" below. Blank on a row written before this field existed. |
 | `chain_sha` | A SHA-256 of this row's own audit fields plus the row before it's `chain_sha`. Blank on a row written before this field existed. |
 | `duration_ms` | |
@@ -502,15 +509,18 @@ listed there is refused for creating, editing, or deleting a record, no matter w
 permission an interface's own Runs As account holds:
 
 - **`automation._validate_plan`** refuses a plan whose target doctype, or child-table
-  target, is on the list. This runs on every automation task run, so it is the real
-  fence for automation — not a save-time convenience.
+  target, is on the list. This runs on every run that has a plan.
+- **A File Query run and a proposal approval** have no plan to validate, so each one
+  checks the list again immediately before it writes. A doctype added to the list after
+  a proposal was parked cannot be written by an approval of that proposal.
 - **`CremaAutomationTask.validate`** refuses a task whose Target Doctype is already on
   the list, at save time — a task cannot even be pointed at a blocked doctype, let
   alone run against one.
 - **The desk assistant's write actions** (above) fold the same check into the same
   create/write/delete gate the session user's own permissions already sit behind —
   `crema_writable_fields` returns nothing, and the create/edit/delete shapes never
-  reach the prompt at all.
+  reach the prompt at all. On the form of a blocked doctype, Crema shows neither its
+  form button nor the draft button on a text field.
 
 Like the permission checks it sits beside, this is not silent: a blocked automation
 run fails with a plain reason in `last_error`, and a blocked desk action shows a red
@@ -620,7 +630,7 @@ text before that text reaches a Crema Log row, a task's `last_error`, or the sit
 error log.
 
 Every provider call routes through `litellm`, the one dependency with a direct line to
-a provider's network address. `pyproject.toml` pins it to `>=1.104.0,<2`. The floor rules out
+a provider's network address. `pyproject.toml` pins it to `>=1.108.3,<2`. The floor rules out
 the two compromised releases (1.82.7 and 1.82.8, since pulled from PyPI) and the releases
 before the fix for GHSA-3cv6-jpf6-8222. That advisory is about the litellm proxy server,
 which crema does not use. The ceiling stops an unreviewed major version from arriving on
@@ -629,6 +639,21 @@ known vulnerability inside that range, the pin flags the range itself.
 
 ## Known limits
 
+- A Guardrails row whose check is not installed stops every call it applies to, when
+  its Action is `Block` or `Retry Once`. This occurs after you remove the app that
+  registered the check. A `Log Only` row writes a warning to the `crema` log and the
+  call continues. Open the Guardrails page and save it: the save removes the row.
+- When OCR escalates to `advanced_ocr`, one Crema Log row holds the cost of both
+  calls. The row names the use case whose text the call returned, so the spend of
+  the two use cases is not exact for an escalated call.
+- An incremental source continues after the timestamp of the last record it read.
+  When a batch is full, the run also reads the other records with that same
+  timestamp, at most one more batch. If more records than that have one timestamp
+  (a bulk update, for example), the source does not read the remainder.
+- Masking hides text that looks like one of its own placeholders (`EMAIL_1`,
+  `[[NAME_2]]`) before it adds real placeholders, and puts the text back in the
+  reply. It does this only for the labels the call can make, so `SKU_12` stays
+  visible to the model.
 - The audit row is written after the provider answers. If that insert fails — a
   database fault, for example — the caller still gets the answer, because the
   provider has already been paid, and the failure goes to the Error Log as "Crema Log

@@ -14,12 +14,12 @@
 // another spec. Tests run in sequence within the file — later ones depend on state
 // earlier ones create, same as the fixture reuse in automation_task.js.
 //
-// Run with: bench --site fcr.local run-ui-tests crema --headless
+// Run with: bench --site <site> run-ui-tests crema --headless
 // Generated per run rather than committed: a literal reads as a hard-coded credential
 // to static analysis, and both users are created and deleted inside this file's own
 // before/after — nothing outside the run needs the value. Cypress._ is lodash, bundled
 // with cypress; crypto.randomUUID() needs a secure context, which this bench site
-// (plain http, non-localhost host fcr.local) doesn't have.
+// (plain http, a host that is not localhost) doesn't have.
 const PASSWORD = `cypress-${Cypress._.random(1e15)}`;
 const NO_ROLE_USER = "cypress-crema-no-role@example.com";
 const SYS_MGR_USER = "cypress-crema-sysmgr@example.com";
@@ -81,9 +81,15 @@ context("Crema role gate", () => {
 
 		cy.get("[data-crema]").should("not.exist");
 
-		cy.get("#navbar-modal-search").click();
+		cy.get(".navbar-modal-search-mobile:visible").click();
 		cy.get("#navbar-search").type("overdue items");
-		cy.wait(400);
+		// The absence check below passes at once on an empty list. frappe's own "Search
+		// for" option comes from the same add_defaults call as crema's "Ask" option, so
+		// wait for it first.
+		cy.get("#navbar-search")
+			.parents(".awesomplete")
+			.findByRole("listbox")
+			.should("contain.text", "Search for overdue items");
 		cy.get("#navbar-search")
 			.parents(".awesomplete")
 			.should("not.contain.text", "Ask overdue items");
@@ -103,9 +109,8 @@ context("Crema role gate", () => {
 
 		cy.get("[data-crema]").should("be.visible");
 
-		cy.get("#navbar-modal-search").click();
+		cy.get(".navbar-modal-search-mobile:visible").click();
 		cy.get("#navbar-search").type("overdue items");
-		cy.wait(400);
 		cy.get("#navbar-search")
 			.parents(".awesomplete")
 			.findByRole("listbox")
@@ -124,7 +129,7 @@ context("Crema role gate", () => {
 		cy.contains("button", "Give Me the Crema User Role").should("be.visible");
 
 		cy.contains("button", "Give Me the Crema User Role").click();
-		cy.get(".desk-alert").should("contain", "Role added");
+		cy.get(".es-toast").should("contain", "Role added");
 
 		cy.reload();
 		cy.contains(

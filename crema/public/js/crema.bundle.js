@@ -131,13 +131,6 @@ function crema_filter_diff(doctype, raw) {
 	return { set, child_set };
 }
 
-function crema_schema_prompt(doctype) {
-	const lines = crema_readable_fields(doctype).map((df) =>
-		`- ${df.fieldname} (${df.fieldtype}) ${df.label || ""}`.trim()
-	);
-	return `Fields of doctype '${doctype}':\n${lines.join("\n")}`;
-}
-
 // Fieldnames actually shown as columns in the open list view — cur_list.columns only
 // exists once ListView.setup_columns has run for THIS doctype, so fall back to the same
 // in_list_view/title_field/name rule the framework itself builds columns from
@@ -781,6 +774,10 @@ function crema_apply_spec(doctype, data) {
 	try {
 		spec = JSON.parse(crema_strip_fence(data.result));
 	} catch (e) {
+		spec = null;
+	}
+	// JSON.parse accepts `null`, a number and a string. None of them is a spec.
+	if (!spec || typeof spec !== "object") {
 		frappe.msgprint({ message: __("Crema returned an unreadable answer."), indicator: "red" });
 		return;
 	}
@@ -1022,8 +1019,8 @@ function crema_rank_candidate(candidates, rows, needle) {
 
 // The failed term split into words worth trying individually — "Acme Corp Ltd" against
 // a record named "Acme Corporation" fails a whole-term substring probe outright, but
-// "Acme" alone finds it. Words under 2 characters are noise (a stray "a"/"of" would
-// match almost every row and win on volume, not relevance).
+// "Acme" alone finds it. The filter drops words under 2 characters. A stray "a" matches
+// almost every row, so it can fill the row limit of the probe and hide better words.
 function crema_term_words(term) {
 	return term
 		.split(/\s+/)
@@ -1107,7 +1104,7 @@ function crema_widen_if_empty(doctype, filters) {
 					__('No match in {0}. Showing rows where {1} {2} "{3}".', [
 						label(failed.fieldname),
 						label(field),
-						exact ? "is" : "contains",
+						exact ? __("is") : __("contains"),
 						frappe.utils.escape_html(term),
 					])
 				);
@@ -1118,13 +1115,12 @@ function crema_widen_if_empty(doctype, filters) {
 			if (!words.length) return giveUp();
 
 			return probe(words).then((word_rows) => {
-				// Rank every (field, word) pair independently, not just field — a word
-				// that never appears in a given field must not win it by default just
-				// because a different word matched a different candidate there.
+				// Pick the word that matches the fewest rows, because the rarer word is
+				// the more specific one. The earlier word wins a tie.
 				let best = null;
 				for (const word of words) {
 					const ranked = crema_rank_candidate(candidates, word_rows, word.toLowerCase());
-					if (ranked.count && (!best || ranked.count > best.count)) {
+					if (ranked.count && (!best || ranked.count < best.count)) {
 						best = { ...ranked, word };
 					}
 				}
@@ -1160,8 +1156,8 @@ function crema_show_reason(spec) {
 	}
 }
 
-// Runs the zero-result fallback once, when `list` first renders the rows it fetched
-// under exactly `filters`. The caller refreshes the list right after this call. Returns
+// Runs the zero-result fallback once, when `list` first renders no rows under exactly
+// `filters`. The caller refreshes the list right after this call. Returns
 // whether a check is pending (only a single text-lookup filter can widen).
 //
 // No fixed delay can find that point. base_list.js refresh() sets list.data in a .then
@@ -1171,8 +1167,12 @@ function crema_show_reason(spec) {
 // "UI Tests" flake, fixed 300 ms timer). refresh() calls after_render() only after
 // prepare_data() has set list.data, so the check runs there.
 //
+// The filter area shows the applied filters before the response for them arrives, so a
+// stale response can render rows under those filters. Only an empty render under the
+// applied filters uses the check. A render with rows leaves the hook armed.
+//
 // One pending check per list: a newer prompt replaces it. After CREMA_WIDEN_WAIT_MS,
-// the hook removes itself, so a later refresh by the user never widens.
+// a hook left armed removes itself, so a later refresh by the user does not widen.
 function crema_widen_on_render(list, doctype, filters) {
 	if (!crema_failed_term(doctype, filters)) return false;
 	const want = JSON.stringify(crema_filter_rows(doctype, filters));
@@ -1184,7 +1184,7 @@ function crema_widen_on_render(list, doctype, filters) {
 	};
 	const hook = function (...args) {
 		const result = original.apply(this, args);
-		if (JSON.stringify(this.get_filters_for_args()) === want) {
+		if (!this.data.length && JSON.stringify(this.get_filters_for_args()) === want) {
 			restore();
 			crema_widen_if_empty(doctype, filters);
 		}
@@ -1235,7 +1235,12 @@ function crema_resolve_error(e) {
 		});
 		return;
 	}
-	crema_show_error();
+	// Any other error. frappe.db.get_list does not reject on a server error, so this is
+	// an exception in the code above, and frappe has shown nothing for it.
+	frappe.msgprint({
+		message: __("Crema could not complete this request."),
+		indicator: "red",
+	});
 }
 
 // Shared confirm dialog for edit/delete on more than one record, and for a multi-record
@@ -1667,17 +1672,27 @@ function crema_open_transform_dialog(frm) {
 				callback(r) {
 					const data = r.message;
 					if (!data) return;
+					// The client write fence, on top of the server's own _filter_diff: it
+					// also drops read-only fields and every field of a blocked doctype.
+					const diff = crema_filter_diff(frm.doctype, data);
+					if (!Object.keys(diff.set).length && !Object.keys(diff.child_set).length) {
+						frappe.msgprint({
+							message: __("Crema did not propose any change you may write."),
+							indicator: "orange",
+						});
+						return;
+					}
 					dialog.fields_dict.preview.df.hidden = 0;
 					dialog.set_df_property(
 						"preview",
 						"options",
 						`<div class="text-muted small">${frappe.utils.escape_html(
 							data.reason || ""
-						)}</div>${crema_diff_table(data)}`
+						)}</div>${crema_diff_table(diff)}`
 					);
 					dialog.refresh();
 					dialog.set_primary_action(__("Apply"), () => {
-						crema_apply_diff(frm.doctype, frm.docname, data, frm);
+						crema_apply_diff(frm.doctype, frm.docname, diff, frm);
 						dialog.hide();
 					});
 				},
@@ -1746,15 +1761,17 @@ function crema_open_field_draft_dialog(frm, fieldname, label) {
 				freeze: true,
 				freeze_message: __("Thinking…"),
 				callback(r) {
-					const data = r.message;
-					if (!data || !(fieldname in (data.set || {}))) {
+					// The same client write fence as the form button (Path C).
+					const data = r.message || {};
+					const diff = crema_filter_diff(frm.doctype, data);
+					if (!(fieldname in diff.set)) {
 						frappe.msgprint({
 							message: __("Crema had nothing to propose for this field."),
 							indicator: "orange",
 						});
 						return;
 					}
-					const value = data.set[fieldname];
+					const value = diff.set[fieldname];
 					dialog.fields_dict.preview.df.hidden = 0;
 					dialog.set_df_property(
 						"preview",
@@ -1812,14 +1829,15 @@ function crema_open_field_draft_dialog(frm, fieldname, label) {
 		// secondary_action is null for every core list-family view (base_list.js), so the
 		// .btn-secondary slot is free — but don't stomp a view that claims it for itself.
 		if (!crema_allowed() || this.secondary_action) return;
-		// set_secondary_action always renders "<icon> <span>{label}</span>" (page.js
-		// get_icon_label), so an empty label still lays out a hidden span and the
-		// button's min-width padding makes it wider than the square reload button next
-		// to it. Force the same .icon-btn geometry the reload button uses instead.
+		// The .html() call below replaces the content of the button with the icon only.
+		// frappe sets `.secondary-action { min-width: 40px }`, and that rule makes the
+		// button wider than the .icon-btn width. Set min-width to the width of the
+		// square reload button next to it.
 		this.page
 			.set_secondary_action("", () => crema_open_dialog(this.doctype), "bot")
 			.addClass("icon-btn")
 			.html(frappe.utils.icon("bot", "sm"))
+			.css("min-width", "var(--btn-height)")
 			.attr("title", __("Ask Crema"))
 			.attr("data-crema", "1");
 	};
@@ -1838,6 +1856,7 @@ function crema_open_field_draft_dialog(frm, fieldname, label) {
 		const frm = this.frm;
 		if (
 			!crema_allowed() ||
+			crema_blocked(frm.doctype) ||
 			frm.doc.__islocal ||
 			!frm.perm[0]?.write ||
 			this.page.wrapper.find("[data-crema-form]").length
@@ -1869,6 +1888,7 @@ function crema_open_field_draft_dialog(frm, fieldname, label) {
 		if (
 			!frm ||
 			!crema_allowed() ||
+			crema_blocked(frm.doctype) ||
 			frm.doc.__islocal ||
 			!frm.perm[0]?.write ||
 			this.df.parent !== frm.doctype || // excludes a child-table grid cell
@@ -1933,9 +1953,10 @@ function crema_usage_pill(usage) {
 	} else if (pct >= 80) {
 		color = "orange";
 	}
-	return `<span class="indicator-pill ${color}" title="${spend} of $${crema_fmt_usd(
-		usage.budget
-	)}">${pct}%</span>`;
+	return `<span class="indicator-pill ${color}" title="${__("{0} of {1}", [
+		spend,
+		`$${crema_fmt_usd(usage.budget)}`,
+	])}">${pct}%</span>`;
 }
 
 function crema_fmt_usd(value) {

@@ -596,6 +596,31 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         for chart in _DASHBOARD_CHARTS:
             self.assertTrue(frappe.db.exists("Dashboard Chart", chart["name"]))
 
+    def test_action_cards_count_failed_tasks_and_pending_proposals(self):
+        """The two cards above Calls count rows of other doctypes, and a click opens that
+        doctype's list with the same filters."""
+        import json
+
+        from crema.install import sync_dashboard
+
+        sync_dashboard()
+        failed = frappe.get_doc("Number Card", "Failed Tasks")
+        self.assertEqual(failed.document_type, "Crema Automation Task")
+        self.assertEqual(
+            json.loads(failed.filters_json),
+            [
+                ["Crema Automation Task", "enabled", "=", 1],
+                ["Crema Automation Task", "last_status", "=", "Failed"],
+            ],
+        )
+        pending = frappe.get_doc("Number Card", "Pending Proposals")
+        self.assertEqual(pending.document_type, "Crema Proposal")
+        self.assertEqual(json.loads(pending.filters_json), [["Crema Proposal", "status", "=", "Pending"]])
+
+        blocks = json.loads(frappe.get_doc("Workspace", "Crema").content)
+        cards = [b["data"]["number_card_name"] for b in blocks if b["type"] == "number_card"]
+        self.assertEqual(cards[:3], ["Failed Tasks", "Pending Proposals", "Calls"])
+
     def test_workspace_blocks_point_at_cards_and_charts_that_exist(self):
         """The workspace body matches card/chart blocks to its own links and charts by
         *label* (frappe's blocks/block.js make()), and silently renders nothing on a
@@ -621,9 +646,8 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
                 self.assertIn(data["number_card_name"], number_card_labels)
 
     def test_sidebar_section_breaks_are_indented_with_their_children_nested(self):
-        """On version-16 the sidebar is its own Workspace Sidebar fixture, so this reads
-        the fixture file rather than `frappe.get_doc` (version-17 moves the same list into
-        the Workspace as `sidebar_items`). Frappe's sidebar template renders a Section
+        """The sidebar is the app's shipped Sidebar record, so this reads
+        its file rather than `frappe.get_doc`. Frappe's sidebar template renders a Section
         Break with `indent: 0` as a static muted caption instead of a real collapsible
         group header, and its children never get the CSS indent that nests them
         underneath — exactly the bug that left Setup/Automation/Activity looking
@@ -631,7 +655,7 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         import json
         from pathlib import Path
 
-        path = frappe.get_app_path("crema", "workspace_sidebar", "crema.json")
+        path = frappe.get_app_path("crema", "crema", "sidebar", "crema", "crema.json")
         sidebar_items = json.loads(Path(path).read_text())["items"]
 
         under_a_section = False
@@ -643,6 +667,26 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
                 self.assertTrue(under_a_section, f"{item['label']} has no Section Break to nest under")
             else:
                 under_a_section = False
+
+    def test_crema_is_on_the_framework_rail_with_its_sidebar_sections(self):
+        """The Dock puts Crema on the Framework rail, and the Crema Sidebar holds the
+        Setup, Automation and Activity sections."""
+        import frappe.desk.doctype.dock.dock as dock
+
+        dock.drop_dock_caches(None)
+        self.assertEqual(dock.mounted_apps().get("crema"), "frappe")
+        rail = dock.resolve_dock()["frappe"]
+        self.assertTrue(
+            any(e.get("link_to") == "Crema" and e.get("link_type") == "Sidebar" for e in rail),
+            "Crema Sidebar is not on the Framework rail",
+        )
+        sections = frappe.get_all(
+            "Sidebar Item",
+            filters={"parent": "Crema", "parenttype": "Sidebar", "type": "Section Break"},
+            pluck="label",
+            order_by="idx",
+        )
+        self.assertEqual(sections, ["Setup", "Automation", "Activity"])
 
     def test_workspace_blocks_fill_every_row(self):
         """Blocks flow into one continuous flex row of 12 columns, so three rules hold.
@@ -788,8 +832,8 @@ class IntegrationTestCremaInstall(CremaFixtureTestCase):
         form fails User.validate and takes the whole install down with it."""
         from crema.install import _isolation_user_email
 
-        with patch.object(frappe.local, "site", "fcr.local"):
-            self.assertEqual(_isolation_user_email(), "crema@fcr.local")
+        with patch.object(frappe.local, "site", "erp.local"):
+            self.assertEqual(_isolation_user_email(), "crema@erp.local")
 
         cases = (("test_site", "crema@test-site.localhost"), ("mysite", "crema@mysite.localhost"))
         for site, expected in cases:
@@ -1707,7 +1751,7 @@ class IntegrationTestCremaPolicy(CremaFixtureTestCase):
 class IntegrationTestCremaListColumns(IntegrationTestCase):
     """A field the list's get_indicator already renders, or that is the autoname source,
     must not also be a column — that is the same value twice on one row. See the list-view
-    convention in CLAUDE.md, and the *_list.js files these mirror."""
+    convention, and the *_list.js files these mirror."""
 
     def test_automation_task_list_does_not_column_what_the_indicator_reads(self):
         meta = frappe.get_meta("Crema Automation Task")

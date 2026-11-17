@@ -53,11 +53,15 @@ Cypress.Commands.overwrite("login", (login, email, password) => {
 // registered after this one and so wins; anything left over lands here and fails
 // loudly rather than billing whatever provider the site happens to have configured.
 const BILLABLE_METHODS = [
-	"ask_api",
-	"extract_api",
-	"transform_api",
-	"dry_run_automation",
-	"run_automation_now",
+	"crema.api.ask_api",
+	"crema.api.extract_api",
+	"crema.api.extract_async",
+	"crema.api.transform_api",
+	"crema.api.ocr_api",
+	"crema.api.dry_run_automation",
+	"crema.api.run_automation_now",
+	// The Translate Built-in List action on the Crema Health Word list asks a model too.
+	"crema.crema.doctype.crema_health_word.crema_health_word.translate_words",
 ];
 
 beforeEach(() => {
@@ -82,7 +86,7 @@ beforeEach(() => {
 	}
 
 	for (const method of BILLABLE_METHODS) {
-		cy.intercept("POST", `/api/method/crema.api.${method}`, {
+		cy.intercept("POST", `/api/method/${method}`, {
 			statusCode: 599,
 			body: { exc_type: "CremaUnstubbedCallError", _server_messages: JSON.stringify([]) },
 		});

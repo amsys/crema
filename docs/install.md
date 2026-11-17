@@ -15,7 +15,7 @@ virtual environment sets it automatically when you activate it.
    ```
 
    This command gets the `version-16` branch. It works with a bench on Frappe
-   `version-16`. A `develop` branch also exists. It follows Frappe `develop`. Do not use
+   `version-16`, release 16.50.0 or later. A `develop` branch also exists. It follows Frappe `develop`. Do not use
    it yet.
 
 2. Install the app on your site:
@@ -24,8 +24,8 @@ virtual environment sets it automatically when you activate it.
    bench --site <your-site> install-app crema
    ```
 
-3. Open the Desk. Find **Crema** in the app list. The icon is a robot — opening it
-   lands you directly on **Crema Settings**.
+3. Open the Desk. Open **Framework** in the app list. Select **Crema** in the rail
+   on the left. The icon is a robot.
 
 ## What the install step does
 

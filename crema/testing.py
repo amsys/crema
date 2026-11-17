@@ -39,7 +39,7 @@ def seed_provider(
     CremaConfigError for that reason.
 
     `base_url`'s default is a private address, so CremaProvider.validate needs no
-    `api_key` to enable it (see crema/security.md's provider-key rule). Does not
+    `api_key` to enable it (see docs/security.md's provider-key rule). Does not
     commit — same as every other write in this call chain, that is the caller's job
     (see docs/use.md's "Testing an app that uses crema" for the before_tests shape).
     """

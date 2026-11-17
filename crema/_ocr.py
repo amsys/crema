@@ -68,7 +68,7 @@ def _load_bytes(file: str | bytes) -> tuple[bytes, str]:
     A str is treated as a frappe File URL, permission-checked as the CALLING (session)
     user before its content is read — the same fence api._resolve_files applies to
     ask(files=[...]). This is the isolation user's own permission wherever this runs
-    inside sandbox.isolation (every automation path, per CLAUDE.md); the desk
+    inside sandbox.isolation (every automation path); the desk
     file->record flow instead runs as the browser user who just uploaded the file,
     which is deliberate — crema.bundle.js uploads a private, unattached File owned by
     that user, and only that user (or an isolation-user check) could then read it back.
@@ -272,6 +272,13 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict[str, Any]:
     try:
         content, mime = _load_bytes(file)
         prompt_sha = hashlib.sha256(content).hexdigest()
+        if instruction:
+            # The instruction is text a caller wrote, not document content, so the
+            # Text Scan reads it before any provider call. The document text is still
+            # not scanned (see the module docstring).
+            from crema import guardrails
+
+            guardrails.gate(cfg, instruction)
         parts = prep_parts(content, mime)
 
         prompt_text = f"{instruction}\n\n{_JSON_INSTRUCTION}" if instruction else _JSON_INSTRUCTION
@@ -281,10 +288,10 @@ def ocr(file: str | bytes, instruction: str | None = None) -> dict[str, Any]:
         _log.check_budget(cfg)
         result, used_cfg = _run(cfg, user_message, response_format)
     except (CremaBudgetError, CremaBlockedError) as exc:
-        # CremaBlockedError here is a guardrail inside client._complete's onion — in
-        # practice the reply check, the only guardrail whose default covers OCR (the
-        # scan skips this path by design) — logged as Blocked, not
-        # Error, same reasoning as crema.api._Ask.__call__'s equivalent handler.
+        # CremaBlockedError here is the Text Scan on the caller's instruction, the page
+        # limit, or a guardrail inside client._complete's onion (in practice the
+        # reply check; the scan does not read the document text). Logged as Blocked,
+        # not Error, same reasoning as crema.api._Ask.__call__'s equivalent handler.
         duration_ms = int((time.monotonic() - start) * 1000)
         _log.insert(
             cfg["interface"],

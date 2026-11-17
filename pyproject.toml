@@ -16,7 +16,7 @@ dependencies = [
     # The floor is above the 1.82.7/1.82.8 supply-chain compromise and the proxy
     # credential-redirect advisory GHSA-3cv6-jpf6-8222 (see docs/security.md's Secrets
     # section); <2 keeps an unreviewed major from arriving on a routine bump.
-    "litellm>=1.104.0,<2",
+    "litellm>=1.108.3,<2",
     "pymupdf",
     # The two below are layer 1 (crema/security.py) only, both pure-Python tables:
     # `ftfy` to repair mojibake, `anyascii` to transliterate look-alike letters to ASCII
@@ -30,9 +30,10 @@ requires = ["flit_core >=4.1.0,<5"]
 build-backend = "flit_core.buildapi"
 
 # bench and the Frappe marketplace read this range to check the app against the
-# frappe version in the bench. The -dev low bound also matches a pre-release bench.
+# frappe version in the bench. 16.50.0 is the first release with the Dock and Sidebar
+# records, which hold crema's desk menu (crema/dock, crema/crema/sidebar).
 [tool.bench.frappe-dependencies]
-frappe = ">=16.0.0-dev,<17.0.0"
+frappe = ">=16.50.0,<17.0.0"
 
 # These dependencies are only installed when developer mode is enabled
 [tool.bench.dev-dependencies]

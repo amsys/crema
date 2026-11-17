@@ -2,7 +2,7 @@
 // source-filter builder. Every server call is stubbed with cy.intercept — same rule the
 // Python suite follows (patch at the boundary, never call a live model).
 //
-// Run with: bench --site fcr.local run-ui-tests crema --headless
+// Run with: bench --site <site> run-ui-tests crema --headless
 context("Crema Automation Task form", () => {
 	const TASK = "_cypress_crema_task";
 	// A second task rather than a second source row on TASK: "Update the Records It Read"
@@ -224,7 +224,7 @@ context("Crema Automation Task form", () => {
 		cy.wait("@interfaces");
 		// Never run yet, and disabled. The status lives in the page header indicator now
 		// rather than in an HTML field, so that is what has to say so.
-		cy.get(".page-head .indicator-pill").should("contain.text", "Never run");
+		cy.get(".page-head .page-indicator-pill").should("contain.text", "Never run");
 		cy.findByRole("button", { name: "Dry Run" }).should("exist");
 		cy.findByRole("button", { name: "Run Now" }).should("exist");
 	});
@@ -432,6 +432,69 @@ context("Crema Automation Task form", () => {
 			.click({ force: true });
 		cy.get(".modal-body").should("contain.text", XSS_NAME);
 		cy.window().its("__xss").should("eq", undefined);
+	});
+
+	it("calls undo_last_run for the task after the confirm, and reports the count", () => {
+		cy.intercept("POST", "/api/method/crema.api.undo_last_run", {
+			statusCode: 200,
+			body: { message: { deleted: 1, failed: [] } },
+		}).as("undo");
+
+		cy.visit(`/app/crema-automation-task/${XSS_TASK}`);
+		cy.wait("@interfaces");
+		// The same forced click on the hidden item store as the test above.
+		cy.get('.inner-group-button[data-label="More"]').find("button").first().click();
+		cy.get('.inner-group-button[data-label="More"] .dropdown-item')
+			.contains("Undo Last Run")
+			.click({ force: true });
+		cy.get("@undo.all").should("have.length", 0);
+
+		cy.window().its("cur_dialog.display").should("eq", true);
+		cy.get(".modal.show .btn-modal-primary").click();
+		cy.wait("@undo")
+			.its("request.body")
+			.then((body) => {
+				expect(new URLSearchParams(body).get("task")).to.eq(XSS_TASK);
+			});
+		cy.get(".es-toast").should("contain.text", "Deleted 1 record(s).");
+	});
+
+	it("queues the task on Run Now and shows the job", () => {
+		cy.intercept("POST", "/api/method/crema.api.run_automation_now", {
+			statusCode: 200,
+			body: { message: "crema-cypress-job" },
+		}).as("run_now");
+
+		cy.visit(`/app/crema-automation-task/${TASK}`);
+		cy.wait("@interfaces");
+		cy.findByRole("button", { name: "Run Now" }).click();
+		cy.wait("@run_now")
+			.its("request.body")
+			.then((body) => {
+				expect(new URLSearchParams(body).get("task")).to.eq(TASK);
+			});
+		cy.get(".es-toast").should("contain.text", "Queued as crema-cypress-job");
+	});
+
+	// A blocked doctype is a site-wide write red line, so Crema offers no write button on
+	// its form: not the form's Ask Crema button, and no per-field draft button. The list
+	// is opened first and the form by route, so the boot value is set before the form
+	// renders for the first time on this page.
+	it("shows no Ask Crema button and no draft buttons on a blocked doctype's form", () => {
+		cy.visit("/app/crema-automation-task");
+		cy.get(".list-row-container, .no-result");
+		cy.window().then((win) => {
+			win.frappe.boot.crema_blocked_doctypes = ["Crema Automation Task"];
+			win.frappe.set_route("Form", "Crema Automation Task", TASK);
+		});
+
+		// Prove that the form rendered before the absence checks. The notify_to field is
+		// below the fold, so "exist", not "be.visible".
+		cy.get(".crema-pipeline-cards").should("be.visible");
+		cy.window().its("cur_frm.doc.name").should("eq", TASK);
+		cy.get('.frappe-control[data-fieldname="notify_to"] textarea').should("exist");
+		cy.get("[data-crema-form]").should("not.exist");
+		cy.get(".btn-crema-draft").should("not.exist");
 	});
 
 	// --- the pipeline strip ---------------------------------------------------------

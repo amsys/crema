@@ -14,6 +14,10 @@ function crema_modal() {
 	return cy.get(".modal.show");
 }
 
+// The widen probe sends or_filters made of "like" conditions. frappe's own saved-layout
+// fetch also sends or_filters, with "=" conditions: that is not a probe.
+const WIDEN_PROBE = /frappe\.desk\.reportview\.get_list\?.*or_filters=[^&]*like/;
+
 const CREATED_CONTACTS = [];
 
 function crema_insert_contact(fields) {
@@ -211,10 +215,7 @@ context("Crema desk UI", () => {
 		// crema_valid_filters' warning (frappe.show_alert, default 7s) auto-dismisses —
 		// check it before the location assertions below, not after, or a slow retry on
 		// those can outlive it. The message is generic (doesn't name the dropped field).
-		cy.get(".desk-alert").should(
-			"contain.text",
-			"Crema named a condition this list cannot use"
-		);
+		cy.get(".es-toast").should("contain.text", "Crema named a condition this list cannot use");
 		// list_view.js's get_search_params only JSON.stringifies a non-"=" operator; "="
 		// is written as the bare value.
 		cy.location("search").should("contain", "status=Open");
@@ -240,44 +241,74 @@ context("Crema desk UI", () => {
 		// refresh the list twice (once via the route change, once via on_sort_change).
 		// Already being on the target List should collapse that to one.
 		//
-		// Sorts by "modified", not "name" (the previous test's own target): frappe
-		// persists the list's last sort per user/doctype (frappe.model.utils.user_settings)
-		// and reapplies it on the next page load, and base_list.js throttles a refresh
-		// whose args exactly repeat the last one for 3 seconds (no_change()) — requesting
-		// the very sort the last test just persisted can silently no-op instead of firing
-		// a real request. A distinct sort sidesteps that race instead of racing it.
-		cy.intercept("POST", "/api/method/frappe.desk.reportview.get").as("listget");
-		crema_stub_ask({
-			view: "List",
-			order_by: "modified desc",
-			reason: "sorted by last modified",
+		// Sorts by a field other than the saved sort: frappe persists the list's last sort
+		// per user/doctype (frappe.model.utils.user_settings) and reapplies it on the next
+		// page load, and base_list.js throttles a refresh whose args exactly repeat the
+		// last one for 3 seconds (no_change()). The saved sort can give no request at all.
+		//
+		// The count takes every list query sent after crema's ask, with any sort, so an
+		// extra query with the saved sort fails the test. frappe's own first list load goes
+		// out before the prompt, so the flag keeps it out of the count.
+		let asked = false;
+		const queries_after_ask = [];
+		cy.intercept("POST", "/api/method/frappe.desk.reportview.get", (req) => {
+			if (asked) queries_after_ask.push(req.body);
 		});
-		crema_prompt("sort by last modified");
-		cy.wait("@listget");
-
-		cy.get("@listget.all").should("have.length", 1);
+		cy.window()
+			.its("cur_list.sort_selector.sort_by")
+			.then((saved) => {
+				const target = saved === "modified" ? "creation" : "modified";
+				crema_stub_ask({ view: "List", order_by: `${target} desc`, reason: "sorted" });
+				// The last intercept runs first: it sets the flag, then the stub replies.
+				cy.intercept("POST", "/api/method/crema.api.ask_api", () => {
+					asked = true;
+				});
+				crema_prompt("sort by last modified");
+				cy.wrap(queries_after_ask).should("not.be.empty");
+				// Let a late refresh land before the count, so that a second query fails the test.
+				cy.wait(1500).then(() => {
+					expect(queries_after_ask).to.have.length(1);
+					const order_by = new URLSearchParams(queries_after_ask[0]).get("order_by");
+					expect(order_by).to.include(target);
+				});
+			});
 	});
 
 	it("drops an order_by field the model invented and leaves the sort untouched", () => {
-		crema_stub_ask({ view: "List", order_by: "not_a_field desc", reason: "sorted" });
+		crema_stub_ask({
+			view: "List",
+			order_by: "not_a_field desc",
+			reason: "sorted by an invented field",
+		});
 
-		cy.get(".sort-selector .btn-order")
-			.invoke("attr", "data-value")
-			.then((before) => {
+		cy.window()
+			.its("cur_list.sort_selector")
+			.then((sort) => {
+				const before = { field: sort.sort_by, order: sort.sort_order };
 				crema_prompt("sort somehow");
-				cy.get(".sort-selector .btn-order").should("have.attr", "data-value", before);
+				// crema_show_reason runs after the list refresh, so the spec is applied
+				// when the alert shows. Without this wait, the checks below pass before
+				// the spec runs.
+				cy.get(".es-toast").should("contain.text", "sorted by an invented field");
+				cy.window().its("cur_list.sort_selector.sort_by").should("eq", before.field);
+				cy.window().its("cur_list.sort_selector.sort_order").should("eq", before.order);
 			});
 	});
 
 	it("applies page_length as a row limit", () => {
+		// Two rows at least, so that a limit of 1 shows less than the list holds.
+		crema_insert_contact({ first_name: "crema page length one" });
+		crema_insert_contact({ first_name: "crema page length two" });
 		crema_stub_ask({ view: "List", page_length: 1, reason: "top 1" });
 		crema_prompt("show me the top 1");
 
+		cy.get(".es-toast").should("contain.text", "top 1");
+		cy.window().its("cur_list.page_length").should("eq", 1);
 		// .list-row-container also wraps the header row (list_view.js wraps both the
 		// <header class="list-row-head"> and each data row's .list-row in their own
 		// .list-row-container) — .list-row alone (the header's own inner element is
 		// .list-row-head, a different class) matches data rows only.
-		cy.get(".list-row-container .list-row").its("length").should("be.lte", 1);
+		cy.get(".list-row-container .list-row").should("have.length", 1);
 	});
 
 	it("round-trips a like filter with a wildcard intact", () => {
@@ -316,6 +347,10 @@ context("Crema desk UI", () => {
 		});
 		crema_prompt("group by status");
 
+		// The reason alert shows after the spec is applied. The checks below pass before
+		// the spec runs, so they wait for it.
+		cy.get(".es-toast").should("contain.text", "grouped by status");
+		cy.window().its("cur_list.view_name").should("eq", "List");
 		cy.location("search").should("not.contain", "_group_by");
 	});
 
@@ -325,10 +360,10 @@ context("Crema desk UI", () => {
 		// second LLM call.
 		crema_insert_contact({ first_name: "crema fallback probe" });
 		// frappe.db.get_list sends type: "GET" (frappe/public/js/frappe/db.js), not POST.
-		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
-		// desk code that sends it) — a bare get_list* intercept also counts unrelated
-		// desk traffic on a slow runner and breaks the exact probe-count assertions.
-		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
+		// or_filters of "like" conditions are the widen probe's signature (WIDEN_PROBE). A
+		// bare get_list* intercept also counts unrelated desk traffic on a slow runner
+		// and breaks the exact probe-count assertions.
+		cy.intercept("GET", WIDEN_PROBE).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%probe%"] },
@@ -347,10 +382,10 @@ context("Crema desk UI", () => {
 		// The term is the whole first_name, not a substring of it — the widen probe's
 		// own results already prove an exact hit, at no extra query.
 		crema_insert_contact({ first_name: "crema exact probe" });
-		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
-		// desk code that sends it) — a bare get_list* intercept also counts unrelated
-		// desk traffic on a slow runner and breaks the exact probe-count assertions.
-		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
+		// or_filters of "like" conditions are the widen probe's signature (WIDEN_PROBE). A
+		// bare get_list* intercept also counts unrelated desk traffic on a slow runner
+		// and breaks the exact probe-count assertions.
+		cy.intercept("GET", WIDEN_PROBE).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%crema exact probe%"] },
@@ -378,10 +413,10 @@ context("Crema desk UI", () => {
 		// stored value) as one substring — the whole-term probe below must come back
 		// empty before a second, per-word probe finds "Acme".
 		crema_insert_contact({ first_name: "Acme Corporation One" });
-		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
-		// desk code that sends it) — a bare get_list* intercept also counts unrelated
-		// desk traffic on a slow runner and breaks the exact probe-count assertions.
-		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
+		// or_filters of "like" conditions are the widen probe's signature (WIDEN_PROBE). A
+		// bare get_list* intercept also counts unrelated desk traffic on a slow runner
+		// and breaks the exact probe-count assertions.
+		cy.intercept("GET", WIDEN_PROBE).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%Acme Corp One%"] },
@@ -410,7 +445,7 @@ context("Crema desk UI", () => {
 		cy.intercept(/frappe\.desk\.reportview\.get\b/, (req) => {
 			req.on("response", (res) => res.setDelay(1000));
 		});
-		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*or_filters=/).as("probe");
+		cy.intercept("GET", WIDEN_PROBE).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { designation: ["like", "%slow probe%"] },
@@ -424,6 +459,7 @@ context("Crema desk UI", () => {
 	});
 
 	it("leaves an empty list alone when nothing matches anywhere", () => {
+		cy.intercept("GET", WIDEN_PROBE).as("probe");
 		crema_stub_ask({
 			view: "List",
 			filters: { first_name: ["like", "%zzz-no-such-text%"] },
@@ -431,8 +467,20 @@ context("Crema desk UI", () => {
 		});
 		crema_prompt("contacts about zzz-no-such-text");
 
-		cy.get(".no-result").should("be.visible");
+		// The list is empty before the widen check runs, so .no-result alone proves
+		// nothing. The alert below shows only after both probes (the whole term, then
+		// each word) found nothing.
+		cy.get(".es-toast", { timeout: 20000 }).should(
+			"contain.text",
+			'Nothing contains "zzz-no-such-text" in this list.'
+		);
+		cy.get("@probe.all").should("have.length", 2);
 		cy.get("@ask.all").should("have.length", 1);
+		cy.location("search").should(
+			"contain",
+			encodeURIComponent('["like","%zzz-no-such-text%"]')
+		);
+		cy.get(".no-result").should("be.visible");
 	});
 
 	it("shows a blocked prompt as a red message, not a silent no-op", () => {
@@ -484,7 +532,7 @@ context("Crema desk UI", () => {
 		});
 
 		cy.location("pathname").should("contain", "/contact/new-contact-");
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 		cy.get(".frappe-control[data-fieldname=first_name] input").should(
 			"have.value",
 			"Call Acme back"
@@ -556,7 +604,7 @@ context("Crema desk UI", () => {
 		crema_prompt("create a contact to call Acme back");
 
 		cy.location("pathname").should("contain", "/contact/new-contact-");
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 		cy.get(".frappe-control[data-fieldname=first_name] input").should(
 			"have.value",
 			"Call Acme back"
@@ -631,7 +679,7 @@ context("Crema desk UI", () => {
 		crema_modal().within(() => cy.get(".btn-modal-primary").contains("Apply").click());
 
 		cy.location("pathname").should("contain", "crema%20edit-one%20target");
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
 	});
 
 	it("refuses an edit spec whose only proposed field is read-only", () => {
@@ -692,6 +740,61 @@ context("Crema desk UI", () => {
 		cy.wait("@delete_items");
 	});
 
+	it("lists every record before a bulk edit, and sends only the writable fields", () => {
+		// An edit spec that matches more than one record goes through frappe's own bulk
+		// update endpoint, after a confirm dialog. The fixtures are real and the update
+		// runs for real; after() deletes both contacts.
+		crema_insert_contact({ first_name: "crema bulk edit one" });
+		crema_insert_contact({ first_name: "crema bulk edit two" });
+		cy.intercept(
+			"POST",
+			"/api/method/frappe.desk.doctype.bulk_update.bulk_update.submit_cancel_or_update_docs"
+		).as("bulk_update");
+		crema_stub_ask({
+			action: "edit",
+			filters: { first_name: ["like", "crema bulk edit%"] },
+			set: { status: "Open", email_id: "bogus@example.com" },
+			child_set: {},
+			reason: "opening the two bulk edit contacts",
+		});
+		crema_prompt("mark the crema bulk edit contacts open");
+
+		crema_modal().should("contain", "Update 2 Contact records");
+		crema_modal().should("contain", "Records to update");
+		crema_modal().should("contain", "crema bulk edit one");
+		crema_modal().should("contain", "crema bulk edit two");
+		cy.get("@bulk_update.all").should("have.length", 0);
+
+		cy.window().its("cur_dialog.display").should("eq", true);
+		crema_modal().within(() => cy.get(".btn-modal-primary").click());
+		cy.wait("@bulk_update").then(({ request }) => {
+			const body = new URLSearchParams(request.body);
+			expect(body.get("action")).to.eq("update");
+			expect(JSON.parse(body.get("docnames"))).to.have.length(2);
+			// email_id is read-only on Contact, so the client fence drops it.
+			expect(JSON.parse(body.get("data"))).to.deep.equal({ status: "Open" });
+		});
+		cy.get(".es-toast").should("contain.text", "Updated successfully");
+	});
+
+	it("shows a generic message when resolving the records fails in the browser", () => {
+		// frappe.db.get_list does not reject on a server error. A reply with no message
+		// makes the code after it throw, and crema_resolve_error used to show nothing.
+		cy.intercept("GET", /frappe\.desk\.reportview\.get_list\?.*limit=501/, {
+			statusCode: 200,
+			body: {},
+		}).as("resolve");
+		crema_stub_ask({
+			action: "delete",
+			filters: { first_name: ["=", "crema resolve error target"] },
+			reason: "deleting one contact",
+		});
+		crema_prompt("delete the crema resolve error target contact");
+		cy.wait("@resolve");
+
+		cy.get(".msgprint").should("contain", "Crema could not complete this request");
+	});
+
 	it("matches an underscore literally instead of as a SQL wildcard", () => {
 		// "_" is a single-character SQL LIKE wildcard — unescaped, ["like", "_crema..."]
 		// would match every row with at least one leading character, not just this one.
@@ -742,22 +845,23 @@ context("Crema desk UI", () => {
 	});
 
 	it("renders a model-authored reason as text, not HTML", () => {
-		crema_stub_ask({ view: "List", reason: "<img src=x onerror=alert(1)>" });
+		// The payload does not use alert(1), because frappe's toast deletes that shape.
+		crema_stub_ask({ view: "List", reason: "<img src=x onerror=hacked()>" });
 		crema_prompt("show open contacts");
 
-		cy.get(".desk-alert .alert-message").should(
+		cy.get(".es-toast .es-toast__message").should(
 			"contain.text",
-			"<img src=x onerror=alert(1)>"
+			"<img src=x onerror=hacked()>"
 		);
-		cy.get(".desk-alert .alert-message img").should("not.exist");
+		cy.get(".es-toast .es-toast__message img").should("not.exist");
 	});
 
 	it("offers an Ask … option in the awesomebar on a list view", () => {
-		cy.get("#navbar-modal-search").click();
+		cy.get(".navbar-modal-search-mobile:visible").click();
 		cy.get("#navbar-search").type("overdue items");
-		cy.wait(400);
 		// .awesomplete also matches other link controls on the page (e.g. a sidebar field)
-		// — scope to the navbar's own dropdown.
+		// — scope to the navbar's own dropdown. The assertion retries until the debounced
+		// list shows, so no fixed wait is necessary.
 		cy.get("#navbar-search")
 			.parents(".awesomplete")
 			.findByRole("listbox")
@@ -766,44 +870,84 @@ context("Crema desk UI", () => {
 	});
 });
 
+const SAVED_CONTACTS = [];
+
+// Opens a saved Contact the same way a person gets one: fill the new form and save.
+function crema_save_new_contact(first_name) {
+	cy.visit("/app/contact/new");
+	cy.get(".frappe-control[data-fieldname=first_name] input").first().type(first_name);
+	cy.get(".primary-action").contains("Save").click();
+	// The save is done when the form holds a saved document, not after a fixed delay.
+	cy.window().should((win) => expect(win.cur_frm.is_new()).to.not.be.ok);
+	cy.window()
+		.its("cur_frm.doc.name")
+		.then((name) => SAVED_CONTACTS.push(name));
+}
+
+function crema_stub_transform(set) {
+	return cy
+		.intercept("POST", "/api/method/crema.api.transform_api", {
+			statusCode: 200,
+			body: { message: { set, child_set: {}, reason: "updated" } },
+		})
+		.as("transform");
+}
+
+// The form button's dialog: type an instruction and press Go.
+function crema_ask_form(instruction) {
+	cy.get("[data-crema-form]").click();
+	crema_modal().within(() => {
+		cy.get(".frappe-control[data-fieldname=instruction] textarea").type(instruction);
+		cy.get(".btn-modal-primary").click();
+	});
+	cy.wait("@transform");
+}
+
 context("Crema desk UI — form view", () => {
 	before(() => {
 		cy.visit("/login");
 		cy.login();
 	});
 
+	after(() => {
+		SAVED_CONTACTS.forEach((name) => cy.remove_doc("Contact", name, true));
+	});
+
 	it("renders a robot button on a saved form and applies a diff without saving", () => {
-		cy.visit("/app/contact/new");
-		cy.get(".frappe-control[data-fieldname=first_name] input")
-			.first()
-			.type("a contact to transform");
-		cy.get(".primary-action").contains("Save").click();
-		cy.wait(500);
+		crema_save_new_contact("a contact to transform");
 
 		cy.get("[data-crema-form]").should("be.visible");
 
-		cy.intercept("POST", "/api/method/crema.api.transform_api", {
-			statusCode: 200,
-			body: {
-				message: {
-					set: { first_name: "Updated by Crema" },
-					child_set: {},
-					reason: "updated",
-				},
-			},
-		}).as("transform");
-
-		cy.get("[data-crema-form]").click();
-		crema_modal().within(() => {
-			cy.get(".frappe-control[data-fieldname=instruction] textarea").type(
-				"mark this urgent"
-			);
-			cy.get(".btn-modal-primary").click();
-		});
-		cy.wait("@transform");
+		crema_stub_transform({ first_name: "Updated by Crema" });
+		crema_ask_form("mark this urgent");
 		crema_modal().within(() => cy.get(".btn-modal-primary").contains("Apply").click());
 
-		cy.get(".indicator-pill").should("contain", "Not Saved");
+		cy.get(".page-indicator-pill").should("contain", "Not Saved");
+		cy.window().its("cur_frm.doc.first_name").should("eq", "Updated by Crema");
+	});
+
+	it("drops a read-only and an invented field from the form button's diff", () => {
+		// The client write fence (crema_filter_diff) runs on the transform reply too, not
+		// only on the server: email_id is read_only on Contact, not_a_field does not exist.
+		crema_save_new_contact("a contact to filter");
+
+		crema_stub_transform({
+			first_name: "Filtered by Crema",
+			email_id: "bogus@example.com",
+			not_a_field: "x",
+		});
+		crema_ask_form("change the name and the email");
+
+		crema_modal().within(() => {
+			cy.get("table").should("contain.text", "first_name");
+			cy.get("table").should("not.contain.text", "email_id");
+			cy.get("table").should("not.contain.text", "not_a_field");
+			cy.get(".btn-modal-primary").contains("Apply").click();
+		});
+
+		cy.window().its("cur_frm.doc.first_name").should("eq", "Filtered by Crema");
+		cy.window().its("cur_frm.doc.email_id").should("not.eq", "bogus@example.com");
+		cy.window().its("cur_frm.doc").should("not.have.property", "not_a_field");
 	});
 });
 
@@ -815,6 +959,8 @@ context("Crema desk UI — create spec child rows", () => {
 
 	beforeEach(() => {
 		cy.visit("/desk/contact");
+		// The same wait as the first context: the list must render before the prompt.
+		cy.get(".list-row-container, .no-result");
 	});
 
 	it("keeps child rows from a create spec", () => {
@@ -935,6 +1081,37 @@ context("Crema Settings", () => {
 		});
 	});
 
+	it("clears every use case override on Reset All Use Cases, and leaves the form unsaved", () => {
+		// Give the first row an override first, so the reset has something to clear. The
+		// form is never saved: the next visit reloads it from the database.
+		cy.window().then((win) => {
+			const row = win.cur_frm.doc.assignments[0];
+			win.frappe.model.set_value(row.doctype, row.name, "model", "made-up-model");
+			win.frappe.model.set_value(row.doctype, row.name, "temperature", 0.7);
+		});
+		cy.window().its("cur_frm.doc.assignments.0.model").should("eq", "made-up-model");
+
+		// The Use Cases section starts collapsed. scroll_to_field opens it.
+		cy.window().then((win) => win.cur_frm.scroll_to_field("assignments", false));
+		cy.contains('[data-fieldname="assignments"] button', "Reset All Use Cases").click();
+		cy.window().its("cur_dialog.display").should("eq", true);
+		cy.get(".modal.show").should("contain.text", "Clear every setting on every use case?");
+		cy.get(".modal.show .btn-modal-primary").click();
+
+		cy.window().should((win) => {
+			for (const row of win.cur_frm.doc.assignments) {
+				expect(row.provider || "", row.interface).to.eq("");
+				expect(row.model || "", row.interface).to.eq("");
+				expect(row.isolation_user || "", row.interface).to.eq("");
+				expect(row.system_prompt || "", row.interface).to.eq("");
+				expect(row.temperature || 0, row.interface).to.eq(0);
+				expect(row.monthly_budget_usd || 0, row.interface).to.eq(0);
+				expect(row.cache_ttl || 0, row.interface).to.eq(0);
+			}
+		});
+		cy.get(".page-head").should("contain.text", "Not Saved");
+	});
+
 	// Providers are the Crema Provider list view now, not a panel on this form, and the
 	// sidebar lists Providers above Settings — so the form carries no link of its own.
 	// The one case it does interrupt for is having no enabled provider at all, since
@@ -963,8 +1140,7 @@ context("Crema Settings", () => {
 	});
 
 	// crema_load_default_models fetches Default Model's data from Default Provider (an
-	// Autocomplete with no built-in source of its own) and, per CLAUDE.md's "flag
-	// uncertainty" rule for a model that has drifted out of the provider's list, paints an
+	// Autocomplete with no built-in source of its own) and, for a model that has drifted out of the provider's list, paints an
 	// inline red warning rather than failing silently.
 	it("warns inline when the default model isn't offered by the default provider", () => {
 		cy.intercept("POST", "/api/method/crema.api.get_models", {
@@ -1056,6 +1232,41 @@ context("Crema Settings", () => {
 		cy.visit("/app/crema-settings");
 		cy.window().its("cur_frm.doc.disabled").should("eq", 0);
 	});
+
+	// The off switch is the last field of the last section, so a red banner at the top of
+	// the form says so. It follows the field, not the saved value: the form is never saved.
+	it("shows a red banner while Crema Is Off is set and drops it when cleared", () => {
+		// By text: the "No AI service is switched on" warning is a red form message too.
+		const banner = "Crema is off for the whole site";
+		cy.window().its("cur_frm.doc.disabled").should("eq", 0);
+		cy.contains(".form-message.red", banner).should("not.exist");
+		cy.window().then((win) => win.cur_frm.set_value("disabled", 1));
+		cy.contains(".form-message.red", banner).should("be.visible");
+		cy.window().then((win) => win.cur_frm.set_value("disabled", 0));
+		cy.contains(".form-message.red", banner).should("not.exist");
+	});
+});
+
+context("Crema workspace", () => {
+	before(() => {
+		cy.visit("/login");
+		cy.login();
+	});
+
+	// The two cards that ask for action sit above Calls, Spend and Blocked.
+	it("shows Failed Tasks and Pending Proposals above the usage cards", () => {
+		cy.visit("/app/crema");
+		cy.contains(".number-widget-box .widget-title", "Calls").should("be.visible");
+		cy.get(".number-widget-box .widget-title").then(($titles) => {
+			expect([...$titles].map((el) => el.textContent.trim())).to.deep.equal([
+				"Failed Tasks",
+				"Pending Proposals",
+				"Calls",
+				"Spend",
+				"Blocked",
+			]);
+		});
+	});
 });
 
 context("Crema Guardrails", () => {
@@ -1102,12 +1313,21 @@ context("Crema Guardrails", () => {
 });
 
 describe("Crema Provider list", () => {
+	// The Connection pill test's two providers.
+	const UP = "_cypress_connection_up";
+	const DOWN = "_cypress_connection_down";
+
 	before(() => {
 		cy.login();
 	});
 
 	beforeEach(() => {
 		cy.visit("/app/crema-provider");
+	});
+
+	after(() => {
+		cy.remove_doc("Crema Provider", UP, true);
+		cy.remove_doc("Crema Provider", DOWN, true);
 	});
 
 	it("keeps the New from Template action", () => {
@@ -1119,6 +1339,89 @@ describe("Crema Provider list", () => {
 	// list column, so its header must be there whether or not a provider exists.
 	it("shows the Address column", () => {
 		cy.get(".list-row-head").contains("Address").should("exist");
+	});
+
+	it("paints the Connection pill from check_provider, green when it connects and red when not", () => {
+		// Two enabled providers on a local address (no API key needed for those). Every
+		// check_provider call is stubbed: the probe reaches the provider over the network.
+		cy.insert_doc(
+			"Crema Provider",
+			{ provider_name: UP, base_url: "http://localhost:9/v1", enabled: 1 },
+			true
+		);
+		cy.insert_doc(
+			"Crema Provider",
+			{ provider_name: DOWN, base_url: "http://localhost:9/v1", enabled: 1 },
+			true
+		);
+		cy.intercept("POST", "/api/method/crema.api.check_provider", (req) => {
+			const provider = new URLSearchParams(req.body).get("provider");
+			req.reply({
+				statusCode: 200,
+				body: {
+					message:
+						provider === UP
+							? { ok: true, detail: "Connected (stub)" }
+							: { ok: false, detail: "Refused (stub)" },
+				},
+			});
+		}).as("check");
+
+		cy.visit("/app/crema-provider");
+		cy.wait("@check");
+		cy.contains(".list-row", UP)
+			.contains(".indicator-pill.green", "Connected (stub)")
+			.should("be.visible");
+		cy.contains(".list-row", DOWN)
+			.contains(".indicator-pill.red", "Refused (stub)")
+			.should("be.visible");
+	});
+
+	it("probes a provider again only after the Connection pill result is 60 s old", () => {
+		// The cache lives in the list script's page scope (CREMA_CONNECTION_TTL_MS), so
+		// the page is not reloaded: a refresh of the open list is the second render.
+		cy.insert_doc(
+			"Crema Provider",
+			{ provider_name: UP, base_url: "http://localhost:9/v1", enabled: 1 },
+			true
+		);
+		let probes = 0;
+		cy.intercept("POST", "/api/method/crema.api.check_provider", (req) => {
+			if (new URLSearchParams(req.body).get("provider") === UP) probes += 1;
+			req.reply({
+				statusCode: 200,
+				body: { message: { ok: true, detail: "Connected (stub)" } },
+			});
+		});
+		// Fake Date only: frappe's own timers must keep running.
+		cy.clock(Date.now(), ["Date"]);
+		cy.visit("/app/crema-provider");
+		cy.contains(".list-row", UP)
+			.contains(".indicator-pill.green", "Connected (stub)")
+			.should("be.visible");
+		// Let the first probe round end; later counts are relative to this one.
+		cy.wait(3000);
+
+		const render_again = () =>
+			cy.window().then((win) => {
+				win.cur_list.last_args = null;
+				return win.cur_list.refresh();
+			});
+		let before;
+		cy.then(() => {
+			before = probes;
+		});
+
+		// 30 s later: still fresh, so the second render sends no probe.
+		cy.tick(30000);
+		render_again();
+		cy.contains(".list-row", UP).should("be.visible");
+		cy.wait(1500).then(() => expect(probes).to.eq(before));
+
+		// 31 s more (61 s since the probe): stale, so the next render probes again.
+		cy.tick(31000);
+		render_again();
+		cy.wrap(null).should(() => expect(probes).to.eq(before + 1));
 	});
 
 	it("fills the base URL from a preset in the New from Template dialog", () => {
@@ -1155,6 +1458,50 @@ describe("Crema Health Word list", () => {
 		cy.contains("button", "Translate Built-in List").click();
 		cy.get(".modal-title").contains("Translate Built-in List").should("be.visible");
 		cy.get(".modal .frappe-control[data-fieldname=language]").should("be.visible");
+	});
+
+	it("sends the language to translate_words and reports the counts", () => {
+		// translate_words asks the Translation use case, so it is stubbed like every
+		// other model call.
+		cy.intercept(
+			"POST",
+			"/api/method/crema.crema.doctype.crema_health_word.crema_health_word.translate_words",
+			{ statusCode: 200, body: { message: { added: 2, skipped: 3 } } }
+		).as("translate");
+
+		cy.contains("button", "Translate Built-in List").click();
+		cy.window().its("cur_dialog.display").should("eq", true);
+		// Any Language record on the site does: the reply is stubbed.
+		cy.window()
+			.then((win) => win.frappe.db.get_list("Language", { fields: ["name"], limit: 1 }))
+			.then((rows) => {
+				expect(rows, "a Language record").to.have.length(1);
+				const language = rows[0].name;
+				cy.window().then((win) => win.cur_dialog.set_value("language", language));
+				// A Link value is set only after its server check, so wait for it.
+				cy.window()
+					.its("cur_dialog")
+					.invoke("get_value", "language")
+					.should("eq", language);
+				// The Link field's suggestion list stays open over the button after the
+				// value is set. A click on the dialog title takes the focus from the input,
+				// which closes the list. (Escape can close the dialog too.)
+				cy.get(".modal.show .modal-title").click();
+				cy.get(
+					".modal.show .frappe-control[data-fieldname=language] .awesomplete ul"
+				).should("not.be.visible");
+				cy.get(".modal.show .btn-modal-primary").contains("Translate").click();
+				cy.wait("@translate")
+					.its("request.body")
+					.then((body) => {
+						expect(new URLSearchParams(body).get("language")).to.eq(language);
+					});
+			});
+
+		cy.get(".msgprint").should(
+			"contain",
+			"Added 2 new word(s), switched off. Skipped 3 already on the list."
+		);
 	});
 });
 
@@ -1212,9 +1559,13 @@ describe("Crema Automation Task form — File Query source", () => {
 		// synthetic events, and the underlying <li> markup isn't a stable target either.
 		// set_value fires the exact same target_doctype field trigger a real pick would;
 		// this test's own subject is the "Pick fields…" picker, not the Link control's
-		// autocomplete UX, so this only exercises the same client-side warning test above.
+		// autocomplete UX.
 		cy.window().then((win) => win.cur_frm.set_value("target_doctype", "Contact"));
-		cy.wait(300); // frappe.model.with_doctype fetches Contact's meta before the link renders
+		// The target_doctype handler loads Contact's meta (frappe.model.with_doctype), then
+		// may fill match_on. The handler adds the picker link first, so the link and the
+		// meta together show that it ran. Wait for those, not for a fixed time.
+		cy.get(".frappe-control[data-fieldname='match_on'] a.crema-match-on-pick").should("exist");
+		cy.window().its("locals.DocType.Contact").should("exist");
 
 		// target_doctype's own handler auto-fills match_on from Contact's unique/autoname
 		// fields when it's still empty (crema_default_match_fields) — the picker dialog

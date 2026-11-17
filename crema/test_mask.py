@@ -6,6 +6,7 @@ functions, no database needed — mirrors test_security.py's style.
 from __future__ import annotations
 
 import random
+import time
 
 from crema import mask
 from crema.terms import TermGroup
@@ -542,3 +543,41 @@ class UnitTestCremaMaskTerms(UnitTestCase):
         self.assertNotIn("Ramgoolam", hidden)
         self.assertEqual(len(vault.by_entity), 1)
         self.assertEqual(mask.restore(hidden, vault), text)
+
+
+class UnitTestCremaMaskHostileInput(UnitTestCase):
+    """Input an attacker can put in a prompt or a document: text that makes a pattern
+    slow, a short record term, and a bare token."""
+
+    def test_a_long_run_with_no_at_sign_is_read_in_linear_time(self):
+        vault = mask.Vault()
+        for text in ("a_" * 20000, "Aaa-" * 20000, "Abc'" * 20000, "Aaa " * 20000 + "1"):
+            started = time.monotonic()
+            mask.hide(text, vault)
+            self.assertLess(time.monotonic() - started, 2.0, text[:8])
+
+    def test_an_email_is_still_found_inside_other_text(self):
+        vault = mask.Vault()
+        hidden = mask.hide("write to (jo.doe+x@mail.example.com), please", vault)
+        self.assertNotIn("jo.doe", hidden)
+        self.assertEqual(
+            vault.by_token[vault.by_value["jo.doe+x@mail.example.com"]], "jo.doe+x@mail.example.com"
+        )
+
+    def test_a_short_term_does_not_change_a_token_made_before_it(self):
+        vault = mask.Vault(terms=[TermGroup(["Acme Ltd", "1", "M"], "ACCOUNT")])
+        text = "Acme Ltd has 1 item, size M."
+        hidden = mask.hide(text, vault, patterns=[], sweep=False)
+        self.assertNotIn("[[ACCOUNT_[[", hidden)
+        self.assertEqual(mask.restore(hidden, vault), text)
+
+    def test_a_bare_token_in_the_input_does_not_restore_as_a_hidden_value(self):
+        vault = mask.Vault()
+        text = "Use the placeholder EMAIL_1 in the template, then write to bob@x.com."
+        hidden = mask.hide(text, vault)
+        self.assertIn("EMAIL_1", vault.by_value)
+        self.assertEqual(mask.restore(hidden, vault), text)
+
+    def test_a_bare_word_with_another_label_is_left_alone(self):
+        vault = mask.Vault()
+        self.assertIn("SKU_12", mask.hide("Order SKU_12 for bob@x.com.", vault))

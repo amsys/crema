@@ -984,6 +984,24 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
         self.assertEqual(kwargs["metadata"], {"tags": [cfg["interface"]]})
         self.assertNotIn("response_format", kwargs)
 
+    def test_the_login_is_not_sent_while_personal_information_is_hidden(self):
+        from crema import guardrails
+
+        cfg = client._resolve("simple")
+        with (
+            patch.object(guardrails, "active", return_value="Block"),
+            patch.object(guardrails, "run", side_effect=lambda cfg, msgs, call, fmt=None: call(msgs)),
+            patch("litellm.completion") as mock_completion,
+        ):
+            mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content="hi"))])
+            client._complete(cfg, [{"role": "user", "content": "hello"}])
+            first = mock_completion.call_args.kwargs["user"]
+            client._complete(cfg, [{"role": "user", "content": "hello"}])
+
+        self.assertTrue(first.startswith("crema-"))
+        self.assertNotIn(frappe.session.user, first)
+        self.assertEqual(mock_completion.call_args.kwargs["user"], first)
+
     def test_stamped_user_is_the_real_caller_not_the_isolation_user(self):
         """_call_raw runs inside sandbox.isolation(cfg["isolation_user"]) — by the
         time it fires, frappe.session.user IS the isolation user, not whoever called
@@ -1063,13 +1081,11 @@ class IntegrationTestCremaClient(CremaFixtureTestCase):
     def test_get_interfaces_returns_selectable_interfaces_with_labels(self):
         """interfaces.selectable() (PREDEFINED plus every app-registered interface,
         minus INTERNAL and NOT_FOR_TASKS) — the set the Automation Task AI Profile
-        picker may be assigned to — each paired with its interfaces.LABELS label (or
-        its raw key for an app-registered interface with no core label)."""
+        picker may be assigned to — each paired with interfaces.label_for: the core
+        label, or the label an app gave its own interface, or the raw key."""
         from crema.api import get_interfaces
 
-        expected = [
-            {"value": name, "label": interfaces.LABELS.get(name, name)} for name in interfaces.selectable()
-        ]
+        expected = [{"value": name, "label": interfaces.label_for(name)} for name in interfaces.selectable()]
         self.assertEqual(get_interfaces(), expected)
 
     def test_get_interfaces_rejects_non_system_manager(self):
@@ -1568,7 +1584,7 @@ class IntegrationTestCremaModelAssignmentValidation(CremaFixtureTestCase):
 
 class IntegrationTestCremaSandbox(CremaFixtureTestCase):
     """crema.sandbox.isolation — runs as the isolation user, restores session state
-    on exit (the form_dict/session.sid/session.data trap documented in CLAUDE.md)."""
+    on exit (the form_dict/session.sid/session.data trap in sandbox.isolation's docstring)."""
 
     @classmethod
     def setUpClass(cls) -> None:

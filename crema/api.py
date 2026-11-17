@@ -24,6 +24,7 @@ from crema._json import strip_fence
 from crema.exceptions import CremaBlockedError, CremaBudgetError, CremaConfigError
 from frappe import _
 from frappe.rate_limiter import rate_limit
+from frappe.utils import cint, sbool
 
 # Exactly the programmer surface crema/__init__.py re-exports, plus the three exceptions.
 # The whitelisted endpoints below are deliberately absent: they are addressed by dotted
@@ -88,6 +89,10 @@ def _prompt_hash(
     different isolation user must not let an old, differently-scoped reply survive
     the change.
 
+    guardrails.posture(...) is in it because a reply made with a check off (for example
+    the Reply Filter) must not be served from the cache after an admin turns that check
+    on. A change to the guardrail rows thus starts a new set of cache entries.
+
     No session user is in it, on purpose: nothing in a request is assembled under the
     *calling* user's permissions, so an identical request implies identical readable
     inputs whoever asks — see docs/security.md — The answer cache for the argument in
@@ -103,6 +108,7 @@ def _prompt_hash(
         cfg.get("isolation_user") or "",
         cfg.get("model") or "",
         cfg.get("system_prompt") or "",
+        guardrails.posture(cfg.get("requested") or cfg["interface"]),
         prompt,
         context or "",
         json.dumps(response_format, sort_keys=True) if response_format else "",
@@ -137,8 +143,12 @@ def _check_history(history: list[dict] | None) -> None:
     """A caller's `history` carries user and assistant turns only: the interface's own
     system prompt must stay the only system message."""
     for turn in history or []:
-        if turn.get("role") not in ("user", "assistant"):
+        if not isinstance(turn, dict) or turn.get("role") not in ("user", "assistant"):
             frappe.throw(_("A history turn must have the role 'user' or 'assistant'."))
+        if not isinstance(turn.get("content"), str):
+            # The Text Scan reads the text of each turn. Any other shape (a list of
+            # content parts) would be scanned as its repr and sent as it is.
+            frappe.throw(_("The content of a history turn must be text."))
 
 
 def _scan_context(context: str | None, history: list[dict] | None) -> str | None:
@@ -749,7 +759,8 @@ def ask_api(interface: str, prompt: str, context: str | None = None, response_js
         )
     _check_user_rate_limit()
 
-    kw = {"response_format": {"type": "json_object"}} if response_json else {}
+    # sbool, not truthiness: over HTTP the flag is a string, and "0" is a true string.
+    kw = {"response_format": {"type": "json_object"}} if cint(sbool(response_json)) else {}
     try:
         result = ask(interface, prompt, context=context, **kw)
     except (CremaBlockedError, CremaConfigError, CremaBudgetError) as exc:
@@ -954,10 +965,10 @@ def get_interfaces() -> list[dict[str, str]]:
     """Relabels the AI Profile picker on Crema Automation Task: {"value", "label"} pairs for
     every selectable interface. The values themselves are already in the doctype's meta
     (install.sync_interface_options) — this exists only because a frappe Select option
-    string cannot carry a label separate from its value. Labels come from interfaces.LABELS,
-    which is core-only, so an app-registered interface shows its raw key."""
+    string cannot carry a label separate from its value. Labels come from
+    interfaces.label_for, so an app-registered interface shows its own label."""
     frappe.only_for("System Manager")
-    return [{"value": name, "label": interfaces.LABELS.get(name, name)} for name in interfaces.selectable()]
+    return [{"value": name, "label": interfaces.label_for(name)} for name in interfaces.selectable()]
 
 
 @frappe.whitelist()
@@ -1132,6 +1143,8 @@ def _each_proposal(names: str | list[str], action) -> list[dict]:
             action(name)
         except Exception as exc:
             frappe.db.rollback(save_point="crema_proposal")
+            # After the rollback, so the Error Log row is not rolled back with it.
+            frappe.log_error(title=f"Crema proposal action failed: {name}"[:140])
             failures.append({"name": name, "error": _log_mod.redact(str(exc))})
         else:
             frappe.db.release_savepoint("crema_proposal")
@@ -1183,4 +1196,5 @@ def undo_last_run(task: str) -> dict:
     except frappe.PermissionError:
         raise
     except Exception as exc:
+        frappe.log_error(title=f"Crema undo failed: {task}"[:140])
         frappe.throw(_log_mod.redact(str(exc)))

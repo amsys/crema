@@ -23,7 +23,7 @@ function crema_render_status(frm) {
 	if (frm.is_new()) return;
 
 	frm.page.set_indicator(
-		__(frm.doc.last_status || "Never run"),
+		frm.doc.last_status ? __(frm.doc.last_status) : __("Never run"),
 		CREMA_STATUS_COLORS[frm.doc.last_status] || "gray"
 	);
 
@@ -99,7 +99,7 @@ function crema_pipeline_mark_html(mark) {
 
 function crema_pipeline_trigger_text(doc) {
 	const esc = frappe.utils.escape_html;
-	const title = __(doc.trigger || "Not set");
+	const title = doc.trigger ? __(doc.trigger) : __("Not set");
 	if (doc.trigger === "Schedule") {
 		const detail =
 			doc.schedule_preset && doc.schedule_preset !== "Custom"
@@ -145,7 +145,7 @@ function crema_pipeline_extract_text(doc) {
 
 function crema_pipeline_write_text(doc, pending_slot) {
 	const esc = frappe.utils.escape_html;
-	let text = __(doc.action || "Not set");
+	let text = doc.action ? __(doc.action) : __("Not set");
 	if (doc.target_doctype) text += ` → ${esc(doc.target_doctype)}`;
 	const emails = (doc.notify_to || "")
 		.split(",")
@@ -759,11 +759,6 @@ frappe.ui.form.on("Crema Automation Task", {
 		});
 	},
 
-	// Mirrors CremaAutomationTask._apply_email_trigger, which appends the same row in
-	// validate(). The server stays the source of truth; doing it here too means the row
-	// the trigger promises shows up when the trigger is picked, instead of the grid
-	// sitting empty — and mandatory — until a save the user cannot make yet. Like the
-	// server, this never removes the row when the trigger changes away.
 	// Prefill from the doctype's own metadata rather than leaving the admin to guess a
 	// fieldname — never overwrites a value they already set.
 	target_doctype(frm) {
@@ -775,6 +770,11 @@ frappe.ui.form.on("Crema Automation Task", {
 		});
 	},
 
+	// Mirrors CremaAutomationTask._apply_email_trigger, which appends the same row in
+	// validate(). The server stays the source of truth; doing it here too means the row
+	// the trigger promises shows up when the trigger is picked, instead of the grid
+	// sitting empty — and mandatory — until a save the user cannot make yet. Like the
+	// server, this never removes the row when the trigger changes away.
 	trigger(frm) {
 		if (frm.doc.trigger !== "Incoming Email") return;
 		const seeded = (frm.doc.sources || []).some(
@@ -822,7 +822,7 @@ frappe.ui.form.on("Crema Automation Task", {
 					freeze: true,
 					callback(r) {
 						frappe.show_alert({
-							message: __("Queued as {0}", [r.message]),
+							message: __("Queued as {0}", [frappe.utils.escape_html(r.message)]),
 							indicator: "green",
 						});
 					},

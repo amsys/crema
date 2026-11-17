@@ -1,5 +1,5 @@
 """Crema Log controller. Records are inserted with ignore_permissions=True from
-crema/api.py and are otherwise read/delete only -- the one exception is before_insert,
+crema/log.py and are otherwise read/delete only -- the one exception is before_insert,
 which stamps a hash chain (see crema.log.verify_chain) linking each row to the one
 before it, so an edit or a deletion inside the retention window becomes evident."""
 

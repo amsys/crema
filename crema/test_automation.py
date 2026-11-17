@@ -5,7 +5,7 @@ both go through it) and `patch("requests.get")` for the fetch. Everything else �
 validation, the sandbox, the insert or update, permission enforcement — runs for real.
 
 That boundary sits one layer ABOVE the repo-wide `patch("crema.client._complete")`
-convention (CLAUDE.md) — deliberately: these tests target the pipeline around the LLM
+convention — deliberately: these tests target the pipeline around the LLM
 calls, and the full _Ask stack under ask_json is test_client.py's job. The exception is
 IntegrationTestCremaAutomationAskBoundary at the bottom, which drops to the real
 boundary so the security scan and the Crema Log audit run for real on automation's
@@ -697,6 +697,19 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
         self.assertNotIn(task.name, {call.kwargs.get("task") for call in enqueue.call_args_list})
 
+    def test_tick_reports_an_invalid_stored_cron_once_not_on_every_tick(self):
+        task = _make_task(schedule="0 3 * * *")
+        frappe.db.set_value("Crema Automation Task", task.name, "schedule", "not a cron expression")
+        key = frappe.cache.make_key(f"crema:bad_schedule:{task.name}")
+        self.addCleanup(frappe.cache.delete, key)
+
+        with patch("frappe.enqueue"), patch("frappe.log_error") as log_error:
+            automation.tick()
+            automation.tick()
+
+        titles = [call.kwargs.get("title", "") for call in log_error.call_args_list]
+        self.assertEqual(len([t for t in titles if task.name in t]), 1)
+
     # --- kill switch --------------------------------------------------------
 
     def test_tick_enqueues_nothing_when_disabled(self):
@@ -910,6 +923,114 @@ class IntegrationTestCremaAutomation(CremaFixtureTestCase):
 
         self.assertEqual(counts["skipped"], 1)
         self.assertEqual(frappe.db.count("ToDo"), before)
+
+    # --- the write fence for row values ---------------------------------------
+
+    @staticmethod
+    def _victim_contact() -> tuple[str, str, str]:
+        """A Contact with one email line. Returns (contact, line name, email)."""
+        marker = uuid.uuid4().hex[:8]
+        email = f"_test_crema_victim_{marker}@example.com"
+        doc = frappe.get_doc(
+            {
+                "doctype": "Contact",
+                "first_name": f"_test_crema_victim_{marker}",
+                "email_ids": [{"email_id": email}],
+            }
+        ).insert(ignore_permissions=True)
+        return doc.name, doc.email_ids[0].name, email
+
+    @staticmethod
+    def _attacker_contact() -> str:
+        """A Contact that exists before the write. frappe gives every row of a NEW
+        parent a new name, so only the update of an existing parent runs
+        UPDATE ... WHERE name= on a row that carries a name. Returns its first name."""
+        first_name = f"_test_crema_attacker_{uuid.uuid4().hex[:8]}"
+        frappe.get_doc({"doctype": "Contact", "first_name": first_name}).insert(ignore_permissions=True)
+        return first_name
+
+    def _assert_victim_untouched(self, contact: str, line: str, email: str) -> None:
+        row = frappe.db.get_value("Contact Email", line, ["parent", "email_id"], as_dict=True)
+        self.assertEqual((row.parent, row.email_id), (contact, email))
+
+    def test_a_child_row_name_from_the_model_cannot_overwrite_a_line_of_another_record(self):
+        """frappe reads a child dict with a `name` as an existing row and runs
+        UPDATE ... WHERE name= on it. The mapping here is what an old stored proposal
+        can still hold; _validate_plan refuses it for a new plan."""
+        contact, line, email = self._victim_contact()
+        attacker = self._attacker_contact()
+        mapping = {
+            "doctype": "Contact",
+            "match_fields": ["first_name"],
+            "field_map": {"t": "first_name"},
+            "child_table": {
+                "fieldname": "email_ids",
+                "match_fields": ["email_id"],
+                "field_map": {"n": "name", "p": "parent", "e": "email_id"},
+            },
+        }
+
+        automation._upsert(mapping, [{"t": attacker, "n": line, "p": contact, "e": "evil@example.com"}])
+
+        self._assert_victim_untouched(contact, line, email)
+        own = frappe.get_doc("Contact", {"first_name": attacker})
+        self.assertEqual([r.email_id for r in own.email_ids], ["evil@example.com"])
+        self.assertNotEqual(own.email_ids[0].name, line)
+
+    def test_a_file_record_child_row_name_cannot_overwrite_a_line_of_another_record(self):
+        contact, line, email = self._victim_contact()
+        attacker = self._attacker_contact()
+        record = {
+            "set": {
+                "first_name": attacker,
+                "name": contact,
+                "email_ids": [{"name": line, "email_id": "x@example.com"}],
+            },
+            "child_set": {
+                "email_ids": [{"name": line, "parent": contact, "idx": 7, "email_id": "evil@example.com"}],
+                "no_such_table": [{"email_id": "evil@example.com"}],
+            },
+        }
+
+        counts = automation._upsert_files("Contact", [record], ["first_name"])
+
+        self.assertEqual(counts["updated"], 1)
+        self._assert_victim_untouched(contact, line, email)
+        own = frappe.get_doc("Contact", {"first_name": attacker})
+        self.assertEqual([r.email_id for r in own.email_ids], ["evil@example.com"])
+        self.assertNotEqual(own.email_ids[0].name, line)
+
+    def test_validate_plan_rejects_name_in_a_child_field_map(self):
+        plan = {
+            "version": 1,
+            "extract": {"prompt": EXTRACT_PROMPT},
+            "map": {
+                "doctype": "Contact",
+                "match_fields": ["first_name"],
+                "field_map": {"t": "first_name"},
+                "child_table": {
+                    "fieldname": "email_ids",
+                    "match_fields": ["email_id"],
+                    "field_map": {"e": "email_id", "n": "name"},
+                },
+            },
+        }
+        with self.assertRaises(automation.AutomationError):
+            automation._validate_plan(plan, "Contact")
+
+    def test_validate_plan_rejects_a_table_or_password_field_in_the_field_map(self):
+        for doctype, fieldname in (("Contact", "email_ids"), ("User", "new_password")):
+            plan = {
+                "version": 1,
+                "extract": {"prompt": EXTRACT_PROMPT},
+                "map": {
+                    "doctype": doctype,
+                    "match_fields": ["first_name"],
+                    "field_map": {"t": "first_name", "x": fieldname},
+                },
+            }
+            with self.assertRaises(automation.AutomationError, msg=fieldname):
+                automation._validate_plan(plan, doctype)
 
     def test_upsert_child_does_nothing_when_the_row_has_no_mapped_values(self):
         doc = frappe.new_doc("Contact")
@@ -1238,6 +1359,26 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         task.reload()
         self.assertIn("lines left out", task.last_result or "")
 
+    def test_a_record_with_many_lines_does_not_take_the_lines_of_the_next_record(self):
+        """Each record has its own limit. One query for the whole batch gave the first
+        record every row of the limit, and the second record reached the model with
+        no lines and no note."""
+        marker = uuid.uuid4().hex[:10]
+        many = [f"{marker}-{i}@example.com" for i in range(2 * automation._CHILD_MAX_ROWS_PER_RECORD + 1)]
+        heavy = self._contact(marker, many)  # sorts before "<marker>-light"
+        light_emails = [f"{marker}-light-{i}@example.com" for i in range(2)]
+        light = self._contact(f"{marker}-light", light_emails)
+        task = self._child_task([heavy, light], read_children=True)
+
+        status, ask_json = _run(task.name, [{"rows": [{"id": "does-not-matter", "prio": "Low"}]}])
+
+        self.assertEqual(status, "Success")
+        sent_prompt = ask_json.call_args.args[1]
+        for email in light_emails:
+            self.assertIn(email, sent_prompt)
+        task.reload()
+        self.assertIn("1 record(s) had table lines left out", task.last_result or "")
+
     def test_a_child_password_or_permlevel_field_never_travels(self):
         """_child_fields delegates to _source_fields for the same fence
         (test_document_query_never_sends_permlevel_or_underscore_fields above), and
@@ -1474,6 +1615,29 @@ class IntegrationTestCremaAutomationSources(CremaFixtureTestCase):
         status, _ = _run(task.name, [{"rows": [{"id": first, "prio": "High"}]}])
 
         self.assertEqual(status, "Success")
+        self.assertEqual(_last_read(task), old)
+
+    def test_records_with_the_timestamp_of_the_last_row_of_a_full_batch_are_read(self):
+        """The watermark filter is a strict ">". Three records share one timestamp and
+        the limit is 2: the third one must be read in this run, because the next run
+        starts after that timestamp."""
+        old = add_to_date(now_datetime(), days=-1)
+        names = [self._todo(f"same stamp {i}") for i in range(3)]
+        for name in names:
+            frappe.db.set_value("ToDo", name, "modified", old, update_modified=False)
+        task = _make_query_task(
+            incremental=1,
+            source_limit=2,
+            last_read=add_to_date(old, minutes=-10),
+            plan_json=frappe.as_json(_update_plan()),
+        )
+
+        status, ask_json = _run(task.name, [{"rows": [{"id": names[0], "prio": "High"}]}])
+
+        self.assertEqual(status, "Success")
+        sent_prompt = ask_json.call_args.args[1]
+        for name in names:
+            self.assertIn(name, sent_prompt)
         self.assertEqual(_last_read(task), old)
 
     def test_uncapped_incremental_batch_advances_the_watermark_to_the_run_start(self):
@@ -2125,6 +2289,29 @@ class IntegrationTestCremaAutomationRunAs(CremaFixtureTestCase):
 
         self.assertEqual(isolation.call_args[0][0], OTHER_ISOLATION_USER)
 
+    def test_an_account_the_sandbox_refuses_is_recorded_as_a_failure(self):
+        """The account was valid when the task was saved and is disabled now. The run
+        must record a failure, so that the status is not stale and five such runs
+        disable the task."""
+        task = _make_task(run_as=OTHER_ISOLATION_USER, plan_json=frappe.as_json(_todo_plan()))
+        frappe.db.set_value("User", OTHER_ISOLATION_USER, "enabled", 0)
+
+        status, ask_json = _run(task.name, [])
+
+        self.assertEqual(status, "Failed")
+        ask_json.assert_not_called()
+        row = frappe.db.get_value(
+            "Crema Automation Task",
+            task.name,
+            ["last_status", "last_failed_stage", "consecutive_failures", "last_error"],
+            as_dict=True,
+        )
+        self.assertEqual(
+            (row.last_status, row.last_failed_stage, row.consecutive_failures), ("Failed", "Setup", 1)
+        )
+        self.assertIn("disabled", row.last_error)
+        self.assertFalse(getattr(frappe.local, "crema_in_automation", False))
+
     def test_a_system_manager_is_refused(self):
         """Same fence as a Crema Model Assignment row's own Runs As — an override that
         could name Administrator or a System Manager would dissolve the sandbox."""
@@ -2502,6 +2689,8 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
     this account a System User in the first place.
     """
 
+    _FIRST_NAME = "_test_crema_fq_contact"  # no other app owns this first name
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -2527,7 +2716,7 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
 
     @staticmethod
     def _make_file_task(**kw):
-        # fcr.local is a real, populated site (docs/README.md's own test target) with
+        # The suite can run on a populated site, with
         # thousands of File rows already — an unfiltered File Query would read the
         # oldest of *those*, oldest-first, and never reach a file this test just
         # created. Real tasks narrow the same way (attached_to_doctype, is_private,
@@ -2556,27 +2745,43 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         self._make_file()
         task = self._make_file_task()
 
-        status, mock = self._run_files(task, [_ocr_result(), _extraction_result({"first_name": "Jane"})])
+        status, mock = self._run_files(
+            task, [_ocr_result(), _extraction_result({"first_name": self._FIRST_NAME})]
+        )
 
         self.assertEqual(status, "Success")
         self.assertEqual(mock.call_count, 2)
-        self.assertTrue(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        self.assertTrue(frappe.db.exists("Contact", {"first_name": self._FIRST_NAME}))
         task.reload()
         self.assertIn("1 created", task.last_result)
+
+    def test_a_file_query_run_refuses_a_target_blocked_after_the_task_was_saved(self):
+        self._make_file()
+        task = self._make_file_task()
+
+        with patch("crema.automation.policy.blocked_doctypes", return_value={"Contact"}):
+            status, _mock = self._run_files(
+                task, [_ocr_result(), _extraction_result({"first_name": self._FIRST_NAME})]
+            )
+
+        self.assertEqual(status, "Failed")
+        self.assertFalse(frappe.db.exists("Contact", {"first_name": self._FIRST_NAME}))
+        task.reload()
+        self.assertIn("blocked doctype list", task.last_error)
 
     def test_second_run_over_the_same_file_updates_not_duplicates(self):
         """The match_on fence: a re-read invoice must update the record it already
         created, not import a second copy of it."""
         self._make_file()
         task = self._make_file_task()  # incremental off — both runs read the same file
-        self._run_files(task, [_ocr_result(), _extraction_result({"first_name": "Jane"})])
+        self._run_files(task, [_ocr_result(), _extraction_result({"first_name": self._FIRST_NAME})])
 
         status, _mock = self._run_files(
-            task, [_ocr_result(), _extraction_result({"first_name": "Jane", "last_name": "Doe"})]
+            task, [_ocr_result(), _extraction_result({"first_name": self._FIRST_NAME, "last_name": "Doe"})]
         )
 
         self.assertEqual(status, "Success")
-        self.assertEqual(frappe.db.count("Contact", {"first_name": "Jane"}), 1)
+        self.assertEqual(frappe.db.count("Contact", {"first_name": self._FIRST_NAME}), 1)
         task.reload()
         self.assertIn("1 updated", task.last_result)
 
@@ -2618,12 +2823,12 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         # OCR and extraction calls both go through for real, in whatever order the two
         # files were actually read.
         status, mock = self._run_files(
-            task, [_ocr_result(poisoned), _ocr_result(), _extraction_result({"first_name": "Jane"})]
+            task, [_ocr_result(poisoned), _ocr_result(), _extraction_result({"first_name": self._FIRST_NAME})]
         )
 
         self.assertEqual(status, "Success")
         self.assertEqual(mock.call_count, 3)
-        self.assertTrue(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        self.assertTrue(frappe.db.exists("Contact", {"first_name": self._FIRST_NAME}))
         task.reload()
         self.assertIn("1 file(s) unreadable", task.last_result)
 
@@ -2633,12 +2838,13 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         before = frappe.db.count("Contact")
 
         with patch(
-            "crema.client._complete", side_effect=[_ocr_result(), _extraction_result({"first_name": "Jane"})]
+            "crema.client._complete",
+            side_effect=[_ocr_result(), _extraction_result({"first_name": self._FIRST_NAME})],
         ):
             result = automation.dry_run(task.name)
 
         self.assertEqual(result["row_count"], 1)
-        self.assertEqual(result["rows"][0]["set"], {"first_name": "Jane"})
+        self.assertEqual(result["rows"][0]["set"], {"first_name": self._FIRST_NAME})
         self.assertNotIn("used_stored_plan", result)
         self.assertEqual(frappe.db.count("Contact"), before)
 
@@ -2649,12 +2855,12 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         task = self._make_file_task(confidence_floor=0.9)
 
         status, mock = self._run_files(
-            task, [_ocr_result(confidence=0.5), _extraction_result({"first_name": "Jane"})]
+            task, [_ocr_result(confidence=0.5), _extraction_result({"first_name": self._FIRST_NAME})]
         )
 
         self.assertEqual(status, "Success")
         self.assertEqual(mock.call_count, 2)  # OCR, then extraction — the floor gates after both
-        self.assertFalse(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        self.assertFalse(frappe.db.exists("Contact", {"first_name": self._FIRST_NAME}))
         task.reload()
         self.assertIn("confidence below 0.9", task.last_result)
 
@@ -2663,11 +2869,11 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         task = self._make_file_task(confidence_floor=0.5)
 
         status, _mock = self._run_files(
-            task, [_ocr_result(confidence=0.5), _extraction_result({"first_name": "Jane"})]
+            task, [_ocr_result(confidence=0.5), _extraction_result({"first_name": self._FIRST_NAME})]
         )
 
         self.assertEqual(status, "Success")
-        self.assertTrue(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        self.assertTrue(frappe.db.exists("Contact", {"first_name": self._FIRST_NAME}))
 
     # --- Propose Only ---------------------------------------------------------------
 
@@ -2676,18 +2882,20 @@ class IntegrationTestCremaAutomationFileQuery(CremaFixtureTestCase):
         task = self._make_file_task(action="Propose Only", confidence_floor=0.5)
 
         status, _mock = self._run_files(
-            task, [_ocr_result(confidence=0.9), _extraction_result({"first_name": "Jane"})]
+            task, [_ocr_result(confidence=0.9), _extraction_result({"first_name": self._FIRST_NAME})]
         )
 
         self.assertEqual(status, "Success")
-        self.assertFalse(frappe.db.exists("Contact", {"first_name": "Jane"}))
+        self.assertFalse(frappe.db.exists("Contact", {"first_name": self._FIRST_NAME}))
         proposals = frappe.get_all(
             "Crema Proposal", filters={"task": task.name}, fields=["status", "confidence", "payload_json"]
         )
         self.assertEqual(len(proposals), 1)
         self.assertEqual(proposals[0].status, "Pending")
         self.assertAlmostEqual(proposals[0].confidence, 0.9, places=2)
-        self.assertEqual(frappe.parse_json(proposals[0].payload_json)["set"], {"first_name": "Jane"})
+        self.assertEqual(
+            frappe.parse_json(proposals[0].payload_json)["set"], {"first_name": self._FIRST_NAME}
+        )
         task.reload()
         self.assertIn("1 proposed", task.last_result)
 
@@ -2804,6 +3012,20 @@ class IntegrationTestCremaAutomationProposals(CremaFixtureTestCase):
         row = frappe.db.get_value("Crema Proposal", proposal, ["status", "outcome"], as_dict=True)
         self.assertEqual(row.status, "Approved")
         self.assertEqual(row.outcome, outcome)
+
+    def test_approving_a_proposal_for_a_doctype_blocked_since_is_refused(self):
+        marker = uuid.uuid4().hex[:10]
+        self._todo("_test_crema_propose_source")
+        task = self._propose_task()
+        _run(task.name, [_todo_rows(marker)])
+        proposal = frappe.get_all("Crema Proposal", filters={"task": task.name}, pluck="name")[0]
+
+        with patch("crema.automation.policy.blocked_doctypes", return_value={"ToDo"}):
+            with self.assertRaises(automation.AutomationError):
+                automation.apply_proposal(proposal)
+
+        self.assertEqual(frappe.db.count("ToDo", {"description": ["like", f"%{marker}%"]}), 0)
+        self.assertEqual(frappe.db.get_value("Crema Proposal", proposal, "status"), "Pending")
 
     def test_discarding_a_proposal_writes_nothing(self):
         marker = uuid.uuid4().hex[:10]

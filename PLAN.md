@@ -122,8 +122,8 @@ Each with the reason, so the argument does not repeat.
 - **A `Crema Run` history doctype.** Deferred: one run's list on the task covers the
   "undid the wrong thing" case, and a history doctype can come later without a change
   to the writer code.
-- **The `add_to_apps_screen` hook.** Dropped in the v16→v17 port; see
-  `crema/hooks.py`.
+- **The `add_to_apps_screen` hook.** Not used. The rail entry comes from
+  `crema/dock/crema/crema.json`.
 
 Shipped work is not listed here: `git log` and [docs/changes.md](docs/changes.md)
 hold it.

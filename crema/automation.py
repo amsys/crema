@@ -16,8 +16,9 @@ Security posture — the reason this module is longer than "just call the LLM":
   pipeline neither knows nor cares how many there were.
 * The whole run — the source read included — happens inside
   `sandbox.isolation(<interface isolation user>)`, and every write is a plain
-  `doc.save()`. No `ignore_permissions` anywhere, so the isolation user's roles and
-  User Permissions are the hard fence on what a task can read *and* write.
+  `doc.save()`. No write to a target record uses `ignore_permissions`, so the isolation
+  user's roles and User Permissions are the hard fence on what a task can read *and*
+  write.
 
 The four actions differ only in what stage 4 does with the extracted rows:
 
@@ -34,7 +35,7 @@ The four actions differ only in what stage 4 does with the extracted rows:
 * `No Changes` — no plan at all, and no writes. The plan machinery exists to map LLM
   output safely onto database fields; with nothing written there is nothing to validate.
 
-Emailing the result is orthogonal to all three: any task with `notify_to` set mails what
+Emailing the result is orthogonal to all four: any task with `notify_to` set mails what
 the run did (a count for the write actions, the answer itself for `No Changes`).
 
 Document-query content is user-editable, so it is a live injection channel — layer 1
@@ -64,7 +65,7 @@ from croniter import croniter
 import frappe
 from crema import _ocr, api, client, guardrails, log, policy, sandbox, security
 from crema import terms as _terms
-from crema.exceptions import CremaBlockedError
+from crema.exceptions import CremaBlockedError, CremaConfigError
 from frappe import _
 from frappe.model import data_fieldtypes
 from frappe.utils import add_days, cint, flt, now_datetime, strip_html
@@ -186,9 +187,23 @@ def tick() -> None:
         try:
             due_at = croniter(task.schedule, task.last_run or task.creation).get_next(datetime)
         except Exception:
-            continue  # invalid cron on an existing row — validate() blocks new ones
+            # An invalid cron on an existing row; validate() blocks new ones.
+            _log_bad_schedule(task)
+            continue
         if due_at <= now:
             enqueue_task(task.name)
+
+
+def _log_bad_schedule(task) -> None:
+    """One Error Log row per task per day for a schedule croniter cannot read. tick()
+    runs every 15 minutes, so a row per tick would fill the log."""
+    key = frappe.cache.make_key(f"crema:bad_schedule:{task.name}")
+    # nosemgrep: frappe-cache-breaks-multitenancy — make_key above scopes the key per site
+    if frappe.cache.set(key, 1, nx=True, ex=86400):
+        frappe.log_error(
+            title=f"Crema automation task has an invalid schedule: {task.name}"[:140],
+            message=f"Schedule '{task.schedule}' is not a valid cron expression. The task does not run.",
+        )
 
 
 def cleanup_logs() -> None:
@@ -370,9 +385,18 @@ def run_task(
     # The guard must cover every write this run makes, including _record's own db_set.
     frappe.local.crema_in_automation = True
     try:
-        with sandbox.isolation(cfg["isolation_user"]):
-            status, error, plan, result, watermarks, stage = _run_inside(
-                doc, cfg, started, doc_doctype, doc_name, payload, written=written
+        try:
+            with sandbox.isolation(cfg["isolation_user"]):
+                status, error, plan, result, watermarks, stage = _run_inside(
+                    doc, cfg, started, doc_doctype, doc_name, payload, written=written
+                )
+        except CremaConfigError as exc:
+            # sandbox.isolation refused the isolation user (disabled, or it now holds
+            # System Manager). _run_inside catches its own failures, so this is the
+            # fence check. Without a record here the task kept its old status and the
+            # 5-failure auto-disable never fired.
+            return _record(
+                doc, "Failed", f"sandbox refused — {_describe(exc)}", written=written, stage="Setup"
             )
 
         # Outside the sandbox on purpose: db_set stamps modified_by with the session user,
@@ -429,6 +453,8 @@ def _run_inside(
         mapping = {"doctype": doc.target_doctype, "match_fields": match_fields}
         try:
             with _stage("Write"):
+                # No plan, so _validate_plan's blocked-doctype check never ran.
+                _check_blocked(doc.target_doctype)
                 if doc.action == "Propose Only":
                     entries = [(r["_source_file"], r, r.get("confidence")) for r in records]
                     result = _propose(doc, mapping, entries)
@@ -791,6 +817,20 @@ def _query_rows(
     limit = cint(source.source_limit) or _SOURCE_LIMIT_DEFAULT
     rows = frappe.get_list(doctype, filters=filters, fields=fields, limit=limit, order_by="modified asc")
 
+    if incremental and len(rows) == limit:
+        # The watermark filter is a strict ">" on `modified`. A record with the same
+        # timestamp as the last row of a full batch would stay behind it and never be
+        # read, so read those records now. At most `limit` more.
+        last = rows[-1].get("modified")
+        ties = [
+            *filters,
+            ["modified", "=", last],
+            ["name", "not in", [row["name"] for row in rows if row.get("modified") == last]],
+        ]
+        rows += frappe.get_list(doctype, filters=ties, fields=fields, limit=limit, order_by="name asc")
+        read_up_to = last
+        return rows, read_up_to
+
     # A capped batch read the head of the backlog only, so the next run resumes at the
     # last row it actually handled; an uncapped one read everything up to the moment this
     # run started. `started`, not `now`: a record changed during a long run is not lost.
@@ -934,16 +974,18 @@ def _attach_children(doctype: str, rows: list) -> str:
     (`_source_fields` keeps to `data_fieldtypes`, which excludes both). Mutates `rows`
     in place.
 
-    One frappe.get_list per child table for the WHOLE batch, not one per record --
-    `parent_doctype` is what keeps this get_list (never get_all) fenced by frappe's
-    own child-table permission check (`has_child_permission` resolves it through
-    `parent_doctype`), the same argument `_read_attachments` already makes for File.
+    One frappe.get_list per child table per record. One query for the whole batch
+    cannot give each record its own limit: a record with many lines would use the
+    limit of the batch and leave the later records with no lines. `parent_doctype` is
+    what keeps this get_list (never get_all) fenced by frappe's own child-table
+    permission check (`has_child_permission` resolves it through `parent_doctype`),
+    the same argument `_read_attachments` already makes for File.
 
     `_CHILD_MAX_ROWS_PER_RECORD` is a per-record budget shared across every table, in
     field order: an earlier table drains it first, a later one gets whatever is left.
-    The query's own `limit` only bounds the whole batch, not one record's share, so the
-    per-record cap is enforced here, after the read. Returns a note naming how many
-    records had at least one line left out, in the shape `_read_attachments` returns.
+    Each query asks for one row more than the budget, which is how a record with lines
+    left out is found. Returns a note naming how many records had at least one line
+    left out, in the shape `_read_attachments` returns.
     """
     meta = frappe.get_meta(doctype)
     tables = [df for df in meta.fields if df.fieldtype in ("Table", "Table MultiSelect") and df.options]
@@ -956,20 +998,17 @@ def _attach_children(doctype: str, rows: list) -> str:
     truncated: set[str] = set()
 
     for df in tables:
-        child_rows = frappe.get_list(
-            df.options,
-            parent_doctype=doctype,
-            filters={"parent": ["in", names], "parenttype": doctype, "parentfield": df.fieldname},
-            fields=[*_child_fields(df.options), "parent"],
-            order_by="parent asc, idx asc",
-            limit=len(names) * _CHILD_MAX_ROWS_PER_RECORD,
-        )
-        grouped: dict[str, list[dict]] = {}
-        for child in child_rows:
-            grouped.setdefault(child.pop("parent"), []).append(child)
-
-        for name, group in grouped.items():
-            budget = remaining.get(name, 0)
+        fields = _child_fields(df.options)
+        for name in names:
+            budget = remaining[name]
+            group = frappe.get_list(
+                df.options,
+                parent_doctype=doctype,
+                filters={"parent": name, "parenttype": doctype, "parentfield": df.fieldname},
+                fields=fields,
+                order_by="idx asc",
+                limit=budget + 1,
+            )
             if len(group) > budget:
                 truncated.add(name)
             kept = group[:budget]
@@ -1125,9 +1164,46 @@ def _require_keys(obj: Any, allowed: set[str], required: set[str], where: str) -
         raise AutomationError(f"{where} is missing keys: {sorted(missing)}")
 
 
-def _validate_field_maps(match_fields: Any, field_map: Any, meta, where: str) -> None:
-    """Every fieldname the LLM produced must exist on `meta`, and every match field must
-    actually be populated by the field map (otherwise no filter can ever be built)."""
+def _writable_fields(doctype: str) -> set[str]:
+    """The fields of `doctype` that a writer may set from model output: the data fields
+    that are not a Password. This leaves out `name`, `parent`, `parenttype`,
+    `parentfield`, `idx`, `docstatus`, `owner` (none of them is a docfield) and every
+    Table field.
+
+    This is the write fence for row values. frappe treats a child dict that carries a
+    `name` as an existing row and runs `UPDATE ... WHERE name=` on it, with no
+    permission check on that row. A model-chosen `name` or `parent` could thus
+    overwrite and move a line of another document."""
+    return {
+        df.fieldname
+        for df in frappe.get_meta(doctype).fields
+        if df.fieldtype in data_fieldtypes and df.fieldtype != "Password"
+    }
+
+
+def _writable(doctype: str, values: Any) -> dict[str, Any]:
+    """`values` with only the keys a writer may set on `doctype`. A value that is not a
+    dict gives an empty dict."""
+    if not isinstance(values, dict):
+        return {}
+    allowed = _writable_fields(doctype)
+    return {key: value for key, value in values.items() if key in allowed}
+
+
+def _check_blocked(doctype: str) -> None:
+    """Refuse a write to a doctype on the site's blocked list. _validate_plan does the
+    same for a plan; this covers the writers that have no plan (a File Query) or run
+    later (a proposal approval). The child-table writers check their own doctype."""
+    if doctype in policy.blocked_doctypes():
+        raise AutomationError(f"'{doctype}' is on this site's blocked doctype list — see Crema Settings.")
+
+
+def _validate_field_maps(
+    match_fields: Any, field_map: Any, meta, where: str, *, allow_name: bool = True
+) -> None:
+    """Every fieldname the LLM produced must be a writable field of `meta`, and every
+    match field must actually be populated by the field map (otherwise no filter can
+    ever be built)."""
     if not isinstance(field_map, dict) or not field_map:
         raise AutomationError(f"{where}.field_map must be a non-empty object")
     if not isinstance(match_fields, list) or not match_fields:
@@ -1135,8 +1211,9 @@ def _validate_field_maps(match_fields: Any, field_map: Any, meta, where: str) ->
 
     # `name` is not a docfield, but it is the only stable identifier an update-source plan
     # can match on. Allowing it here is safe *only* because _upsert never writes it — see
-    # that function and the module docstring.
-    known = {df.fieldname for df in meta.fields} | {"name"}
+    # that function and the module docstring. A child row has no such use: its `name`
+    # is refused, and _upsert_child drops it too.
+    known = _writable_fields(meta.name) | ({"name"} if allow_name else set())
     for key, fieldname in field_map.items():
         if not isinstance(key, str) or not isinstance(fieldname, str):
             raise AutomationError(f"{where}.field_map must map strings to strings")
@@ -1199,6 +1276,7 @@ def _validate_plan(plan: Any, target_doctype: str | None) -> dict:
             child["field_map"],
             frappe.get_meta(child_df.options),
             "plan.map.child_table",
+            allow_name=False,
         )
 
     return plan
@@ -1247,6 +1325,8 @@ def _propose(doc, mapping: dict, entries: list[tuple[str, dict, float | None]]) 
             }
         )
         try:
+            # A Crema Proposal is crema's own parked row, not a target record (see
+            # crema_proposal.py).
             proposal.insert(ignore_permissions=True)
             counts["proposed"] += 1
         except frappe.UniqueValidationError:
@@ -1306,6 +1386,10 @@ def apply_proposal(name: str) -> str:
     mapping = frappe.parse_json(proposal.mapping_json)
     payload = frappe.parse_json(proposal.payload_json)
     written = _Written(doc.name)
+
+    # The site's blocked list can change between the run that parked this proposal and
+    # the approval.
+    _check_blocked(mapping["doctype"])
 
     frappe.local.crema_in_automation = True
     try:
@@ -1552,7 +1636,8 @@ def _upsert(
         # `name` identifies a record; it is never written. doc.update({"name": ...})
         # mutates self.name, and BaseDocument.db_update then writes THIS document's values
         # onto whatever row the model named — with no permission check on that row.
-        values.pop("name", None)
+        # _writable drops it, with every other key that is not a plain data field.
+        values = _writable(doctype, values)
 
         doc = frappe.get_doc(doctype, match) if match else frappe.new_doc(doctype)
         if match and not child and _unchanged(doc, values):
@@ -1586,7 +1671,7 @@ def _upsert_files(
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
 
     for record in records:
-        values = {k: v for k, v in (record.get("set") or {}).items() if k != "name"}
+        values = _writable(doctype, record.get("set"))
         match = _match_existing(doctype, values, match_fields)
         if match is False:
             counts["skipped"] += 1
@@ -1610,11 +1695,23 @@ def _upsert_files(
 
 
 def _replace_children(doc, child_set: dict[str, list[dict]]) -> None:
-    """The file is the whole truth for its own line items — replace, don't merge."""
+    """The file is the whole truth for its own line items — replace, don't merge.
+
+    `child_set` comes from model output (directly, or from a stored proposal), so each
+    key must be a Table field of `doc`, its doctype must not be on the blocked list,
+    and each row keeps its writable fields only — see _writable_fields."""
+    if not isinstance(child_set, dict):
+        return
+    blocked = policy.blocked_doctypes()
     for fieldname, child_rows in child_set.items():
+        df = doc.meta.get_field(fieldname)
+        if not df or df.fieldtype != "Table" or df.options in blocked or not isinstance(child_rows, list):
+            continue
         doc.set(fieldname, [])
         for child_row in child_rows:
-            doc.append(fieldname, child_row)
+            values = _writable(df.options, child_row)
+            if values:
+                doc.append(fieldname, values)
 
 
 def _unchanged(doc, values: dict[str, Any]) -> bool:
@@ -1683,7 +1780,14 @@ def dry_run(task: str) -> dict[str, Any]:
 
 
 def _upsert_child(doc, child: dict, row: dict) -> None:
-    values = _row_values(child["field_map"], row)
+    """Insert or update one row of `doc`'s own child table from `row`. The match looks
+    at `doc`'s own rows only, and the values keep their writable fields only (see
+    _writable_fields): a `name`, `parent` or `idx` from the model never reaches the
+    row. A mapping from an old stored proposal can still name them."""
+    df = doc.meta.get_field(child["fieldname"])
+    if not df or df.fieldtype != "Table" or df.options in policy.blocked_doctypes():
+        raise AutomationError(f"'{child['fieldname']}' is not a table this task can write")
+    values = _writable(df.options, _row_values(child["field_map"], row))
     if not values:
         return
 

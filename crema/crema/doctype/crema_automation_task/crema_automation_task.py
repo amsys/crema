@@ -2,10 +2,10 @@
 
 `validate` is where the *authoring-time* fences live. The load-bearing one for security is
 that `Update the Records It Read` is refused unless the task has exactly one Document Query
-source. Without a source doctype, `validate` would leave `target_doctype` blank, and a
-blank `target_doctype` makes `automation._validate_plan`'s doctype check a no-op — a
-self-written plan could then name any doctype the isolation user can reach, with no
-`allowed_names` set to fence it either. Both fences dissolve from one empty field. Two
+source. Without a source doctype, `validate` would leave `target_doctype` blank, and
+there would be no `allowed_names` set to fence the update. `automation._validate_plan`
+refuses a plan for a task with no target doctype, so the run fails instead of writing
+to a doctype the plan chose. Two
 query sources are refused for the same reason from the other end: one plan writes back to
 one doctype, and `allowed_names` is one flat set of record names.
 
@@ -280,10 +280,11 @@ class CremaAutomationTask(Document):
             self.match_on = None
 
     def _validate_target_doctype(self) -> None:
-        """Convenience, not the fence — automation._validate_plan is the gate every
-        actual run passes through, and it re-checks the same list at run time in case a
-        System Manager blocks a doctype after this task was already pointed at it. This
-        just fails the save immediately instead of only at the next run."""
+        """Convenience, not the fence. A run checks the same list again, in case a
+        System Manager blocks a doctype after this task was already pointed at it:
+        automation._validate_plan for a run with a plan, automation._check_blocked for
+        a File Query run and for a proposal approval. This just fails the save
+        immediately instead of only at the next run."""
         if self.target_doctype and self.target_doctype in policy.blocked_doctypes():
             frappe.throw(
                 _("'{0}' is on this site's blocked doctype list — see Crema Settings.").format(

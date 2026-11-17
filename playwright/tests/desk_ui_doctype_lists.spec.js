@@ -1,11 +1,24 @@
 // Covers the Crema Provider list (crema_provider_list.js), the Crema Health Word list and
 // the File Query source on the Crema Automation Task form (crema_automation_task.js).
 // Nothing here calls a model provider; the backstop fixture fails any billable call.
-import { test, expect, goto_desk } from "../support";
+import { test, expect, goto_desk, dialog_shown } from "../support";
+
+const CHECK_PROVIDER = /\/api\/method\/crema\.api\.check_provider(\?|$)/;
+const TRANSLATE_WORDS =
+	/\/api\/method\/crema\.crema\.doctype\.crema_health_word\.crema_health_word\.translate_words(\?|$)/;
 
 test.describe("Crema Provider list", () => {
+	// The Connection pill test's two providers.
+	const UP = "_pw_connection_up";
+	const DOWN = "_pw_connection_down";
+
 	test.beforeEach(async ({ page }) => {
 		await goto_desk(page, "/desk/crema-provider");
+	});
+
+	test.afterAll(async ({ admin }) => {
+		await admin.remove_doc("Crema Provider", UP, true);
+		await admin.remove_doc("Crema Provider", DOWN, true);
 	});
 
 	test("keeps the New from Template action", async ({ page }) => {
@@ -21,6 +34,99 @@ test.describe("Crema Provider list", () => {
 		await expect(
 			page.locator(".list-row-head").filter({ hasText: /Address/ })
 		).not.toHaveCount(0);
+	});
+
+	test("paints the Connection pill from check_provider, green when it connects and red when not", async ({
+		page,
+		api,
+	}) => {
+		// Two enabled providers on a local address (no API key needed for those). Every
+		// check_provider call is stubbed: the probe reaches the provider over the network.
+		for (const name of [UP, DOWN]) {
+			await api.remove_doc("Crema Provider", name, true);
+			await api.insert_doc("Crema Provider", {
+				provider_name: name,
+				base_url: "http://localhost:9/v1",
+				enabled: 1,
+			});
+		}
+		const checked = [];
+		await page.route(CHECK_PROVIDER, (route) => {
+			const provider = new URLSearchParams(route.request().postData()).get("provider");
+			checked.push(provider);
+			return route.fulfill({
+				status: 200,
+				json: {
+					message:
+						provider === UP
+							? { ok: true, detail: "Connected (stub)" }
+							: { ok: false, detail: "Refused (stub)" },
+				},
+			});
+		});
+
+		await goto_desk(page, "/desk/crema-provider");
+		await expect.poll(() => checked).toEqual(expect.arrayContaining([UP, DOWN]));
+		await expect(
+			page
+				.locator(".list-row", { hasText: UP })
+				.locator('.es-badge[data-theme="green"]', { hasText: "Connected (stub)" })
+		).toBeVisible();
+		await expect(
+			page
+				.locator(".list-row", { hasText: DOWN })
+				.locator('.es-badge[data-theme="red"]', { hasText: "Refused (stub)" })
+		).toBeVisible();
+	});
+
+	test("probes a provider again only after the Connection pill result is 60 s old", async ({
+		page,
+		api,
+	}) => {
+		// The cache lives in the list script's page scope (CREMA_CONNECTION_TTL_MS), so
+		// the page is not reloaded: a refresh of the open list is the second render.
+		await api.remove_doc("Crema Provider", UP, true);
+		await api.insert_doc("Crema Provider", {
+			provider_name: UP,
+			base_url: "http://localhost:9/v1",
+			enabled: 1,
+		});
+		let probes = 0;
+		await page.route(CHECK_PROVIDER, (route) => {
+			const provider = new URLSearchParams(route.request().postData()).get("provider");
+			if (provider === UP) probes += 1;
+			return route.fulfill({
+				status: 200,
+				json: { message: { ok: true, detail: "Connected (stub)" } },
+			});
+		});
+		await page.clock.install();
+
+		await goto_desk(page, "/desk/crema-provider");
+		await expect.poll(() => probes).toBe(1);
+		await expect(
+			page
+				.locator(".list-row", { hasText: UP })
+				.locator('.es-badge[data-theme="green"]', { hasText: "Connected (stub)" })
+		).toBeVisible();
+
+		const render_again = () =>
+			page.evaluate(() => {
+				cur_list.last_args = null;
+				return cur_list.refresh();
+			});
+
+		// 30 s later: still fresh, so the second render sends no probe.
+		await page.clock.fastForward(30000);
+		await render_again();
+		await expect(page.locator(".list-row", { hasText: UP })).toBeVisible();
+		await page.waitForTimeout(1500);
+		expect(probes).toBe(1);
+
+		// 31 s more (61 s since the probe): stale, so the next render probes again.
+		await page.clock.fastForward(31000);
+		await render_again();
+		await expect.poll(() => probes).toBe(2);
 	});
 
 	test("fills the base URL from a preset in the New from Template dialog", async ({ page }) => {
@@ -67,6 +173,50 @@ test.describe("Crema Health Word list", () => {
 		await expect(
 			page.locator(".modal .frappe-control[data-fieldname=language]")
 		).toBeVisible();
+	});
+
+	test("sends the language to translate_words and reports the counts", async ({ page }) => {
+		// translate_words asks the Translation use case, so it is stubbed like every
+		// other model call. The handler only records the request; the test body asserts.
+		const sent = [];
+		await page.route(TRANSLATE_WORDS, (route) => {
+			sent.push(new URLSearchParams(route.request().postData()).get("language"));
+			return route.fulfill({ status: 200, json: { message: { added: 2, skipped: 3 } } });
+		});
+
+		await page
+			.locator("button")
+			.filter({ hasText: /Translate Built-in List/ })
+			.click();
+		await dialog_shown(page);
+		// Any Language record on the site does: the reply is stubbed.
+		const language = await page.evaluate(() =>
+			frappe.db
+				.get_list("Language", { fields: ["name"], limit: 1 })
+				.then((rows) => rows[0]?.name)
+		);
+		expect(language, "a Language record").toBeTruthy();
+		await page.evaluate((value) => cur_dialog.set_value("language", value), language);
+		// A Link value is set only after its server check, so wait for it.
+		await expect
+			.poll(() => page.evaluate(() => cur_dialog.get_value("language")))
+			.toBe(language);
+		// The Link field's suggestion list stays open over the button after the value is
+		// set. A click on the dialog title takes the focus from the input, which closes the
+		// list. (Escape can close the dialog too.)
+		const modal = page.locator(".modal.show");
+		await modal.locator(".modal-title").click();
+		await expect(
+			modal.locator(".frappe-control[data-fieldname=language] .awesomplete ul")
+		).toBeHidden();
+		const translated = page.waitForResponse((res) => TRANSLATE_WORDS.test(res.url()));
+		await modal.locator(".btn-modal-primary", { hasText: "Translate" }).click();
+		await translated;
+
+		expect(sent).toEqual([language]);
+		await expect(page.locator(".msgprint")).toContainText(
+			"Added 2 new word(s), switched off. Skipped 3 already on the list."
+		);
 	});
 });
 

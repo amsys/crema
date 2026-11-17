@@ -50,7 +50,7 @@ from typing import Any
 import frappe
 from crema import cache, mask, security
 from crema._json import strip_fence
-from crema.exceptions import CremaBlockedError
+from crema.exceptions import CremaBlockedError, CremaConfigError
 
 
 class Ctx:
@@ -241,10 +241,18 @@ class _Mask:
 # on render (see docs/security.md's "Crema's own desk UI escapes..." Known limit).
 # The model writes the text these patterns scan, so every quantifier is possessive and
 # bounded: a reply full of unclosed "[](" stays linear instead of backtracking.
-_MD_TARGET_RE = re.compile(r"(!?\[[^\]]{0,2048}+\]\(\s*+<?+)([^)\s]{1,2048}+)([^)]{0,2048}+\))")
+#
+# Each pattern matches the START of a target only: the "](" of a markdown image or
+# link, or the `src=` / `href=` and its opening quote. It does not look for the label
+# before it, and it does not need the closing ")" or quote after it. A label or a
+# target longer than a bound thus cannot make the match fail, and a browser reads the
+# scheme at the start.
+_TARGET_MAX = 2048
+_MD_TARGET_RE = re.compile(rf"(\]\(\s*+<?+)([^)\s]{{1,{_TARGET_MAX}}}+)")
 # A quoted value in either quote, or an unquoted one up to whitespace or ">".
 _HTML_TARGET_RE = re.compile(
-    r"""(\b(?:src|href)\s*+=\s*+)(?:"([^"]{0,2048}+)"|'([^']{0,2048}+)'|([^\s"'>]{1,2048}+))""", re.I
+    rf"""(\b(?:src|href)\s*+=\s*+)(?:"([^"]{{0,{_TARGET_MAX}}}+)"?+|'([^']{{0,{_TARGET_MAX}}}+)'?+|([^\s"'>]{{1,{_TARGET_MAX}}}+))""",
+    re.I,
 )
 # Characters a browser drops from a URL before it reads the scheme.
 _URL_NOISE_RE = re.compile(r"[\x00-\x20]")
@@ -256,6 +264,10 @@ def _is_remote(target: str) -> bool:
     is not — it never leaves the server that rendered it. HTML entities are decoded
     and control characters and spaces are removed first, as a browser does, so
     `&#104;ttps:` and ` https:` are remote too."""
+    if len(target) >= _TARGET_MAX:
+        # The pattern stopped at its bound, so the start of the real target can be
+        # noise that a browser drops, with the scheme after it. Fail closed.
+        return True
     target = _URL_NOISE_RE.sub("", html.unescape(target))
     return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:|^[/\\]{2}", target))
 
@@ -277,7 +289,9 @@ def _strip_remote_targets(text: str) -> tuple[str, int]:
         if not _is_remote(m.group(2)):
             return m.group(0)
         count += 1
-        return f"{m.group(1)}#{m.group(3)}"
+        # What follows a target longer than the bound stays in the text, after the
+        # "#". A browser reads it as a fragment of the same page.
+        return f"{m.group(1)}#"
 
     def _html(m: re.Match) -> str:
         nonlocal count
@@ -285,6 +299,8 @@ def _strip_remote_targets(text: str) -> tuple[str, int]:
         if not _is_remote(value):
             return m.group(0)
         count += 1
+        # What follows a value longer than the bound stays in the text, after the
+        # closed "#" attribute.
         return f'{m.group(1)}"#"'
 
     text = _MD_TARGET_RE.sub(_md, text)
@@ -614,10 +630,36 @@ def _plan(cfg: dict[str, Any], pre_cache: bool) -> list[tuple[Any, Any]]:
         if (row.action or "Off") == "Off" or not _applies(row, interface):
             continue
         module = _module(row.guardrail)
-        if module is None or bool(getattr(module, "pre_cache", False)) != pre_cache:
+        if module is None:
+            _missing_module(row)
+            continue
+        if bool(getattr(module, "pre_cache", False)) != pre_cache:
             continue
         pairs.append((row, module))
     return pairs
+
+
+def _missing_module(row) -> None:
+    """A configured row whose module does not resolve (its app was removed, or its
+    dotted path is wrong). A Block or Retry Once row stops the call: the site asked
+    for a check that cannot run. A Log Only row writes a warning and the call goes on.
+    Saving Crema Guardrails removes such a row (CremaGuardrails._drop_orphans)."""
+    message = f"guardrail '{row.guardrail}' is configured but its module does not resolve"
+    if row.action == "Log Only":
+        frappe.logger("crema").warning(f"{message} — skipped (Log Only)")
+        return
+    raise CremaConfigError(f"{message}. Open Crema Guardrails and save it, or install the app again.")
+
+
+def posture(interface: str) -> str:
+    """The guardrail rows that apply to `interface`, as one string: each active row's
+    key and action, in row order. api._prompt_hash puts it in the cache key, so a reply
+    cached under one set of checks is not served after an admin changes them."""
+    return ",".join(
+        f"{row.guardrail}:{row.action}"
+        for row in _rows()
+        if (row.action or "Off") != "Off" and _applies(row, interface)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -668,4 +710,9 @@ def run(cfg: dict[str, Any], messages: list[dict], call, response_format: dict |
                 after(ctx)
         if not ctx.retry:
             break
+    if ctx.retry:
+        # A second row asked for a retry on the second attempt. The hooks after it
+        # skipped their work (masking restore, the Reply Filter), so this reply is not
+        # checked. Stop here.
+        raise CremaBlockedError("guardrails: a check asked for a second retry")
     return ctx.response or ""

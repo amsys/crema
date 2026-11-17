@@ -1,5 +1,5 @@
-"""Meta tests: pin the test-suite conventions documented in CLAUDE.md (Conventions,
-Tests section) so a future test can't drift back to a vague name or the
+"""Meta tests: pin the test-suite conventions (naming, structure, fixture cleanup) so a
+future test can't drift back to a vague name or the
 CremaFixtureTestCase trap without the suite itself catching it.
 
 Pure AST walk over crema/test_*.py — no database, no import of the modules under test.
@@ -77,7 +77,7 @@ def _references_fixture_helper(cls: ast.ClassDef) -> bool:
 
 
 class UnitTestCremaTestConventions(UnitTestCase):
-    """Pins the naming/structure rules in CLAUDE.md's Conventions section for
+    """Pins the naming/structure rules for
     crema/test_*.py itself — a test name or class shape that violates them fails here
     instead of surviving to code review."""
 
@@ -145,7 +145,7 @@ class UnitTestCremaTestConventions(UnitTestCase):
         # _ensure_user/_ensure_provider/_ensure_interface commit outside the per-test
         # rollback (test_fixtures.py) -- only CremaFixtureTestCase undoes that in
         # tearDownClass. A plain IntegrationTestCase calling one of them leaks rows on
-        # whatever site the suite runs against (CLAUDE.md's fcr.local trap).
+        # whatever site the suite runs against.
         violations = []
         for path, tree in _test_modules():
             for cls in _classes(tree):

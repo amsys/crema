@@ -1,6 +1,6 @@
 name: UI Tests
 
-# The UI suite is not routine verification for this app (see CLAUDE.md) — bench build plus
+# The UI suite is not routine verification for this app — bench build plus
 # the Python suite is what CI checks on every push. This workflow also runs automatically,
 # but only when a push/PR actually touches JS or playwright files, so an unrelated Python
 # change doesn't pay for it.
@@ -124,7 +124,7 @@ jobs:
           name: playwright-report
           path: |
             /home/runner/frappe-bench/apps/crema/playwright-report
-            /home/runner/frappe-bench/apps/crema/test-results
+            /tmp/crema-playwright
           if-no-files-found: ignore
 
       - name: Show bench output

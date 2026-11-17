@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 from crema import cache, client, guardrails, security
 from crema.api import ask
-from crema.exceptions import CremaBlockedError
+from crema.exceptions import CremaBlockedError, CremaConfigError
 from crema.test_fixtures import (
     CremaFixtureTestCase,
     _set_guardrail,
@@ -145,8 +145,63 @@ class UnitTestGuardrailEngine(UnitTestCase):
             calls.append(msgs)
             return "reply"
 
-        self._run([_row("a")], modules, call=call)
+        # A check that still asks for a retry after the second attempt stops the call.
+        # The reply of that attempt is not returned: the hooks after the check skipped it.
+        with self.assertRaises(CremaBlockedError):
+            self._run([_row("a")], modules, call=call)
         self.assertEqual(len(calls), 2)
+
+    def test_two_retry_rows_cannot_pass_an_unchecked_reply(self):
+        """Row "outer" does its work only when no check after it asked for a retry, as
+        masking and the Reply Filter do. Row "first" asks on attempt 1, row "second" on
+        attempt 2, so each asks once. The reply of attempt 2 was not checked by "outer"."""
+        checked: list = []
+        asked: list = []
+        calls: list = []
+
+        def asks_on(attempt: int, key: str):
+            def after(ctx):
+                if len(calls) == attempt:
+                    asked.append(key)
+                    ctx.retry = True
+
+            return SimpleNamespace(key=key, label=key, default_action="Off", pre_cache=False, after=after)
+
+        def outer_after(ctx):
+            if not ctx.retry:
+                checked.append(ctx.response)
+
+        outer = SimpleNamespace(key="outer", label="outer", default_action="Off", pre_cache=False)
+        outer.after = outer_after
+
+        def call(msgs):
+            calls.append(msgs)
+            return "reply with a remote link"
+
+        modules = {"outer": outer, "first": asks_on(1, "first"), "second": asks_on(2, "second")}
+        with self.assertRaises(CremaBlockedError):
+            self._run([_row("outer"), _row("first"), _row("second")], modules, call=call)
+        self.assertEqual(asked, ["first", "second"])
+        self.assertEqual(checked, [])
+
+    def test_a_block_row_with_no_module_stops_the_call(self):
+        with self.assertRaises(CremaConfigError):
+            self._run([_row("gone", action="Block")], {}, call=lambda msgs: "reply")
+
+    def test_a_log_only_row_with_no_module_is_skipped(self):
+        result = self._run([_row("gone", action="Log Only")], {}, call=lambda msgs: "reply")
+        self.assertEqual(result, "reply")
+
+    def test_posture_names_each_active_row_for_the_interface(self):
+        rows = [
+            _row("scan", action="Block"),
+            _row("reply", action="Off"),
+            _row("pi", action="Log Only", interfaces="simple"),
+            _row("trap", action="Block", interfaces="complex"),
+        ]
+        with patch.object(guardrails, "_rows", return_value=rows):
+            self.assertEqual(guardrails.posture("simple"), "scan:Block,pi:Log Only")
+            self.assertEqual(guardrails.posture("complex"), "scan:Block,trap:Block")
 
     def test_run_without_active_rows_calls_provider_directly(self):
         result = self._run([], {}, call=lambda msgs: "straight through")
@@ -622,6 +677,36 @@ class UnitTestGuardrailReplyFilterTargets(UnitTestCase):
 
     def test_a_backslash_protocol_relative_target_is_stripped(self):
         self.assertEqual(self._strip("![a](\\\\evil.example/x.png)"), "![a](#)")
+
+    def test_a_target_longer_than_the_bound_is_stripped(self):
+        long_url = "https://evil.example/" + "a" * 5000
+        for text in (f"![a]({long_url})", f'<img src="{long_url}">', f"<img src='{long_url}'>"):
+            cleaned, count = guardrails._strip_remote_targets(text)
+            self.assertEqual(count, 1, text[:30])
+            self.assertNotIn("evil.example", cleaned)
+
+    def test_a_label_longer_than_the_bound_does_not_hide_the_target(self):
+        cleaned, count = guardrails._strip_remote_targets("[" + "L" * 5000 + "](https://evil.example/x)")
+        self.assertEqual(count, 1)
+        self.assertNotIn("evil.example", cleaned)
+
+    def test_noise_up_to_the_bound_does_not_hide_the_scheme(self):
+        """A browser drops control characters at the start of a URL. A target that fills
+        the bound with them, with the scheme after it, is removed too."""
+        noise = "\x01" * 3000
+        for text in (f"[a]({noise}https://evil.example/x)", f'<img src="{noise}https://evil.example/x">'):
+            cleaned, count = guardrails._strip_remote_targets(text)
+            self.assertEqual(count, 1)
+            self.assertIn("#", cleaned)
+
+    def test_a_tab_inside_the_scheme_of_a_quoted_href_is_stripped(self):
+        self.assertEqual(self._strip("<a href='java\tscript:alert(1)'>x</a>"), '<a href="#">x</a>')
+
+    def test_a_hostile_reply_is_read_in_linear_time(self):
+        for text in ("[](" * 40000, 'src="' * 30000, "](a" * 40000, "](" + "a" * 200000):
+            started = time.monotonic()
+            guardrails._strip_remote_targets(text)
+            self.assertLess(time.monotonic() - started, 2.0, text[:8])
 
     def test_a_relative_html_target_is_left_alone(self):
         self.assertEqual(self._strip("<img src='/files/x.png'>"), "<img src='/files/x.png'>")

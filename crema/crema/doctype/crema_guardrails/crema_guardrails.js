@@ -43,7 +43,7 @@ function crema_render_check_list(frm, options) {
 	frm.get_field("guardrail_help").html(
 		`<div class="small" style="text-align: justify">
 			<p style="margin-bottom: var(--margin-sm)">${__(
-				"Every request runs through these checks, top to bottom. Drag a row to change the order, add a row to run a check again, delete a row to stop running it (the same as Off). Checks that undo their work on the reply do it in reverse order, but only for the rows that ran on the way in — so put a Hide row above anything that must see masked text, including the AI Guard. Audio is not checked or masked before it is sent: for Transcribe, only a Hide guardrail set to Block has an effect (it refuses the call)."
+				"Every request runs through these checks, top to bottom. Drag a row to change the order, add a row to run a check again, delete a row to stop running it (the same as Off). Checks that undo their work on the reply do it in reverse order, but only for the rows that ran on the way in — so put a Hide row above anything that must see masked text. Audio is not checked or masked before it is sent: for Transcribe, only a Hide guardrail set to Block has an effect (it refuses the call)."
 			)}</p>
 			${items}
 		</div>`

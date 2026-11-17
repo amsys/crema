@@ -23,5 +23,6 @@ def execute() -> None:
         """
         update `tabCrema Automation Task`
         set on_source_error = if(on_source_error = 'Fail the Run', '1', '0')
+        where on_source_error in ('Fail the Run', 'Skip and Continue')
         """
     )

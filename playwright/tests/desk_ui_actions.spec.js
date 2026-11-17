@@ -7,7 +7,15 @@
 // Drives Contact: it gives a plain Data field to write (first_name), a read-only field
 // for the write-fence tests (email_id), a Select (status), and a child table (phone_nos).
 
-import { test, expect, goto_desk, clear_filters, user_room_joined, drop_file } from "../support";
+import {
+	test,
+	expect,
+	goto_desk,
+	clear_filters,
+	user_room_joined,
+	drop_file,
+	dialog_shown,
+} from "../support";
 
 const ASK_URL = /\/api\/method\/crema\.api\.ask_api(\?|$)/;
 const UPLOAD_URL = /\/api\/method\/upload_file(\?|$)/;
@@ -436,6 +444,79 @@ test.describe("Crema desk UI", () => {
 		);
 		await modal.locator(".btn-modal-primary").click();
 		await deleted;
+	});
+
+	test("lists every record before a bulk edit, and sends only the writable fields", async ({
+		page,
+		api,
+	}) => {
+		// An edit spec that matches more than one record goes through frappe's own bulk
+		// update endpoint, after a confirm dialog. The fixtures are real and the update
+		// runs for real; afterEach deletes both contacts.
+		await crema_insert_contact(api, { first_name: "crema bulk edit one" });
+		await crema_insert_contact(api, { first_name: "crema bulk edit two" });
+		const bulk_update = [];
+		page.on("request", (request) => {
+			if (new URL(request.url()).pathname.startsWith(BULK_UPDATE_PATH)) {
+				// frappe develop posts its own endpoints as a JSON body, not form-encoded.
+				// postDataJSON reads both.
+				bulk_update.push(request.postDataJSON());
+			}
+		});
+		await crema_stub_ask(page, {
+			action: "edit",
+			filters: { first_name: ["like", "crema bulk edit%"] },
+			set: { status: "Open", email_id: "bogus@example.com" },
+			child_set: {},
+			reason: "opening the two bulk edit contacts",
+		});
+		await crema_prompt(page, "mark the crema bulk edit contacts open");
+
+		const modal = crema_modal(page);
+		await expect(modal).toContainText("Update 2 Contact records");
+		await expect(modal).toContainText("Records to update");
+		await expect(modal).toContainText("crema bulk edit one");
+		await expect(modal).toContainText("crema bulk edit two");
+		expect(bulk_update).toHaveLength(0);
+
+		await dialog_shown(page);
+		const updated = page.waitForResponse((res) =>
+			new URL(res.url()).pathname.startsWith(BULK_UPDATE_PATH)
+		);
+		await modal.locator(".btn-modal-primary").click();
+		await updated;
+		expect(bulk_update).toHaveLength(1);
+		// A form-encoded body carries each list or object as a JSON string.
+		const value = (v) => (typeof v === "string" ? JSON.parse(v) : v);
+		const body = bulk_update[0];
+		expect(body.action).toBe("update");
+		expect(value(body.docnames)).toHaveLength(2);
+		// email_id is read-only on Contact, so the client fence drops it.
+		expect(value(body.data)).toEqual({ status: "Open" });
+		await expect(
+			page.locator(".es-toast").filter({ hasText: "Updated successfully" })
+		).toBeVisible();
+	});
+
+	test("shows a generic message when resolving the records fails in the browser", async ({
+		page,
+	}) => {
+		// frappe.db.get_list does not reject on a server error. A reply with no message
+		// makes the code after it throw, and crema_resolve_error used to show nothing.
+		const resolve_url = /frappe\.desk\.reportview\.get_list\?.*limit=501/;
+		await page.route(resolve_url, (route) => route.fulfill({ status: 200, json: {} }));
+		const resolved = page.waitForResponse((res) => resolve_url.test(res.url()));
+		await crema_stub_ask(page, {
+			action: "delete",
+			filters: { first_name: ["=", "crema resolve error target"] },
+			reason: "deleting one contact",
+		});
+		await crema_prompt(page, "delete the crema resolve error target contact");
+		await resolved;
+
+		await expect(page.locator(".msgprint")).toContainText(
+			"Crema could not complete this request"
+		);
 	});
 
 	test("matches an underscore literally instead of as a SQL wildcard", async ({ page, api }) => {

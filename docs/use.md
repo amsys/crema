@@ -31,7 +31,8 @@ Send `prompt` to the named `interface`. The call returns the model's text respon
   conversation state of its own; pass the same list back on the next turn to continue
   it. The system scans the whole history together with `context` and `prompt`. A turn
   with any other role, `system` for example, fails the call with a validation error:
-  the interface's own system prompt is the only one.
+  the interface's own system prompt is the only one. A turn whose `content` is not
+  text fails the call in the same way.
 
 Example:
 
@@ -75,7 +76,9 @@ system skips the retry in three cases: `advanced_ocr` does not resolve to a
 provider, `advanced_ocr` resolves to the same provider and model as `ocr` (the
 fast-path default — see [configure.md](configure.md#procedure-b--set-the-defaults-the-fast-path)),
 or `advanced_ocr`'s monthly budget is already spent. Use `instruction` to state
-layout hints, for example "the invoice number sits in the top-right box".
+layout hints, for example "the invoice number sits in the top-right box". The Text
+Scan reads `instruction` before the first provider call. It does not read the text of
+the document.
 
 ## `transform` — propose a change to an existing document
 
@@ -302,6 +305,10 @@ All System Manager only, all `POST /api/method/<name>`:
 | `crema.api.discard_proposals` | Discard one or more Crema Proposal rows. Same arguments and return as `approve_proposals`. |
 | `crema.api.undo_proposals` | Reverse one or more approved Crema Proposal rows: delete what approving them created and set them back to Pending. Same arguments and return as `approve_proposals`. |
 | `crema.api.undo_last_run` | Delete every record the last run of one automation task (`task`) created. Records it updated stay for manual review. Backs the Undo Last Run button. |
+| `crema.crema.doctype.crema_provider.crema_provider.get_presets` | The preset list. Feeds the New from Template dialog. |
+| `crema.crema.doctype.crema_provider.crema_provider.get_settings_references` | Tells whether one provider (`provider`) is the default and which use cases name it. Feeds the warning on the Provider form before a delete. |
+| `crema.crema.doctype.crema_provider.crema_provider.create_from_template` | Creates a provider from a preset. Backs the New from Template dialog. |
+| `crema.crema.doctype.crema_health_word.crema_health_word.translate_words` | Proposes a translation of the built-in health word list into one language (`language`). It adds no word itself. Backs the Translate Built-in List action. |
 
 ### Rate limits
 
@@ -332,7 +339,7 @@ the status code, to tell a security block apart from a budget/configuration stop
 A Python caller sees these as three distinct exception types. `CremaBlockedError`:
 a guardrail (the scan, masking, or the trap) blocked the call. `CremaConfigError`: the interface does not
 resolve to a usable provider, or the kill switch is enabled. `CremaBudgetError`: the
-interface's, the provider's, or the user's monthly budget is already spent this
+interface's or the user's monthly budget is already spent this
 month — see [security.md](security.md#budgets). All three are
 `frappe.ValidationError` subclasses, and over HTTP all three get the structured
 `{"blocked": bool, "reason": ...}` body above.
@@ -459,12 +466,16 @@ server error) shows a message too — nothing in the desk UI fails without telli
 
 ### Usage and the workspace
 
-Open **Crema** from Framework's app dock — the icon is a robot. The sidebar holds
-**Crema Settings**, **Home**, a **Configuration** section (Crema Provider, Crema
-Automation Task), and a **Monitoring** section (Crema Log, Crema Usage).
+Open **Framework** in the Desk app list, then select **Crema** in the rail on the left; the icon is a robot. The sidebar holds
+**Home**, then three sections: **Setup** (Providers, Settings, Guardrails),
+**Automation** (Automations, Proposals), and **Activity** (Call Log, Usage & Cost).
 
-The workspace home shows three number cards, all-time totals: **Crema Calls**, **Crema
-Cost (USD)**, and **Crema Blocked**.
+The workspace home shows five number cards. The top row has two cards for work that
+needs you: **Failed Tasks** counts the enabled automation tasks whose last run failed,
+and **Pending Proposals** counts the proposals that wait for a decision. Select a card
+to open the list with the same filter. The next row has three all-time totals:
+**Calls**, **Spend**, and **Blocked**. Below them are two charts, spend and calls by
+status, and three link cards: **Setup**, **Automation**, and **Activity**.
 
 The **Crema Log** list shows the use case name as the row title, with the user, the
 status, and the cost beside it. Use the **Use Case** and **Status** filters at the top

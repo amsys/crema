@@ -178,34 +178,41 @@ test.describe("Crema desk UI", () => {
 		// refresh the list twice (once via the route change, once via on_sort_change).
 		// Already being on the target List should collapse that to one.
 		//
-		// Sorts by "modified", not "name" (the previous test's own target): frappe
-		// persists the list's last sort per user/doctype (frappe.model.utils.user_settings)
-		// and reapplies it on the next page load, and base_list.js throttles a refresh
-		// whose args exactly repeat the last one for 3 seconds (no_change()), so
-		// requesting the very sort the last test just persisted can silently no-op.
-		const list_gets = count_requests(
-			page,
-			(r) =>
-				r.method() === "POST" &&
-				new URL(r.url()).pathname === "/api/method/frappe.desk.reportview.get"
-		);
-		// A saved sort from an earlier test or run can already be "modified": pick the
-		// other one, so the request is never a repeat that frappe skips.
+		// Sorts by a field other than the saved sort: frappe persists the list's last sort
+		// per user/doctype (frappe.model.utils.user_settings) and reapplies it on the next
+		// page load, and base_list.js throttles a refresh whose args exactly repeat the
+		// last one for 3 seconds (no_change()). The saved sort can give no request at all.
+		//
+		// The count takes every list query sent after crema's ask, with any sort, so an
+		// extra query with the saved sort fails the test. frappe's own first list load goes
+		// out before the prompt, so the flag keeps it out of the count.
+		let asked = false;
+		const queries_after_ask = [];
+		page.on("request", (r) => {
+			if (r.method() !== "POST") return;
+			const path = new URL(r.url()).pathname;
+			if (path === "/api/method/crema.api.ask_api") asked = true;
+			if (asked && path === "/api/method/frappe.desk.reportview.get") {
+				// frappe develop posts its own endpoints as a JSON body, not form-encoded.
+				// postDataJSON reads both.
+				queries_after_ask.push(r.postDataJSON());
+			}
+		});
 		const target =
 			(await page.evaluate(() => cur_list.sort_selector.sort_by)) === "modified"
 				? "creation"
 				: "modified";
-		await crema_stub_ask(page, {
-			view: "List",
-			order_by: `${target} desc`,
-			reason: "sorted by last modified",
-		});
+		await crema_stub_ask(page, { view: "List", order_by: `${target} desc`, reason: "sorted" });
 		await crema_prompt(page, "sort by last modified");
 
-		await expect.poll(() => list_gets.length).toBe(1);
-		// the sort is applied and shown, then the count must still be one
+		await expect(page.locator(".es-toast").filter({ hasText: "sorted" })).toBeVisible();
 		await expect.poll(() => page.evaluate(() => cur_list.sort_selector.sort_by)).toBe(target);
-		expect(list_gets).toHaveLength(1);
+		// The route path shows the reason before its refresh ends, and a debounced refresh
+		// can go out 300 ms later. Wait the same 1.5 s as the cypress spec, so a late
+		// second query is counted.
+		await page.waitForTimeout(1500);
+		expect(queries_after_ask).toHaveLength(1);
+		expect(queries_after_ask[0].order_by).toContain(target);
 	});
 
 	test("drops an order_by field the model invented and leaves the sort untouched", async ({
@@ -214,26 +221,39 @@ test.describe("Crema desk UI", () => {
 		await crema_stub_ask(page, {
 			view: "List",
 			order_by: "not_a_field desc",
-			reason: "sorted",
+			reason: "sorted by an invented field",
 		});
 
-		const order = page.locator(".sort-selector .btn-order");
-		const before = await order.getAttribute("data-value");
+		const sort_state = () =>
+			page.evaluate(() => ({
+				field: cur_list.sort_selector.sort_by,
+				order: cur_list.sort_selector.sort_order,
+			}));
+		const before = await sort_state();
 		await crema_prompt(page, "sort somehow");
-		await expect(order).toHaveAttribute("data-value", before);
-		// the invented field never reaches the sort selector
-		expect(await page.evaluate(() => cur_list.sort_selector.sort_by)).not.toBe("not_a_field");
+		// crema_show_reason runs after the list refresh, so the spec is applied when the
+		// alert shows. Without this wait, the check below passes before the spec runs.
+		await expect(
+			page.locator(".es-toast").filter({ hasText: "sorted by an invented field" })
+		).toBeVisible();
+		expect(await sort_state()).toEqual(before);
 	});
 
-	test("applies page_length as a row limit", async ({ page }) => {
+	test("applies page_length as a row limit", async ({ page, api }) => {
+		// Two rows at least, so that a limit of 1 shows less than the list holds.
+		await crema_insert_contact(api, { first_name: "crema page length one" });
+		await crema_insert_contact(api, { first_name: "crema page length two" });
 		await crema_stub_ask(page, { view: "List", page_length: 1, reason: "top 1" });
 		await crema_prompt(page, "show me the top 1");
+
+		await expect(page.locator(".es-toast").filter({ hasText: "top 1" })).toBeVisible();
+		await expect.poll(() => page.evaluate(() => cur_list.page_length)).toBe(1);
 
 		// .list-row-container also wraps the header row (list_view.js wraps both the
 		// <header class="list-row-head"> and each data row's .list-row in their own
 		// .list-row-container); .list-row alone (the header's own inner element is
 		// .list-row-head, a different class) matches data rows only.
-		await expect.poll(() => data_rows(page).count()).toBeLessThanOrEqual(1);
+		await expect(data_rows(page)).toHaveCount(1);
 	});
 
 	test("round-trips a like filter with a wildcard intact", async ({ page }) => {
@@ -272,8 +292,14 @@ test.describe("Crema desk UI", () => {
 		});
 		await crema_prompt(page, "group by status");
 
+		// The reason alert shows after the spec is applied. The checks below pass before
+		// the spec runs, so they wait for it.
+		await expect(
+			page.locator(".es-toast").filter({ hasText: "grouped by status" })
+		).toBeVisible();
 		// the list is still the Contact list, so the absence below is not an empty page
 		await expect.poll(() => page.evaluate(() => cur_list.doctype)).toBe("Contact");
+		await expect.poll(() => page.evaluate(() => cur_list.view_name)).toBe("List");
 		await expect.poll(search(page)).not.toContain("_group_by");
 	});
 
@@ -286,9 +312,9 @@ test.describe("Crema desk UI", () => {
 		// second LLM call.
 		await crema_insert_contact(api, { first_name: "crema fallback probe" });
 		// frappe.db.get_list sends type: "GET" (frappe/public/js/frappe/db.js), not POST.
-		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
-		// desk code that sends it): a bare get_list* match also counts unrelated
-		// desk traffic on a slow runner and breaks the exact probe-count assertions.
+		// or_filters of "like" conditions are the widen probe's signature (WIDEN_PROBE). A
+		// bare get_list* match also counts unrelated desk traffic on a slow runner and
+		// breaks the exact probe-count assertions.
 		const probes = widen_probes(page);
 		const asks = await crema_stub_ask(page, {
 			view: "List",
@@ -312,8 +338,8 @@ test.describe("Crema desk UI", () => {
 		// The term is the whole first_name, not a substring of it: the widen probe's
 		// own results already prove an exact hit, at no extra query.
 		await crema_insert_contact(api, { first_name: "crema exact probe" });
-		// or_filters is the widen probe's signature (crema_widen_if_empty is the only
-		// desk code that sends it), see the test above.
+		// or_filters of "like" conditions are the widen probe's signature, see the test
+		// above.
 		const probes = widen_probes(page);
 		await crema_stub_ask(page, {
 			view: "List",
@@ -343,7 +369,8 @@ test.describe("Crema desk UI", () => {
 		// stored value) as one substring: the whole-term probe below must come back
 		// empty before a second, per-word probe finds "Acme".
 		await crema_insert_contact(api, { first_name: "Acme Corporation One" });
-		// or_filters is the widen probe's signature, see the first widen test above.
+		// or_filters of "like" conditions are the widen probe's signature, see the first
+		// widen test above.
 		const probes = widen_probes(page);
 		await crema_stub_ask(page, {
 			view: "List",
@@ -394,6 +421,7 @@ test.describe("Crema desk UI", () => {
 	});
 
 	test("leaves an empty list alone when nothing matches anywhere", async ({ page }) => {
+		const probes = widen_probes(page);
 		const asks = await crema_stub_ask(page, {
 			view: "List",
 			filters: { first_name: ["like", "%zzz-no-such-text%"] },
@@ -401,7 +429,17 @@ test.describe("Crema desk UI", () => {
 		});
 		await crema_prompt(page, "contacts about zzz-no-such-text");
 
-		await expect(page.locator(".no-result")).toBeVisible();
+		// The list is empty before the widen check runs, so .no-result alone proves
+		// nothing. The alert below shows only after both probes (the whole term, then
+		// each word) found nothing.
+		await expect(
+			page.locator(".es-toast").filter({ hasText: "Nothing contains" })
+		).toContainText('Nothing contains "zzz-no-such-text" in this list.', { timeout: 20000 });
+		expect(probes).toHaveLength(2);
 		expect(asks).toHaveLength(1);
+		await expect
+			.poll(search(page))
+			.toContain(encodeURIComponent('["like","%zzz-no-such-text%"]'));
+		await expect(page.locator(".no-result:visible")).toBeVisible();
 	});
 });

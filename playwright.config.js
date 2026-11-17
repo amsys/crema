@@ -1,9 +1,14 @@
+const os = require("node:os");
+const path = require("node:path");
 const { defineConfig } = require("@playwright/test");
 
 const ci = Boolean(process.env.CI);
 
 module.exports = defineConfig({
 	testDir: "./playwright/tests",
+	// Not under apps/crema: the bench start reloader watches the app tree, and a trace
+	// file written there restarts the server in the middle of the next test.
+	outputDir: path.join(os.tmpdir(), "crema-playwright"),
 	fullyParallel: false,
 	workers: 1,
 	forbidOnly: ci,

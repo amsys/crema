@@ -19,6 +19,19 @@ The contract this page tracks:
 
 Only a removal or a rename is listed. Read newest first.
 
+## 2026-11-16 — stricter inputs
+
+- `ask(history=[...])` refuses a turn whose `content` is not text.
+- A plan for an automation task cannot map a value onto `name` in a child table, onto
+  a table field, or onto a password field. A stored plan that does is made again on
+  the next run.
+- A Guardrails row whose check is not installed stops the call when its Action is
+  `Block` or `Retry Once`. Before, the system skipped the row.
+- A call gets one retry in total. If a check asks for a retry on the second attempt,
+  the call fails with `CremaBlockedError`. Before, the second reply was returned.
+- The request hash (`prompt_sha`, also the cache key) now includes the guardrail
+  rows. Hashes from before this change do not match new ones.
+
 ## 2026-10-03 — `ask()` refuses an unreadable file and a system turn
 
 `ask(files=[...])` used to skip a File URL the isolation user could not read, and

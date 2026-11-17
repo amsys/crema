@@ -130,8 +130,8 @@ def insert(
     accumulator, drained here — callers never pass usage explicitly. A "Log Only"
     reply-check miss, a "Log Only" masking miss, and any other guardrail note (see
     crema.guardrails._record_note) are folded into `detail` the same way, but only on
-    a Success row — a Blocked/Error row already carries its own more specific detail
-    string.
+    a Success or Cached row — a Blocked/Error row already carries its own more specific
+    detail string.
 
     The one exception to "never stores prompt content" is a developer_mode site, where
     the round trips client._record_transcript captured are attached to the row as a
@@ -142,7 +142,9 @@ def insert(
     mask_reason = _drain_mask()
     note_reason = _drain_note()
     transcript = _drain_transcript()
-    if status == "Success":
+    # A Cached row too: the Text Scan runs before the answer cache, so its Log Only
+    # hit belongs to a call that the cache then answers.
+    if status in ("Success", "Cached"):
         for reason in (trap_reason, mask_reason, note_reason):
             if reason:
                 detail = reason if not detail else f"{detail}; {reason}"

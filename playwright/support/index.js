@@ -3,14 +3,18 @@ import { ADMIN, ADMIN_PASSWORD, Api, login } from "./api";
 
 // Calls that reach a model provider and cost money.
 export const BILLABLE_METHODS = [
-	"ask_api",
-	"extract_api",
-	"extract_async",
-	"transform_api",
-	"ocr_api",
-	"dry_run_automation",
-	"run_automation_now",
+	"crema.api.ask_api",
+	"crema.api.extract_api",
+	"crema.api.extract_async",
+	"crema.api.transform_api",
+	"crema.api.ocr_api",
+	"crema.api.dry_run_automation",
+	"crema.api.run_automation_now",
+	// The Translate Built-in List action on the Crema Health Word list asks a model too.
+	"crema.crema.doctype.crema_health_word.crema_health_word.translate_words",
 ];
+
+const escape_regex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const site_url = () => process.env.BASE_URL || "http://localhost:8000";
 
@@ -39,7 +43,7 @@ export const test = base.extend({
 		async ({ context }, use) => {
 			const hits = [];
 			const pattern = new RegExp(
-				`/api/method/crema\\.api\\.(${BILLABLE_METHODS.join("|")})(\\?|$)`
+				`/api/method/(${BILLABLE_METHODS.map(escape_regex).join("|")})(\\?|$)`
 			);
 			await context.route(pattern, (route) => {
 				hits.push(route.request().url());

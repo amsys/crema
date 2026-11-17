@@ -29,7 +29,11 @@ function crema_warn_if_referenced(frm) {
 			const parts = [];
 			if (is_default) parts.push(__("the Default Provider (and Default Model)"));
 			if (use_cases?.length) {
-				parts.push(__("the use case(s) {0}", [use_cases.map((u) => `'${u}'`).join(", ")]));
+				parts.push(
+					__("the use case(s) {0}", [
+						use_cases.map((u) => `'${frappe.utils.escape_html(u)}'`).join(", "),
+					])
+				);
 			}
 			frm.dashboard.add_comment(
 				__("Crema Settings names this as {0}. Deleting it will clear that.", [

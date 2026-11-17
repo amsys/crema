@@ -17,16 +17,6 @@ required_apps = ["frappe"]
 app_include_css = "crema.bundle.css"
 app_include_js = "crema.bundle.js"
 
-# Desk workspace dock
-# --------------------
-
-# Crema is a layer inside the framework, not an app of its own -- pin its workspace into
-# Framework's rail (frappe.boot.get_app_rail_map) instead of taking its own apps-screen
-# slot. on_apps_screen is False for a dock app (boot.py: "the dock hook wins"), and
-# app_route/app_title then fall back to the workspace's own route ("/desk/crema") and to
-# app_title above -- nothing here is lost by dropping add_to_apps_screen.
-add_to_workspace_dock = [{"app": "frappe", "workspace": "Crema"}]
-
 # Boot
 # ----
 

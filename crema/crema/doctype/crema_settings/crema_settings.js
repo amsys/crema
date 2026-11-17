@@ -19,15 +19,19 @@
 
 // Usage (spend + budget, per interface) is fetched once per refresh and stashed here, so
 // the assignments grid formatter reads from it instead of firing its own frappe.call.
-let usage_cache = { interfaces: {}, providers: {} };
+let crema_usage_cache = { interfaces: {}, providers: {} };
 
 frappe.ui.form.on("Crema Settings", {
 	refresh(frm) {
+		crema_show_off_banner(frm);
 		crema_fetch_usage(frm);
 		crema_setup_assignments_grid(frm);
 		crema_load_default_models(frm);
 		crema_explain_user_role(frm);
 		crema_warn_if_no_providers(frm);
+	},
+	disabled(frm) {
+		crema_show_off_banner(frm);
 	},
 	default_provider(frm) {
 		// set_value("default_model", "") fires the default_model trigger below, which
@@ -43,19 +47,29 @@ frappe.ui.form.on("Crema Settings", {
 	},
 });
 
+// The off switch sits in the last section, so a site that is off says so at the top of the
+// form. It follows the field, not the saved value: it goes away when the box is cleared,
+// before a save.
+function crema_show_off_banner(frm) {
+	frm.set_intro(
+		frm.doc.disabled ? __("Crema is off for the whole site. No AI call runs.") : "",
+		"red"
+	);
+}
+
 function crema_fetch_usage(frm) {
 	frappe.call({
 		method: "crema.api.get_usage",
 		callback(r) {
-			usage_cache = r.message || { interfaces: {}, providers: {} };
+			crema_usage_cache = r.message || { interfaces: {}, providers: {} };
 			frm.get_field("assignments").grid.refresh();
 		},
 		error() {
 			// Deliberately no message here — this only feeds the Usage pills, and the rest
 			// of the form is perfectly usable without them. Reset to blank rather than
-			// leaving a stale usage_cache from a prior successful load, which would show
+			// leaving a stale crema_usage_cache from a prior successful load, which would show
 			// numbers that no longer match what's on screen.
-			usage_cache = { interfaces: {}, providers: {} };
+			crema_usage_cache = { interfaces: {}, providers: {} };
 		},
 	});
 }
@@ -129,10 +143,10 @@ function crema_setup_assignments_grid(frm) {
 	grid.df.cannot_add_rows = true;
 	grid.df.cannot_delete_rows = true;
 
-	// Usage is display-only, painted from usage_cache — never persisted, so the
+	// Usage is display-only, painted from crema_usage_cache — never persisted, so the
 	// formatter reads live state instead of the (always-blank) stored field value.
 	grid.update_docfield_property("usage", "formatter", (value, df, options, doc) =>
-		crema_usage_pill(usage_cache.interfaces[doc.interface])
+		crema_usage_pill(crema_usage_cache.interfaces[doc.interface])
 	);
 
 	grid.add_custom_button(__("Reset All Use Cases"), () => {
@@ -169,20 +183,23 @@ function crema_reset_assignments(frm) {
 
 function crema_load_default_models(frm) {
 	const model_field = frm.get_field("default_model");
-	const base_description = "Used by any row that leaves Model blank.";
-	model_field.df.read_only = !frm.doc.default_provider;
+	const base_description = __("Used by any row that leaves Model blank.");
+	const provider = frm.doc.default_provider;
+	model_field.df.read_only = !provider;
 	model_field.refresh();
-	crema_fetch_models(frm.doc.default_provider, (models) => {
+	crema_fetch_models(provider, (models) => {
+		// A slow reply for a provider the user has since changed must not replace the
+		// list of the current one.
+		if (frm.doc.default_provider !== provider) return;
 		model_field.set_data(models);
 		const model = frm.doc.default_model;
 		const unknown = model && models.length && !models.includes(model);
 		model_field.set_new_description(
 			unknown
-				? `<span class="text-danger">Model '${frappe.utils.escape_html(
-						model
-				  )}' is not offered by '${frappe.utils.escape_html(
-						frm.doc.default_provider
-				  )}'.</span>`
+				? `<span class="text-danger">${__("Model '{0}' is not offered by '{1}'.", [
+						frappe.utils.escape_html(model),
+						frappe.utils.escape_html(provider),
+				  ])}</span>`
 				: base_description
 		);
 	});
@@ -214,5 +231,9 @@ function crema_toggle_model_field(frm, cdt, cdn) {
 	const model_field = grid_row.get_field("model");
 	model_field.df.read_only = !effective_provider;
 	model_field.refresh();
-	crema_fetch_models(effective_provider, (models) => model_field.set_data(models));
+	crema_fetch_models(effective_provider, (models) => {
+		// Same stale-reply guard as crema_load_default_models.
+		if ((row.provider || frm.doc.default_provider) !== effective_provider) return;
+		model_field.set_data(models);
+	});
 }

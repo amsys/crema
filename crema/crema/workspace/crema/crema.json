@@ -10,7 +10,7 @@
    "label": "Crema Calls by Status"
   }
  ],
- "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"Crema connects this site to an AI service, with safety checks and a spending limit on every request. Start in Settings to add a service and set your defaults.\",\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Spend\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Blocked\",\"col\":4}},{\"id\":\"crema-spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-chart-spend\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Crema Spend\",\"col\":6}},{\"id\":\"crema-chart-status\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Crema Calls by Status\",\"col\":6}},{\"id\":\"crema-spacer-2\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-setup-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Setup\",\"col\":4}},{\"id\":\"crema-automation-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Automation\",\"col\":4}},{\"id\":\"crema-activity-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Activity\",\"col\":4}}]",
+ "content": "[{\"id\":\"crema-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Crema</b></span>\",\"col\":12}},{\"id\":\"crema-para\",\"type\":\"paragraph\",\"data\":{\"text\":\"Crema connects this site to an AI service, with safety checks and a spending limit on every request. Start in Settings to add a service and set your defaults.\",\"col\":12}},{\"id\":\"crema-card-failed\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Failed Tasks\",\"col\":6}},{\"id\":\"crema-card-pending\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Pending Proposals\",\"col\":6}},{\"id\":\"crema-spacer-0\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-card-calls\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Calls\",\"col\":4}},{\"id\":\"crema-card-cost\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Spend\",\"col\":4}},{\"id\":\"crema-card-blocked\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Blocked\",\"col\":4}},{\"id\":\"crema-spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-chart-spend\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Crema Spend\",\"col\":6}},{\"id\":\"crema-chart-status\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Crema Calls by Status\",\"col\":6}},{\"id\":\"crema-spacer-2\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"crema-setup-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Setup\",\"col\":4}},{\"id\":\"crema-automation-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Automation\",\"col\":4}},{\"id\":\"crema-activity-card\",\"type\":\"card\",\"data\":{\"card_name\":\"Activity\",\"col\":4}}]",
  "creation": "2026-07-28 00:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -130,11 +130,19 @@
    "type": "Link"
   }
  ],
- "modified": "2026-08-08 06:00:00.000000",
+ "modified": "2026-11-17 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Crema",
  "name": "Crema",
  "number_cards": [
+  {
+   "label": "Failed Tasks",
+   "number_card_name": "Failed Tasks"
+  },
+  {
+   "label": "Pending Proposals",
+   "number_card_name": "Pending Proposals"
+  },
   {
    "label": "Calls",
    "number_card_name": "Calls"
@@ -202,134 +210,6 @@
    "label": "Usage & Cost",
    "link_to": "Crema Usage",
    "type": "Report"
-  }
- ],
- "sidebar_items": [
-  {
-   "child": 0,
-   "collapsible": 1,
-   "icon": "house",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Home",
-   "link_to": "Crema",
-   "link_type": "Workspace",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "indent": 1,
-   "keep_closed": 0,
-   "label": "Setup",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Section Break"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "server",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Providers",
-   "link_to": "Crema Provider",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "settings",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Settings",
-   "link_to": "Crema Settings",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "shield",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Guardrails",
-   "link_to": "Crema Guardrails",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "indent": 1,
-   "keep_closed": 0,
-   "label": "Automation",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Section Break"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "calendar",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Automations",
-   "link_to": "Crema Automation Task",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "list-checks",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Proposals",
-   "link_to": "Crema Proposal",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "indent": 1,
-   "keep_closed": 0,
-   "label": "Activity",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Section Break"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "scroll-text",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Call Log",
-   "link_to": "Crema Log",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "chart-column",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Usage & Cost",
-   "link_to": "Crema Usage",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
   }
  ],
  "standard": 1,

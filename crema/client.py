@@ -8,6 +8,7 @@ impossible" boundary described in the app plan.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -241,6 +242,22 @@ def _record_transcript(msgs: list[dict], content: str) -> None:
     frappe.local.crema_transcript.append({"messages": msgs, "response": content})
 
 
+def _provider_user(cfg: dict[str, Any]) -> str:
+    """The `user` value a provider call carries, so a gateway can meter per person.
+    That is the login of the caller, which is an email address on most sites. While a
+    Hide Personal Information row applies to the requested interface, a stable hash
+    takes its place: the gateway can still count per person, and the address stays on
+    this side."""
+    from crema import guardrails
+
+    user = cfg["caller_user"]
+    interface = cfg.get("requested") or cfg.get("interface") or ""
+    if guardrails.active("pi", interface) == "Off":
+        return user
+    digest = hashlib.sha256(f"{frappe.local.site}:{user}".encode()).hexdigest()[:16]
+    return f"crema-{digest}"
+
+
 def _complete(cfg: dict[str, Any], messages: list[dict], response_format: dict | None = None) -> str:
     """The only place a provider is actually called from caller code — every call
     passes through the guardrails onion (crema.guardrails.run): masking and the
@@ -264,7 +281,7 @@ def _call_raw(cfg: dict[str, Any], messages: list[dict], response_format: dict |
         "timeout": cfg["timeout_seconds"],
         "temperature": cfg["temperature"],
         "num_retries": 1,
-        "user": cfg["caller_user"],
+        "user": _provider_user(cfg),
         "metadata": {"tags": [cfg["interface"]]},
     }
     if response_format:
@@ -306,7 +323,7 @@ def _transcribe(
         "api_key": _api_key(cfg["provider"]),
         "timeout": cfg["timeout_seconds"],
         "response_format": "verbose_json",
-        "user": cfg["caller_user"],
+        "user": _provider_user(cfg),
         "metadata": {"tags": [cfg["interface"]]},
     }
     if language:

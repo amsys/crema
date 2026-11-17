@@ -26,7 +26,7 @@ Crema is not a conversational agent, and a chatbot is out of scope — see
 
 ## Quick start
 
-1. **Add a provider.** Open **Providers** — the first item in the Crema sidebar —
+1. **Add a provider.** Open **Providers** — the first item under **Setup** in the Crema sidebar —
    click **New from Template**, pick a preset, paste your API key, and create.
 2. **Set the default model.** Open **Crema Settings**, pick a **Default Model**, and
    save. Every interface now works.

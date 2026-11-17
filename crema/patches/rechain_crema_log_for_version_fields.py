@@ -46,6 +46,14 @@ def execute() -> None:
         return
 
     from crema.crema.doctype.crema_log.crema_log import CHAIN_FIELDS, chain_hash
+    from crema.log import verify_chain
+
+    verified = verify_chain()
+    if verified["ok"] and verified["checked"]:
+        # The chain is correct under the new fields: this patch ran before. A second
+        # run would fail pass 1 on the first row and report a chain break that is not
+        # there.
+        return
 
     # fields is built from CHAIN_FIELDS, a fixed module-level constant -- no user input
     # reaches this query. chain_seq is one of CHAIN_FIELDS, so it's already included.

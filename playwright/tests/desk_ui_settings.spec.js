@@ -1,7 +1,7 @@
 // Covers the Crema Settings form (crema_settings.js) and the Crema Guardrails form
 // (crema_guardrails.js). The one model-adjacent call, get_models, is stubbed with
 // page.route; the backstop fixture fails any billable call that no stub answered.
-import { test, expect, goto_desk, count_requests } from "../support";
+import { test, expect, goto_desk, count_requests, dialog_shown } from "../support";
 
 const SAVEDOCS = "frappe.desk.form.save.savedocs";
 
@@ -59,6 +59,53 @@ test.describe("Crema Settings", () => {
 		).toHaveCount(0);
 	});
 
+	test("clears every use case override on Reset All Use Cases, and leaves the form unsaved", async ({
+		page,
+	}) => {
+		// Give the first row an override first, so the reset has something to clear. The
+		// form is never saved: the next visit reloads it from the database.
+		await page.evaluate(() => new Promise((resolve) => frappe.after_ajax(resolve)));
+		await page.evaluate(() => {
+			const row = cur_frm.doc.assignments[0];
+			frappe.model.set_value(row.doctype, row.name, "model", "made-up-model");
+			frappe.model.set_value(row.doctype, row.name, "temperature", 0.7);
+		});
+		await expect
+			.poll(() => page.evaluate(() => cur_frm.doc.assignments[0].model))
+			.toBe("made-up-model");
+
+		// The Use Cases section starts collapsed. scroll_to_field opens it.
+		await page.evaluate(() => cur_frm.scroll_to_field("assignments", false));
+		await page
+			.locator('[data-fieldname="assignments"] button')
+			.filter({ hasText: "Reset All Use Cases" })
+			.click();
+		await dialog_shown(page);
+		const modal = page.locator(".modal.show");
+		await expect(modal).toContainText("Clear every setting on every use case?");
+		await modal.locator(".btn-modal-primary").click();
+
+		await expect
+			.poll(() =>
+				page.evaluate(() =>
+					cur_frm.doc.assignments
+						.filter(
+							(row) =>
+								row.provider ||
+								row.model ||
+								row.isolation_user ||
+								row.system_prompt ||
+								row.temperature ||
+								row.monthly_budget_usd ||
+								row.cache_ttl
+						)
+						.map((row) => row.interface)
+				)
+			)
+			.toEqual([]);
+		await expect(page.locator(".page-head:visible")).toContainText("Not Saved");
+	});
+
 	// Providers are the Crema Provider list view now, not a panel on this form, and the
 	// sidebar lists Providers above Settings — so the form carries no link of its own.
 	// The one case it does interrupt for is having no enabled provider at all, since
@@ -89,9 +136,8 @@ test.describe("Crema Settings", () => {
 	});
 
 	// crema_load_default_models fetches Default Model's data from Default Provider (an
-	// Autocomplete with no built-in source of its own) and, per CLAUDE.md's "flag
-	// uncertainty" rule for a model that has drifted out of the provider's list, paints an
-	// inline red warning rather than failing silently.
+	// Autocomplete with no built-in source of its own) and, for a model that has drifted
+	// out of the provider's list, paints an inline red warning rather than failing silently.
 	test("warns inline when the default model isn't offered by the default provider", async ({
 		page,
 	}) => {
@@ -195,6 +241,23 @@ test.describe("Crema Settings", () => {
 		await goto_desk(page, "/desk/crema-settings");
 		await expect.poll(() => page.evaluate(() => cur_frm?.doc?.disabled)).toBe(0);
 	});
+
+	// The off switch is the last field of the last section, so a red banner at the top of
+	// the form says so. It follows the field, not the saved value: the form is never saved.
+	test("shows a red banner while Crema Is Off is set and drops it when cleared", async ({
+		page,
+	}) => {
+		await page.evaluate(() => new Promise((resolve) => frappe.after_ajax(resolve)));
+		// By text: the "No AI service is switched on" warning is a red form message too.
+		const banner = page
+			.locator(".form-message.red")
+			.filter({ hasText: "Crema is off for the whole site" });
+		await expect(banner).toHaveCount(0);
+		await page.evaluate(() => cur_frm.set_value("disabled", 1));
+		await expect(banner).toContainText("Crema is off for the whole site");
+		await page.evaluate(() => cur_frm.set_value("disabled", 0));
+		await expect(banner).toHaveCount(0);
+	});
 });
 
 test.describe("Crema Guardrails", () => {
@@ -236,5 +299,21 @@ test.describe("Crema Guardrails", () => {
 		await expect(page.locator('[data-fieldname="guardrails"]')).not.toContainText(
 			"Guardrails"
 		);
+	});
+});
+
+test.describe("Crema workspace", () => {
+	// The two cards that ask for action sit above Calls, Spend and Blocked.
+	test("shows Failed Tasks and Pending Proposals above the usage cards", async ({ page }) => {
+		await goto_desk(page, "/desk/crema");
+		const titles = page.locator(".number-widget-box .widget-title");
+		await expect(titles.filter({ hasText: "Calls" })).toBeVisible();
+		await expect(titles).toHaveText([
+			"Failed Tasks",
+			"Pending Proposals",
+			"Calls",
+			"Spend",
+			"Blocked",
+		]);
 	});
 });

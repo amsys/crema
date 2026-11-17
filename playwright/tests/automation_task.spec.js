@@ -4,7 +4,7 @@
 // fixture answers any billable call that no stub caught.
 //
 // Run with: bench --site <site> run-ui-tests crema --headless --spec automation_task
-import { test, expect, goto_desk } from "../support";
+import { test, expect, goto_desk, dialog_shown } from "../support";
 
 const TASK = "_playwright_crema_task";
 // A second task rather than a second source row on TASK: "Update the Records It Read"
@@ -412,6 +412,80 @@ test.describe("Crema Automation Task form", () => {
 		// The markup stayed text: no element was built from it, and its handler never ran.
 		await expect(page.locator(".modal-body img")).toHaveCount(0);
 		expect(await page.evaluate(() => window.__xss)).toBeUndefined();
+	});
+
+	test("calls undo_last_run for the task after the confirm, and reports the count", async ({
+		page,
+	}) => {
+		const undo_calls = [];
+		await page.route(method_url("undo_last_run"), (route) => {
+			undo_calls.push(new URLSearchParams(route.request().postData()).get("task"));
+			return route.fulfill({ status: 200, json: { message: { deleted: 1, failed: [] } } });
+		});
+
+		await open_task(page, XSS_TASK);
+		// The same dispatched click on the hidden item store as the test above.
+		const group = page.locator('.inner-group-button[data-label="More"]');
+		await group.getByRole("button", { name: "More", exact: true }).click();
+		await group.locator(".dropdown-item", { hasText: "Undo Last Run" }).dispatchEvent("click");
+		await dialog_shown(page);
+		expect(undo_calls).toHaveLength(0);
+
+		const undone = page.waitForResponse((res) =>
+			method_url("undo_last_run")(new URL(res.url()))
+		);
+		await page.locator(".modal.show .btn-modal-primary").click();
+		await undone;
+		expect(undo_calls).toEqual([XSS_TASK]);
+		await expect(
+			page.locator(".es-toast").filter({ hasText: "Deleted 1 record(s)." })
+		).toBeVisible();
+	});
+
+	test("queues the task on Run Now and shows the job", async ({ page }) => {
+		const run_calls = [];
+		await page.route(method_url("run_automation_now"), (route) => {
+			run_calls.push(new URLSearchParams(route.request().postData()).get("task"));
+			return route.fulfill({ status: 200, json: { message: "crema-playwright-job" } });
+		});
+
+		await open_task(page, TASK);
+		const queued = page.waitForResponse((res) =>
+			method_url("run_automation_now")(new URL(res.url()))
+		);
+		await page.getByRole("button", { name: "Run Now", exact: true }).click();
+		await queued;
+		expect(run_calls).toEqual([TASK]);
+		await expect(
+			page.locator(".es-toast").filter({ hasText: "Queued as crema-playwright-job" })
+		).toBeVisible();
+	});
+
+	// A blocked doctype is a site-wide write red line, so Crema offers no write button on
+	// its form: not the form's Ask Crema button, and no per-field draft button. The list
+	// is opened first and the form by route, so the boot value is set before the form
+	// renders for the first time on this page.
+	test("shows no Ask Crema button and no draft buttons on a blocked doctype's form", async ({
+		page,
+	}) => {
+		await goto_desk(page, "/desk/crema-automation-task");
+		await expect(
+			page.locator(".list-row-container:visible, .no-result:visible").first()
+		).toBeVisible();
+		await page.evaluate((task) => {
+			frappe.boot.crema_blocked_doctypes = ["Crema Automation Task"];
+			frappe.set_route("Form", "Crema Automation Task", task);
+		}, TASK);
+
+		// Prove that the form rendered before the absence checks. The notify_to field is
+		// below the fold, so "attached", not "visible".
+		await expect(page.locator(".crema-pipeline-cards:visible")).toBeVisible();
+		await expect.poll(() => page.evaluate(() => cur_frm?.doc?.name)).toBe(TASK);
+		await expect(
+			page.locator('.frappe-control[data-fieldname="notify_to"] textarea')
+		).toBeAttached();
+		await expect(page.locator("[data-crema-form]")).toHaveCount(0);
+		await expect(page.locator(".btn-crema-draft")).toHaveCount(0);
 	});
 
 	// --- the pipeline strip ---------------------------------------------------------

@@ -30,6 +30,7 @@ address in **Email Report To** and it applies to whichever action you picked.
 | `run_at` | Datetime | Label **Run At**. Required for a Once trigger. The one time the task runs. Set it to a new time in the future to run the task again. |
 | `event` | Select | For a Document Event trigger: `After Insert`, `On Update`, or `On Submit`. An Incoming Email trigger sets it to `On Update` for you. |
 | `webhook_endpoint` | Data (read-only) | Label **Endpoint**. For a Webhook trigger. The address to call. |
+| `webhook_secret` | Password | Label **Webhook Secret**. Optional. For a Webhook trigger. When set, every call must carry `timestamp` and `signature` — see [Sign the call](#sign-the-call). |
 | `read_webhook_payload` | Check | Label **Use Webhook Data**. On by default. For a Webhook trigger. Reads what the caller sends as one more source. |
 | `sources` | Table (Crema Automation Source) | Label **Sources**. Required, except for a Webhook task that uses webhook data. One row per thing this task reads. See the field list below. |
 | `on_source_error` | Check | Label **Stop if a Source Fails**. Off by default. Shown when a task has more than one source. |
@@ -179,7 +180,8 @@ path as the scheduler — always a background job, never an inline run — and n
 
 **Undo Last Run** sits in the **More** menu, next to Dry Run and Run Now — it deletes
 records, so it does not carry the same weight as the other two. It deletes every
-record the run updated alone, for a person to review — the form's dialog links to both
+record the run created. It leaves every record the run updated alone, for a person to
+review — the form's dialog links to both
 lists before you confirm. Only the most recent run is reversible: `last_written_json`
 holds one run's list, replaced by the next run. The button is hidden once there is
 nothing left to undo.
@@ -533,8 +535,16 @@ after a doctype change, for example. The next run writes a new one.
 - `target_doctype` is the only doctype a task can write to. The plan cannot name a
   different one.
 - A record type on Crema Settings' Blocked Doctypes table can never be a task's
-  target, or a plan's child-table target — checked at save time and on every run. See
+  target, or a plan's child-table target — checked at save time, on every run, and
+  again when you approve a proposal. See
   [docs/security.md](security.md#a-site-wide-write-block).
+- A task sets data fields only. A plan cannot map a value onto a table field or a
+  password field. In a child-table row, the system keeps the data fields of that
+  row's doctype and drops everything else (`name`, `parent`, `idx`), so a row can
+  never be written into a different record.
+- If the **Runs As** account can no longer be used (it is disabled, or it now has
+  the System Manager role), the run fails at the `Setup` stage and counts as a
+  failed run.
 - Only a System Manager sets the source rows. The LLM never supplies a URL, a doctype,
   or a filter, and never adds a source.
 - A run that fails part way through keeps the records it already wrote. For a record

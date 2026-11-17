@@ -33,6 +33,43 @@ async function crema_prompt(page, text) {
 	await asked;
 }
 
+// Opens a saved Contact the same way a person gets one: fill the new form and save.
+async function crema_save_new_contact(page, first_name) {
+	await goto_desk(page, "/desk/contact/new");
+	const input = page.locator(".frappe-control[data-fieldname=first_name] input");
+	await input.fill(first_name);
+	// frappe copies the input into the doc on change; fill() fires only input, so leave the field.
+	await input.blur();
+	await expect.poll(() => page.evaluate(() => cur_frm.doc.first_name)).toBe(first_name);
+	const saved = page.waitForResponse((res) =>
+		res.url().includes("frappe.desk.form.save.savedocs")
+	);
+	await page.locator(".primary-action:visible", { hasText: /Save/ }).click();
+	await saved;
+	// The save is done when the form holds a saved document.
+	await expect.poll(() => page.evaluate(() => cur_frm.is_new())).toBeFalsy();
+	return page.evaluate(() => cur_frm.doc.name);
+}
+
+function crema_stub_transform(page, set) {
+	return page.route(TRANSFORM_API, (route) =>
+		route.fulfill({
+			status: 200,
+			json: { message: { set, child_set: {}, reason: "updated" } },
+		})
+	);
+}
+
+// The form button's dialog: type an instruction and press Go.
+async function crema_ask_form(page, instruction) {
+	const transformed = page.waitForResponse((res) => TRANSFORM_API.test(res.url()));
+	await page.locator("[data-crema-form]").click();
+	const modal = crema_modal(page);
+	await modal.locator(".frappe-control[data-fieldname=instruction] textarea").fill(instruction);
+	await modal.locator(".btn-modal-primary").click();
+	await transformed;
+}
+
 test.describe("Crema desk UI — form view", () => {
 	let saved_contact = null;
 
@@ -44,47 +81,49 @@ test.describe("Crema desk UI — form view", () => {
 	test("renders a robot button on a saved form and applies a diff without saving", async ({
 		page,
 	}) => {
-		await goto_desk(page, "/desk/contact/new");
-		const first_name = page.locator(".frappe-control[data-fieldname=first_name] input");
-		await first_name.fill("a contact to transform");
-		// frappe copies the input into the doc on change; fill() fires only input, so leave the field.
-		await first_name.blur();
-		await expect
-			.poll(() => page.evaluate(() => cur_frm.doc.first_name))
-			.toBe("a contact to transform");
-		const saved = page.waitForResponse((res) =>
-			res.url().includes("frappe.desk.form.save.savedocs")
-		);
-		await page.locator(".primary-action:visible", { hasText: /Save/ }).click();
-		await saved;
-		saved_contact = await page.evaluate(() => cur_frm.doc.name);
+		saved_contact = await crema_save_new_contact(page, "a contact to transform");
 
 		await expect(page.locator("[data-crema-form]")).toBeVisible();
 
-		await page.route(TRANSFORM_API, (route) =>
-			route.fulfill({
-				status: 200,
-				json: {
-					message: {
-						set: { first_name: "Updated by Crema" },
-						child_set: {},
-						reason: "updated",
-					},
-				},
-			})
-		);
-
-		const transformed = page.waitForResponse((res) => TRANSFORM_API.test(res.url()));
-		await page.locator("[data-crema-form]").click();
-		const modal = crema_modal(page);
-		await modal
-			.locator(".frappe-control[data-fieldname=instruction] textarea")
-			.fill("mark this urgent");
-		await modal.locator(".btn-modal-primary").click();
-		await transformed;
+		await crema_stub_transform(page, { first_name: "Updated by Crema" });
+		await crema_ask_form(page, "mark this urgent");
 		await crema_modal(page).locator(".btn-modal-primary", { hasText: /Apply/ }).click();
 
 		await expect(page.locator(".page-indicator-pill")).toContainText("Not Saved");
+		await expect
+			.poll(() => page.evaluate(() => cur_frm.doc.first_name))
+			.toBe("Updated by Crema");
+	});
+
+	test("drops a read-only and an invented field from the form button's diff", async ({
+		page,
+	}) => {
+		// The client write fence (crema_filter_diff) runs on the transform reply too, not
+		// only on the server: email_id is read_only on Contact, not_a_field does not exist.
+		saved_contact = await crema_save_new_contact(page, "a contact to filter");
+
+		await crema_stub_transform(page, {
+			first_name: "Filtered by Crema",
+			email_id: "bogus@example.com",
+			not_a_field: "x",
+		});
+		await crema_ask_form(page, "change the name and the email");
+
+		const table = crema_modal(page).locator("table");
+		await expect(table).toContainText("first_name");
+		await expect(table).not.toContainText("email_id");
+		await expect(table).not.toContainText("not_a_field");
+		await crema_modal(page).locator(".btn-modal-primary", { hasText: /Apply/ }).click();
+
+		await expect
+			.poll(() => page.evaluate(() => cur_frm.doc.first_name))
+			.toBe("Filtered by Crema");
+		const doc = await page.evaluate(() => ({
+			email_id: cur_frm.doc.email_id,
+			has_invented: "not_a_field" in cur_frm.doc,
+		}));
+		expect(doc.email_id).not.toBe("bogus@example.com");
+		expect(doc.has_invented).toBe(false);
 	});
 });
 

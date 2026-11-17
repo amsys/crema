@@ -26,8 +26,8 @@ virtual environment sets it automatically when you activate it.
    bench --site <your-site> install-app crema
    ```
 
-3. Open the Desk. Find **Crema** in the app list. The icon is a robot — opening it
-   lands you directly on **Crema Settings**.
+3. Open the Desk. Open **Framework** in the app list. Select **Crema** in the rail
+   on the left. The icon is a robot.
 
 ## What the install step does
 
